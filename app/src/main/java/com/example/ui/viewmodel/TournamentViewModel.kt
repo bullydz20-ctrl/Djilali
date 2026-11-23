@@ -266,6 +266,14 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun updateOwnProfile(displayName: String, username: String?, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            val res = repository.updateOwnProfile(displayName, username)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
     fun updateSubAdmin(
         target: AdminAccountEntity,
         displayName: String = target.displayName,
@@ -304,6 +312,33 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
         val tId = uiState.value.tournament?.id ?: return
         viewModelScope.launch {
             val res = repository.registerPlayer(tId, name, elysiumNetId, avatarUri, level, clubName)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun adminAddPlayer(
+        name: String,
+        elysiumNetId: String,
+        avatarUri: String?,
+        level: PlayerLevel,
+        ovrRating: Int,
+        clubName: String,
+        autoApprove: Boolean,
+        onSuccess: () -> Unit = {}
+    ) {
+        val tId = uiState.value.tournament?.id ?: return
+        viewModelScope.launch {
+            val res = repository.adminAddPlayer(
+                tournamentId = tId,
+                name = name,
+                elysiumNetId = elysiumNetId,
+                avatarUri = avatarUri,
+                level = level,
+                ovrRating = ovrRating,
+                clubName = clubName,
+                autoApprove = autoApprove
+            )
             handleResult(res)
             if (res is RepoResult.Success) onSuccess()
         }

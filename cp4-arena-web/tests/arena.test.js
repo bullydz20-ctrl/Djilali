@@ -82,7 +82,7 @@ test('CP4 ARENA full end-to-end backend, security, multi-game, draw, bracket, an
     });
     assert.equal(setupRes.status, 201);
     assert.ok(setupRes.json.token);
-    const headToken = setupRes.json.token;
+    let headToken = setupRes.json.token;
 
     const dupSetup = await api(srv.baseUrl, '/api/admin/setup-head', {
       method: 'POST',
@@ -106,13 +106,20 @@ test('CP4 ARENA full end-to-end backend, security, multi-game, draw, bracket, an
     });
     assert.equal(lockedOut.status, 429);
 
-    // Valid login from another IP & changeOwnPin test
+    // Valid login from another IP & changeOwnPin test + revoke other sessions + updateOwnProfile test
     const loginOk = await api(srv.baseUrl, '/api/admin/login', {
       method: 'POST',
       headers: { 'X-Forwarded-For': '10.10.10.100' },
       body: { username: 'Djilali', pin: '482913' }
     });
     assert.equal(loginOk.status, 200);
+    const otherLogin = await api(srv.baseUrl, '/api/admin/login', {
+      method: 'POST',
+      headers: { 'X-Forwarded-For': '10.10.10.103' },
+      body: { username: 'Djilali', pin: '482913' }
+    });
+    assert.equal(otherLogin.status, 200);
+
     const changePin = await api(srv.baseUrl, '/api/admin/change-pin', {
       method: 'POST',
       token: loginOk.json.token,
@@ -120,12 +127,39 @@ test('CP4 ARENA full end-to-end backend, security, multi-game, draw, bracket, an
     });
     assert.equal(changePin.status, 200);
 
+    // Other session must be revoked, while current session stays valid
+    const revokedOther = await api(srv.baseUrl, '/api/state', { token: otherLogin.json.token });
+    assert.equal(revokedOther.json.currentAdmin, null);
+    const keptCurrent = await api(srv.baseUrl, '/api/state', { token: loginOk.json.token });
+    assert.equal(keptCurrent.json.currentAdmin.username, 'Djilali');
+
+    const profileUpdate = await api(srv.baseUrl, '/api/admin/profile', {
+      method: 'PATCH',
+      token: loginOk.json.token,
+      body: { displayName: 'Djilali Pro', username: 'DjilaliAdmin' }
+    });
+    assert.equal(profileUpdate.status, 200);
+    assert.equal(profileUpdate.json.admin.displayName, 'Djilali Pro');
+    assert.equal(profileUpdate.json.admin.username, 'DjilaliAdmin');
+
     const loginNewPin = await api(srv.baseUrl, '/api/admin/login', {
       method: 'POST',
       headers: { 'X-Forwarded-For': '10.10.10.101' },
-      body: { username: 'Djilali', pin: '739152' }
+      body: { username: 'DjilaliAdmin', pin: '739152' }
     });
     assert.equal(loginNewPin.status, 200);
+
+    // Restore username to Djilali so remaining test assertions remain valid
+    const restoreProfile = await api(srv.baseUrl, '/api/admin/profile', {
+      method: 'PATCH',
+      token: loginNewPin.json.token,
+      body: { displayName: 'Djilali Head', username: 'Djilali' }
+    });
+    assert.equal(restoreProfile.status, 200);
+    // Original setup session was also revoked by change-pin; continue with loginNewPin token
+    const setupRevoked = await api(srv.baseUrl, '/api/state', { token: headToken });
+    assert.equal(setupRevoked.json.currentAdmin, null);
+    headToken = loginNewPin.json.token;
 
     // 4. Up to 5 Sub-Admins & permission isolation
     const createdSubs = [];
@@ -424,7 +458,7 @@ test('CP4 ARENA full end-to-end backend, security, multi-game, draw, bracket, an
     assert.equal(rlCreate.status, 201);
     const rlId = rlCreate.json.tournament.id;
     const rlPlayers = [];
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= 2; i++) {
       const r = await api(srv.baseUrl, '/api/players/register', {
         method: 'POST',
         body: { tournamentId: rlId, name: `RL_${i}`, elysiumNetId: `RL-ID-${i}` }
@@ -436,6 +470,44 @@ test('CP4 ARENA full end-to-end backend, security, multi-game, draw, bracket, an
       });
       rlPlayers.push(r.json.player.id);
     }
+
+    // Admin direct add player (immediately APPROVED with custom avatar & OVR) + PATCH avatarUrl edit
+    const directAdd = await api(srv.baseUrl, `/api/tournaments/${rlId}/players`, {
+      method: 'POST',
+      token: freshToken,
+      body: {
+        name: 'RL_3',
+        elysiumNetId: 'RL-ID-3',
+        clubName: 'Octane',
+        level: 'LEGEND',
+        ovrRating: 95,
+        avatarUrl: okImg.json.url,
+        status: 'APPROVED'
+      }
+    });
+    assert.equal(directAdd.status, 201);
+    assert.equal(directAdd.json.player.status, 'APPROVED');
+    assert.equal(directAdd.json.player.ovrRating, 95);
+    assert.equal(directAdd.json.player.avatarUrl, okImg.json.url);
+    rlPlayers.push(directAdd.json.player.id);
+
+    const editAvatar = await api(srv.baseUrl, `/api/players/${rlPlayers[0]}`, {
+      method: 'PATCH',
+      token: freshToken,
+      body: {
+        name: 'RL_1_Pro',
+        elysiumNetId: 'RL-ID-1',
+        clubName: 'Fennec',
+        level: 'PRO',
+        ovrRating: 89,
+        avatarUrl: okImg.json.url
+      }
+    });
+    assert.equal(editAvatar.status, 200);
+    const afterRlPlayerEdit = await api(srv.baseUrl, `/api/state?tournamentId=${rlId}`);
+    const editedP1 = afterRlPlayerEdit.json.players.find((p) => p.id === rlPlayers[0]);
+    assert.equal(editedP1.name, 'RL_1_Pro');
+    assert.equal(editedP1.avatarUrl, okImg.json.url);
 
     const rlDraw = await api(srv.baseUrl, `/api/tournaments/${rlId}/draw`, {
       method: 'POST',

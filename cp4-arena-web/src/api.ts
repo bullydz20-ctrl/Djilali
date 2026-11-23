@@ -96,6 +96,13 @@ export async function changeOwnPinApi(currentPin: string, newPin: string) {
   });
 }
 
+export async function updateOwnProfileApi(payload: { displayName: string; username?: string }) {
+  return apiRequest<{ ok: boolean; admin: AdminAccount; messageAr: string }>('/api/admin/profile', {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+}
+
 export async function createSubAdminApi(payload: {
   username: string;
   displayName: string;
@@ -154,6 +161,24 @@ export async function updateTournamentApi(id: number, payload: Record<string, un
 export async function deleteTournamentApi(id: number) {
   return apiRequest<{ ok: boolean; messageAr: string }>(`/api/tournaments/${id}`, {
     method: 'DELETE'
+  });
+}
+
+export async function adminAddPlayerApi(
+  tournamentId: number,
+  payload: {
+    name: string;
+    elysiumNetId: string;
+    avatarUrl: string | null;
+    level: PlayerLevel;
+    ovrRating?: number;
+    clubName: string;
+    status?: PlayerStatus;
+  }
+) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/tournaments/${tournamentId}/players`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
   });
 }
 

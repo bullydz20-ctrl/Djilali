@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GitBranch, Home, LayoutGrid, Shield, Users } from 'lucide-react';
 import {
+  adminAddPlayerApi,
   cancelReminderApi,
   changeOwnPinApi,
   createSubAdminApi,
@@ -19,6 +20,7 @@ import {
   setupHeadAdminApi,
   updateKnockoutWinnerApi,
   updateMatchScoreApi,
+  updateOwnProfileApi,
   updatePlayerDetailsApi,
   updatePlayerStatusApi,
   updateSubAdminApi,
@@ -336,6 +338,10 @@ export default function App() {
                     setSelectedTournamentId(null);
                     await refreshState(null);
                   }}
+                  onAdminAddPlayer={async (payload) => {
+                    if (!state.tournament) return;
+                    await runAction(() => adminAddPlayerApi(state.tournament!.id, payload));
+                  }}
                   onUpdatePlayerStatus={async (id, status: PlayerStatus) => {
                     await runAction(() => updatePlayerStatusApi(id, status));
                   }}
@@ -365,6 +371,9 @@ export default function App() {
                         penaltyScore2: m.penaltyScore2
                       })
                     ).catch(() => undefined);
+                  }}
+                  onUpdateOwnProfile={async (payload) => {
+                    await runAction(() => updateOwnProfileApi(payload));
                   }}
                   onChangeOwnPin={async (currentPin, newPin) => {
                     await runAction(() => changeOwnPinApi(currentPin, newPin));

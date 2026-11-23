@@ -456,12 +456,75 @@ export class ArenaService {
       pinHash: pHash
     });
 
-    this.db
-      .prepare('UPDATE admin_accounts SET pin_salt = ?, pin_hash = ?, permissions_hash = ?, pin_updated_at = ? WHERE id = ?')
-      .run(salt, pHash, permHash, now, account.id);
+    const currentTokenHash = hashSessionToken(rawToken);
+    this.withTx(() => {
+      this.db
+        .prepare('UPDATE admin_accounts SET pin_salt = ?, pin_hash = ?, permissions_hash = ?, pin_updated_at = ? WHERE id = ?')
+        .run(salt, pHash, permHash, now, account.id);
+      // Revoke other active sessions for this account while preserving current session
+      this.db
+        .prepare('DELETE FROM admin_sessions WHERE admin_id = ? AND token_hash != ?')
+        .run(account.id, currentTokenHash);
+    });
 
     this.emitChange('admin_updated');
     return { ok: true, status: 200, messageAr: 'تم تحديث وتشفير رمز PIN بنجاح.' };
+  }
+
+  updateOwnProfile(rawToken, { displayName, username } = {}) {
+    const auth = this.requirePermission(rawToken, null);
+    if (!auth.ok) return auth;
+    const account = auth.session.rawAdmin;
+
+    const cleanDisplay = displayName !== undefined ? String(displayName).trim() : account.displayName;
+    if (!cleanDisplay || cleanDisplay.length > 50) {
+      return { ok: false, status: 400, error: 'يرجى إدخال الاسم الظاهر (من 1 إلى 50 حرفاً).' };
+    }
+
+    const cleanUser = username !== undefined && String(username).trim() !== ''
+      ? String(username).trim()
+      : account.username;
+    if (cleanUser.length < 3 || cleanUser.length > 32) {
+      return { ok: false, status: 400, error: 'اسم المستخدم يجب أن يكون بين 3 و 32 حرفاً.' };
+    }
+
+    const res = this.withTx(() => {
+      if (cleanUser.toLowerCase() !== account.username.toLowerCase()) {
+        const conflict = this.db
+          .prepare('SELECT id FROM admin_accounts WHERE username = ? COLLATE NOCASE AND id != ?')
+          .get(cleanUser, account.id);
+        if (conflict) {
+          return { ok: false, status: 409, error: 'اسم المستخدم مستخدم بالفعل لحساب آخر.' };
+        }
+      }
+
+      const permHash = computePermissionsHash({
+        username: cleanUser,
+        role: account.role,
+        canManageTournament: account.canManageTournament,
+        canManagePlayers: account.canManagePlayers,
+        canRunDraw: account.canRunDraw,
+        canEditScores: account.canEditScores,
+        canCrownChampion: account.canCrownChampion,
+        pinSalt: account.pinSalt,
+        pinHash: account.pinHash
+      });
+
+      this.db
+        .prepare('UPDATE admin_accounts SET username = ?, display_name = ?, permissions_hash = ? WHERE id = ?')
+        .run(cleanUser, cleanDisplay, permHash, account.id);
+
+      const updated = mapAdminRaw(this.db.prepare('SELECT * FROM admin_accounts WHERE id = ?').get(account.id));
+      return {
+        ok: true,
+        status: 200,
+        admin: sanitizeAdminPublic(updated),
+        messageAr: 'تم تحديث بيانات حساب المشرف بنجاح.'
+      };
+    });
+
+    if (res.ok) this.emitChange('admin_updated');
+    return res;
   }
 
   createSubAdmin(rawToken, payload) {
@@ -1021,6 +1084,83 @@ export class ArenaService {
     return res;
   }
 
+  adminAddPlayer(rawToken, tournamentId, payload = {}) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
+    if (!auth.ok) return auth;
+
+    const cleanName = String(payload.name || '').trim();
+    const cleanElysium = String(payload.elysiumNetId || '').trim();
+    if (!cleanName || !cleanElysium) {
+      return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب ومعرف ElysiumNet.' };
+    }
+    if (cleanName.length > 50 || cleanElysium.length > 50) {
+      return { ok: false, status: 400, error: 'الاسم أو معرف ElysiumNet طويل جداً.' };
+    }
+
+    const safeLevel = Object.values(PlayerLevel).includes(payload.level) ? payload.level : PlayerLevel.INTERMEDIATE;
+    const ovrRating = Math.max(60, Math.min(99, Number(payload.ovrRating ?? PLAYER_LEVEL_META[safeLevel].defaultOvr) || 81));
+    const clubName = String(payload.clubName || '').trim().slice(0, 50);
+    const avatarUrl = payload.avatarUrl ? String(payload.avatarUrl).trim() : null;
+    const desiredStatus = payload.status === PlayerStatus.PENDING ? PlayerStatus.PENDING : PlayerStatus.APPROVED;
+
+    const res = this.withTx(() => {
+      const tournament = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(Number(tournamentId)));
+      if (!tournament) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
+
+      const duplicate = this.db
+        .prepare('SELECT id FROM players WHERE tournament_id = ? AND LOWER(elysium_net_id) = LOWER(?)')
+        .get(tournament.id, cleanElysium);
+      if (duplicate) {
+        return { ok: false, status: 409, error: 'معرف ElysiumNet مسجل مسبقاً في هذه البطولة.' };
+      }
+
+      const approvedCount = this.db
+        .prepare('SELECT COUNT(*) AS c FROM players WHERE tournament_id = ? AND status = ?')
+        .get(tournament.id, PlayerStatus.APPROVED).c;
+      if (desiredStatus === PlayerStatus.APPROVED && approvedCount >= tournament.maxParticipants) {
+        return { ok: false, status: 400, error: `تم الوصول للحد الأقصى للمشاركين (${tournament.maxParticipants}).` };
+      }
+
+      const now = Date.now();
+      const info = this.db
+        .prepare(`
+          INSERT INTO players (
+            tournament_id, name, elysium_net_id, avatar_url, level,
+            ovr_rating, club_name, status, group_id, seed_order, registered_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)
+        `)
+        .run(
+          tournament.id,
+          cleanName,
+          cleanElysium,
+          avatarUrl,
+          safeLevel,
+          ovrRating,
+          clubName,
+          desiredStatus,
+          now
+        );
+
+      const newApprovedCount = approvedCount + (desiredStatus === PlayerStatus.APPROVED ? 1 : 0);
+      if (newApprovedCount >= tournament.maxParticipants && tournament.status === TournamentStatus.REGISTRATION_OPEN) {
+        this.db
+          .prepare('UPDATE tournaments SET is_registration_closed_manual = 1, status = ? WHERE id = ?')
+          .run(TournamentStatus.REGISTRATION_CLOSED, tournament.id);
+      }
+
+      const player = mapPlayer(this.db.prepare('SELECT * FROM players WHERE id = ?').get(info.lastInsertRowid));
+      return {
+        ok: true,
+        status: 201,
+        player,
+        messageAr: `تمت إضافة اللاعب (${player.name}) إلى البطولة بنجاح.`
+      };
+    });
+
+    if (res.ok) this.emitChange('player_added');
+    return res;
+  }
+
   updatePlayerDetails(rawToken, playerId, payload) {
     const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
     if (!auth.ok) return auth;
@@ -1044,13 +1184,17 @@ export class ArenaService {
     const level = Object.values(PlayerLevel).includes(payload.level) ? payload.level : existing.level;
     const ovrRating = Math.max(60, Math.min(99, Number(payload.ovrRating ?? existing.ovr_rating) || 81));
     const clubName = String(payload.clubName ?? existing.club_name).trim();
+    const avatarUrl =
+      payload.avatarUrl !== undefined
+        ? (payload.avatarUrl ? String(payload.avatarUrl).trim() : null)
+        : existing.avatar_url;
 
     this.db
-      .prepare('UPDATE players SET name = ?, elysium_net_id = ?, club_name = ?, level = ?, ovr_rating = ? WHERE id = ?')
-      .run(name, elysiumNetId, clubName, level, ovrRating, existing.id);
+      .prepare('UPDATE players SET name = ?, elysium_net_id = ?, avatar_url = ?, club_name = ?, level = ?, ovr_rating = ? WHERE id = ?')
+      .run(name, elysiumNetId, avatarUrl, clubName, level, ovrRating, existing.id);
 
     this.emitChange('player_updated');
-    return { ok: true, status: 200, messageAr: 'تم تحديث بيانات اللاعب.' };
+    return { ok: true, status: 200, messageAr: 'تم تحديث بيانات اللاعب بنجاح.' };
   }
 
   deletePlayer(rawToken, playerId) {

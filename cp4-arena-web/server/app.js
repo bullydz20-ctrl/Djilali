@@ -196,6 +196,12 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
     res.status(out.status).json(out);
   });
 
+  app.patch('/api/admin/profile', (req, res) => {
+    const out = service.updateOwnProfile(getBearerToken(req), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
   app.post('/api/admin/sub-admins', (req, res) => {
     const out = service.createSubAdmin(getBearerToken(req), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
@@ -234,6 +240,12 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
   });
 
   // Protected player management
+  app.post('/api/tournaments/:id/players', (req, res) => {
+    const out = service.adminAddPlayer(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
   app.patch('/api/players/:id/status', (req, res) => {
     const out = service.updatePlayerStatus(getBearerToken(req), Number(req.params.id), req.body?.status);
     if (!out.ok) return res.status(out.status).json({ error: out.error });

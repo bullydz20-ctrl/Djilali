@@ -435,9 +435,11 @@ fun FifaTournamentApp(
                                     onLogin = viewModel::loginAdmin,
                                     onLogout = viewModel::logoutAdmin,
                                     onImportBanner = { uri, cb -> viewModel.importImageFromPicker(uri, "banner", cb) },
+                                    onImportAvatar = { uri, cb -> viewModel.importImageFromPicker(uri, "avatar", cb) },
                                     onSaveTournament = viewModel::saveTournamentSettings,
                                     onCreateFreshTournament = viewModel::createFreshTournament,
                                     onDeleteTournament = viewModel::deleteCurrentTournament,
+                                    onAdminAddPlayer = viewModel::adminAddPlayer,
                                     onUpdatePlayerStatus = viewModel::updatePlayerStatus,
                                     onUpdatePlayerDetails = viewModel::updatePlayerDetails,
                                     onDeletePlayer = viewModel::deletePlayer,
@@ -455,6 +457,7 @@ fun FifaTournamentApp(
                                             pen2 = match.penaltyScore2
                                         )
                                     },
+                                    onUpdateOwnProfile = viewModel::updateOwnProfile,
                                     onChangeOwnPin = viewModel::changeOwnPin,
                                     onCreateSubAdmin = viewModel::createSubAdmin,
                                     onUpdateSubAdmin = viewModel::updateSubAdmin,

@@ -194,6 +194,70 @@ class ApiServiceAndRemoteSyncTest {
                     }
                 }
 
+                method == "PATCH" && path == "/api/admin/profile" -> {
+                    val parsed = org.json.JSONObject(reqBody)
+                    assertEquals("Djilali Pro", parsed.getString("displayName"))
+                    assertEquals("djilali_new", parsed.getString("username"))
+                    respondJson(
+                        exchange,
+                        200,
+                        """
+                        {
+                          "ok": true,
+                          "admin": {
+                            "id": 1,
+                            "username": "djilali_new",
+                            "displayName": "Djilali Pro",
+                            "role": "HEAD_ADMIN",
+                            "canManageTournament": true,
+                            "canManagePlayers": true,
+                            "canRunDraw": true,
+                            "canEditScores": true,
+                            "canCrownChampion": true,
+                            "isActive": true
+                          },
+                          "messageAr": "تم تحديث بيانات حساب المشرف بنجاح."
+                        }
+                        """.trimIndent()
+                    )
+                }
+
+                method == "POST" && path == "/api/tournaments/7/players" -> {
+                    val parsed = org.json.JSONObject(reqBody)
+                    assertEquals("APPROVED", parsed.getString("status"))
+                    assertEquals("/uploads/direct_p.png", parsed.getString("avatarUrl"))
+                    respondJson(
+                        exchange,
+                        201,
+                        """
+                        {
+                          "ok": true,
+                          "player": {
+                            "id": 202,
+                            "tournamentId": 7,
+                            "name": "Karim Direct",
+                            "elysiumNetId": "KM-88",
+                            "avatarUrl": "/uploads/direct_p.png",
+                            "level": "LEGEND",
+                            "ovrRating": 94,
+                            "clubName": "Liverpool",
+                            "status": "APPROVED",
+                            "groupId": null,
+                            "seedOrder": 0,
+                            "registeredAt": 1730000002000
+                          },
+                          "messageAr": "تمت إضافة اللاعب بنجاح."
+                        }
+                        """.trimIndent()
+                    )
+                }
+
+                method == "PATCH" && path == "/api/players/101" -> {
+                    val parsed = org.json.JSONObject(reqBody)
+                    assertEquals("/uploads/updated_dj.png", parsed.getString("avatarUrl"))
+                    respondJson(exchange, 200, """{"ok":true,"messageAr":"تم تحديث بيانات اللاعب بنجاح."}""")
+                }
+
                 method == "PATCH" && path == "/api/matches/55/score" -> {
                     respondJson(exchange, 200, """{"ok":true,"messageAr":"تم حفظ النتيجة"}""")
                 }
@@ -311,6 +375,32 @@ class ApiServiceAndRemoteSyncTest {
 
         val scoreRes = api.updateMatchScore(55L, 3, 1, null, null, null, null)
         assertTrue(scoreRes is ApiResult.Success)
+
+        val profileRes = api.updateOwnProfile("Djilali Pro", "djilali_new")
+        assertTrue(profileRes is ApiResult.Success)
+        assertEquals("Djilali Pro", (profileRes as ApiResult.Success).data.displayName)
+        assertEquals("djilali_new", profileRes.data.username)
+
+        val directAddRes = api.adminAddPlayer(
+            tournamentId = 7L,
+            name = "Karim Direct",
+            elysiumNetId = "KM-88",
+            avatarUrl = "$localUrl/uploads/direct_p.png",
+            level = PlayerLevel.LEGEND,
+            ovrRating = 94,
+            clubName = "Liverpool",
+            autoApprove = true
+        )
+        assertTrue(directAddRes is ApiResult.Success)
+        assertEquals("$localUrl/uploads/direct_p.png", (directAddRes as ApiResult.Success).data.avatarUri)
+
+        val editPlayerRes = api.updatePlayerDetails(
+            state.players.first().copy(
+                name = "Djilali Edited",
+                avatarUri = "$localUrl/uploads/updated_dj.png"
+            )
+        )
+        assertTrue(editPlayerRes is ApiResult.Success)
 
         val events = mutableListOf<String>()
         var sawConnected = false

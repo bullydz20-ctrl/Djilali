@@ -301,6 +301,31 @@ class RemoteArenaRepository(
         return executeAndRefresh { apiService.changeOwnPin(currentPin, newPin) }
     }
 
+    suspend fun updateOwnProfile(displayName: String, username: String?): RepoResult<Unit> {
+        return when (val res = apiService.updateOwnProfile(displayName, username)) {
+            is ApiResult.Success -> {
+                val updated = res.data
+                val snapshot = sessionPrefs.getSessionSnapshot()
+                sessionPrefs.saveRemoteAuthSession(
+                    token = apiService.getAuthToken(),
+                    adminId = updated.id,
+                    username = updated.username,
+                    role = updated.role.name,
+                    keepSignedIn = snapshot.keepSignedIn
+                )
+                refreshState()
+                RepoResult.Success(Unit, res.messageAr.ifBlank { "تم تحديث بيانات حساب المشرف بنجاح." })
+            }
+            is ApiResult.Error -> {
+                if (res.statusCode == 401) {
+                    sessionPrefs.clearRemoteAuthSession()
+                    refreshState()
+                }
+                RepoResult.Error(res.messageAr)
+            }
+        }
+    }
+
     suspend fun createSubAdmin(
         username: String,
         displayName: String,
@@ -366,6 +391,28 @@ class RemoteArenaRepository(
             avatarUrl = avatarUri,
             level = level,
             clubName = clubName
+        )
+    }
+
+    suspend fun adminAddPlayer(
+        tournamentId: Long,
+        name: String,
+        elysiumNetId: String,
+        avatarUri: String?,
+        level: PlayerLevel,
+        ovrRating: Int,
+        clubName: String,
+        autoApprove: Boolean
+    ): RepoResult<PlayerEntity> = executeAndRefresh {
+        apiService.adminAddPlayer(
+            tournamentId = tournamentId,
+            name = name,
+            elysiumNetId = elysiumNetId,
+            avatarUrl = avatarUri,
+            level = level,
+            ovrRating = ovrRating,
+            clubName = clubName,
+            autoApprove = autoApprove
         )
     }
 

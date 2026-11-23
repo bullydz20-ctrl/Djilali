@@ -23,17 +23,25 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SportsScore
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,10 +57,13 @@ import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
 import com.example.data.local.TournamentEntity
 import com.example.data.model.AdminRole
+import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
 import com.example.security.AdminPermission
+import com.example.security.PinSecurityManager
 import com.example.security.hasPermission
 import com.example.ui.components.EmptyStatePanel
+import com.example.ui.components.SixDigitPinInputField
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CrimsonLoss
@@ -79,9 +90,11 @@ fun AdminScreen(
     onLogin: (String, String, Boolean) -> Unit,
     onLogout: () -> Unit,
     onImportBanner: (Uri, (String) -> Unit) -> Unit,
+    onImportAvatar: (Uri, (String) -> Unit) -> Unit = { _, _ -> },
     onSaveTournament: (TournamentEntity) -> Unit,
     onCreateFreshTournament: (TournamentEntity) -> Unit,
     onDeleteTournament: () -> Unit,
+    onAdminAddPlayer: (String, String, String?, PlayerLevel, Int, String, Boolean, () -> Unit) -> Unit = { _, _, _, _, _, _, _, _ -> },
     onUpdatePlayerStatus: (PlayerEntity, PlayerStatus) -> Unit,
     onUpdatePlayerDetails: (PlayerEntity) -> Unit,
     onDeletePlayer: (PlayerEntity) -> Unit,
@@ -89,6 +102,7 @@ fun AdminScreen(
     onGenerateKnockoutFromStandings: () -> Unit,
     onEditMatch: (MatchEntity) -> Unit,
     onQuickUpdateGoals: (MatchEntity, Int, Int) -> Unit = { _, _, _ -> },
+    onUpdateOwnProfile: (String, String?, () -> Unit) -> Unit = { _, _, _ -> },
     onChangeOwnPin: (String, String) -> Unit,
     onCreateSubAdmin: (String, String, String, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
     onUpdateSubAdmin: (AdminAccountEntity, String, String?, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
@@ -124,6 +138,7 @@ fun AdminScreen(
     var selectedSection by remember(allowedSections) {
         mutableStateOf(allowedSections.firstOrNull())
     }
+    var showOwnAccountDialog by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize()) {
         // Logged-in admin bar
@@ -140,9 +155,9 @@ fun AdminScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "لوحة تحكم: ${currentAdmin.displayName}",
+                        text = "لوحة تحكم: ${currentAdmin.displayName} (@${currentAdmin.username})",
                         style = MaterialTheme.typography.titleSmall,
                         color = ChampionshipGold
                     )
@@ -153,15 +168,35 @@ fun AdminScreen(
                         color = CyberSky
                     )
                 }
-                IconButton(
-                    onClick = onLogout,
-                    modifier = Modifier.testTag("admin_logout_button")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Logout,
-                        contentDescription = "تسجيل الخروج",
-                        tint = CrimsonLoss
-                    )
+                    OutlinedButton(
+                        onClick = { showOwnAccountDialog = true },
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("admin_edit_profile_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = "إدارة حسابي",
+                            modifier = Modifier.size(16.dp),
+                            tint = CyberSky
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("حسابي", style = MaterialTheme.typography.labelMedium, color = CyberSky)
+                    }
+                    IconButton(
+                        onClick = onLogout,
+                        modifier = Modifier.testTag("admin_logout_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Logout,
+                            contentDescription = "تسجيل الخروج",
+                            tint = CrimsonLoss
+                        )
+                    }
                 }
             }
         }
@@ -179,135 +214,251 @@ fun AdminScreen(
                     subtitle = "اطلب من المشرف الرئيسي تفعيل الصلاحيات المناسبة لحسابك."
                 )
             }
-            return
-        }
-
-        // Section Chips
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(allowedSections) { sec ->
-                FilterChip(
-                    selected = selectedSection == sec,
-                    onClick = { selectedSection = sec },
-                    leadingIcon = {
-                        Icon(sec.icon, contentDescription = null, modifier = Modifier.size(16.dp))
-                    },
-                    label = {
-                        val badge = when (sec) {
-                            AdminSection.PLAYERS -> if (uiState.pendingPlayers.isNotEmpty()) " (${uiState.pendingPlayers.size})" else ""
-                            AdminSection.SUB_ADMINS -> {
-                                val count = uiState.admins.count { it.role == AdminRole.SUB_ADMIN }
-                                " ($count/5)"
+        } else {
+            // Section Chips
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(allowedSections) { sec ->
+                    FilterChip(
+                        selected = selectedSection == sec,
+                        onClick = { selectedSection = sec },
+                        leadingIcon = {
+                            Icon(sec.icon, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        label = {
+                            val badge = when (sec) {
+                                AdminSection.PLAYERS -> if (uiState.pendingPlayers.isNotEmpty()) " (${uiState.pendingPlayers.size})" else ""
+                                AdminSection.SUB_ADMINS -> {
+                                    val count = uiState.admins.count { it.role == AdminRole.SUB_ADMIN }
+                                    " ($count/5)"
+                                }
+                                else -> ""
                             }
-                            else -> ""
-                        }
-                        Text("${sec.titleAr}$badge")
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = ElectricCobalt,
-                        selectedLabelColor = TextPrimary,
-                        selectedLeadingIconColor = ChampionshipGold
-                    ),
-                    modifier = Modifier.testTag("admin_tab_${sec.name.lowercase()}")
-                )
+                            Text("${sec.titleAr}$badge")
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = ElectricCobalt,
+                            selectedLabelColor = TextPrimary,
+                            selectedLeadingIconColor = ChampionshipGold
+                        ),
+                        modifier = Modifier.testTag("admin_tab_${sec.name.lowercase()}")
+                    )
+                }
             }
-        }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                when (selectedSection) {
-                    AdminSection.TOURNAMENT -> AdminTournamentSettingsTab(
-                        tournament = uiState.tournament,
-                        onImportBanner = onImportBanner,
-                        onSaveSettings = onSaveTournament,
-                        onCreateFresh = onCreateFreshTournament,
-                        onDeleteTournament = onDeleteTournament
-                    )
-                    AdminSection.PLAYERS -> if (uiState.tournament == null) {
-                        EmptyStatePanel(
-                            icon = Icons.Default.SportsEsports,
-                            title = "لا توجد بطولة نشطة حالياً",
-                            subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» أولاً لإدارة المشاركين.",
-                            actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
-                            onAction = if (AdminSection.TOURNAMENT in allowedSections) {
-                                { selectedSection = AdminSection.TOURNAMENT }
-                            } else null
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    when (selectedSection) {
+                        AdminSection.TOURNAMENT -> AdminTournamentSettingsTab(
+                            tournament = uiState.tournament,
+                            onImportBanner = onImportBanner,
+                            onSaveSettings = onSaveTournament,
+                            onCreateFresh = onCreateFreshTournament,
+                            onDeleteTournament = onDeleteTournament
                         )
-                    } else {
-                        AdminPlayersTab(
+                        AdminSection.PLAYERS -> if (uiState.tournament == null) {
+                            EmptyStatePanel(
+                                icon = Icons.Default.SportsEsports,
+                                title = "لا توجد بطولة نشطة حالياً",
+                                subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» أولاً لإدارة المشاركين.",
+                                actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
+                                onAction = if (AdminSection.TOURNAMENT in allowedSections) {
+                                    { selectedSection = AdminSection.TOURNAMENT }
+                                } else null
+                            )
+                        } else {
+                            AdminPlayersTab(
+                                uiState = uiState,
+                                onImportAvatar = onImportAvatar,
+                                onAdminAddPlayer = onAdminAddPlayer,
+                                onStatusChange = onUpdatePlayerStatus,
+                                onUpdateDetails = onUpdatePlayerDetails,
+                                onDeletePlayer = onDeletePlayer
+                            )
+                        }
+                        AdminSection.DRAW -> if (uiState.tournament == null) {
+                            EmptyStatePanel(
+                                icon = Icons.Default.SportsEsports,
+                                title = "لا توجد بطولة نشطة حالياً",
+                                subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» أولاً لإجراء القرعة.",
+                                actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
+                                onAction = if (AdminSection.TOURNAMENT in allowedSections) {
+                                    { selectedSection = AdminSection.TOURNAMENT }
+                                } else null
+                            )
+                        } else {
+                            AdminDrawTab(
+                                uiState = uiState,
+                                onRunDraw = onRunDraw,
+                                onGenerateKnockoutFromStandings = onGenerateKnockoutFromStandings
+                            )
+                        }
+                        AdminSection.MATCHES -> if (uiState.tournament == null) {
+                            EmptyStatePanel(
+                                icon = Icons.Default.SportsEsports,
+                                title = "لا توجد بطولة نشطة حالياً",
+                                subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» لإدارة المباريات.",
+                                actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
+                                onAction = if (AdminSection.TOURNAMENT in allowedSections) {
+                                    { selectedSection = AdminSection.TOURNAMENT }
+                                } else null
+                            )
+                        } else {
+                            AdminMatchesTab(
+                                uiState = uiState,
+                                onEditMatch = onEditMatch,
+                                onQuickUpdateGoals = onQuickUpdateGoals
+                            )
+                        }
+                        AdminSection.SUB_ADMINS -> AdminSubAdminsTab(
                             uiState = uiState,
-                            onStatusChange = onUpdatePlayerStatus,
-                            onUpdateDetails = onUpdatePlayerDetails,
-                            onDeletePlayer = onDeletePlayer
+                            onChangeOwnPin = onChangeOwnPin,
+                            onCreateSubAdmin = onCreateSubAdmin,
+                            onUpdateSubAdmin = onUpdateSubAdmin,
+                            onDeleteSubAdmin = onDeleteSubAdmin
                         )
+                        AdminSection.CHAMPION -> if (uiState.tournament == null) {
+                            EmptyStatePanel(
+                                icon = Icons.Default.SportsEsports,
+                                title = "لا توجد بطولة نشطة حالياً",
+                                subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» أولاً لمتابعة التتويج.",
+                                actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
+                                onAction = if (AdminSection.TOURNAMENT in allowedSections) {
+                                    { selectedSection = AdminSection.TOURNAMENT }
+                                } else null
+                            )
+                        } else {
+                            AdminProgressAndChampionTab(
+                                uiState = uiState,
+                                onCrownChampion = onCrownChampion,
+                                onOpenExportShare = onOpenExportShare
+                            )
+                        }
+                        null -> Spacer(modifier = Modifier)
                     }
-                    AdminSection.DRAW -> if (uiState.tournament == null) {
-                        EmptyStatePanel(
-                            icon = Icons.Default.SportsEsports,
-                            title = "لا توجد بطولة نشطة حالياً",
-                            subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» أولاً لإجراء القرعة.",
-                            actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
-                            onAction = if (AdminSection.TOURNAMENT in allowedSections) {
-                                { selectedSection = AdminSection.TOURNAMENT }
-                            } else null
-                        )
-                    } else {
-                        AdminDrawTab(
-                            uiState = uiState,
-                            onRunDraw = onRunDraw,
-                            onGenerateKnockoutFromStandings = onGenerateKnockoutFromStandings
-                        )
-                    }
-                    AdminSection.MATCHES -> if (uiState.tournament == null) {
-                        EmptyStatePanel(
-                            icon = Icons.Default.SportsEsports,
-                            title = "لا توجد بطولة نشطة حالياً",
-                            subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» لإدارة المباريات.",
-                            actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
-                            onAction = if (AdminSection.TOURNAMENT in allowedSections) {
-                                { selectedSection = AdminSection.TOURNAMENT }
-                            } else null
-                        )
-                    } else {
-                        AdminMatchesTab(
-                            uiState = uiState,
-                            onEditMatch = onEditMatch,
-                            onQuickUpdateGoals = onQuickUpdateGoals
-                        )
-                    }
-                    AdminSection.SUB_ADMINS -> AdminSubAdminsTab(
-                        uiState = uiState,
-                        onChangeOwnPin = onChangeOwnPin,
-                        onCreateSubAdmin = onCreateSubAdmin,
-                        onUpdateSubAdmin = onUpdateSubAdmin,
-                        onDeleteSubAdmin = onDeleteSubAdmin
-                    )
-                    AdminSection.CHAMPION -> if (uiState.tournament == null) {
-                        EmptyStatePanel(
-                            icon = Icons.Default.SportsEsports,
-                            title = "لا توجد بطولة نشطة حالياً",
-                            subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» أولاً لمتابعة التتويج.",
-                            actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
-                            onAction = if (AdminSection.TOURNAMENT in allowedSections) {
-                                { selectedSection = AdminSection.TOURNAMENT }
-                            } else null
-                        )
-                    } else {
-                        AdminProgressAndChampionTab(
-                            uiState = uiState,
-                            onCrownChampion = onCrownChampion,
-                            onOpenExportShare = onOpenExportShare
-                        )
-                    }
-                    null -> Spacer(modifier = Modifier)
                 }
             }
         }
     }
+
+    if (showOwnAccountDialog) {
+        AdminOwnAccountDialog(
+            currentAdmin = currentAdmin,
+            onDismiss = { showOwnAccountDialog = false },
+            onSaveProfile = { displayName, username ->
+                onUpdateOwnProfile(displayName, username) {
+                    showOwnAccountDialog = false
+                }
+            },
+            onChangePin = { currPin, newPin ->
+                onChangeOwnPin(currPin, newPin)
+                showOwnAccountDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun AdminOwnAccountDialog(
+    currentAdmin: AdminAccountEntity,
+    onDismiss: () -> Unit,
+    onSaveProfile: (displayName: String, username: String?) -> Unit,
+    onChangePin: (currentPin: String, newPin: String) -> Unit
+) {
+    var displayName by remember(currentAdmin.id) { mutableStateOf(currentAdmin.displayName) }
+    var username by remember(currentAdmin.id) { mutableStateOf(currentAdmin.username) }
+    var currentPin by remember { mutableStateOf("") }
+    var newPin by remember { mutableStateOf("") }
+    var confirmPin by remember { mutableStateOf("") }
+    val strength = PinSecurityManager.evaluateStrength(newPin)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MidnightSurface,
+        title = { Text("إدارة حساب المشرف والأمان", color = ChampionshipGold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "الصلاحية: ${currentAdmin.role.labelAr}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = CyberSky
+                )
+                OutlinedTextField(
+                    value = displayName,
+                    onValueChange = { displayName = it },
+                    label = { Text("الاسم الظاهر في اللوحة") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_profile_display_input")
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("اسم المستخدم للدخول (3 أحرف+)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_profile_username_input")
+                )
+                Button(
+                    onClick = { onSaveProfile(displayName.trim(), username.trim()) },
+                    enabled = displayName.isNotBlank() && username.trim().length >= 3,
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt),
+                    modifier = Modifier.fillMaxWidth().testTag("admin_profile_save_button")
+                ) {
+                    Text("حفظ الاسم واسم المستخدم")
+                }
+
+                HorizontalDivider(color = CardBorder)
+
+                Text(
+                    text = "تغيير رمز الأمان (PIN)",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = CyberSky
+                )
+                SixDigitPinInputField(
+                    value = currentPin,
+                    onValueChange = { currentPin = it },
+                    label = "رمز PIN الحالي (6 أرقام)",
+                    testTag = "admin_account_pin_current"
+                )
+                SixDigitPinInputField(
+                    value = newPin,
+                    onValueChange = { newPin = it },
+                    label = "رمز PIN الجديد (6 أرقام)",
+                    testTag = "admin_account_pin_new",
+                    supportingText = if (newPin.isNotEmpty()) "قوة الرمز: ${strength.labelAr}" else null
+                )
+                SixDigitPinInputField(
+                    value = confirmPin,
+                    onValueChange = { confirmPin = it },
+                    label = "تأكيد رمز PIN الجديد",
+                    testTag = "admin_account_pin_confirm",
+                    isError = confirmPin.isNotEmpty() && confirmPin != newPin,
+                    supportingText = if (confirmPin.isNotEmpty() && confirmPin != newPin) "رمز التأكيد غير مطابق" else null
+                )
+                OutlinedButton(
+                    onClick = { onChangePin(currentPin, newPin) },
+                    enabled = PinSecurityManager.isValidPinFormat(currentPin) &&
+                        PinSecurityManager.isValidPinFormat(newPin) &&
+                        newPin == confirmPin,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_account_pin_save")
+                ) {
+                    Text("تحديث رمز PIN وإنهاء الجلسات الأخرى")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("إغلاق") }
+        }
+    )
 }

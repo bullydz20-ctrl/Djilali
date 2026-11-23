@@ -348,6 +348,16 @@ class ApiService(
         return executeJsonRequest("POST", "/api/admin/change-pin", body) { Unit }
     }
 
+    suspend fun updateOwnProfile(displayName: String, username: String?): ApiResult<AdminAccountEntity> {
+        val body = JSONObject().put("displayName", displayName)
+        if (!username.isNullOrBlank()) {
+            body.put("username", username)
+        }
+        return executeJsonRequest("PATCH", "/api/admin/profile", body) { json ->
+            parseAdmin(json.getJSONObject("admin"))
+        }
+    }
+
     suspend fun createSubAdmin(
         username: String,
         displayName: String,
@@ -413,6 +423,29 @@ class ApiService(
         return executeJsonRequest("DELETE", "/api/tournaments/$tournamentId", null) { Unit }
     }
 
+    suspend fun adminAddPlayer(
+        tournamentId: Long,
+        name: String,
+        elysiumNetId: String,
+        avatarUrl: String?,
+        level: PlayerLevel,
+        ovrRating: Int,
+        clubName: String,
+        autoApprove: Boolean = true
+    ): ApiResult<PlayerEntity> {
+        val body = JSONObject()
+            .put("name", name)
+            .put("elysiumNetId", elysiumNetId)
+            .put("avatarUrl", toServerMediaPath(avatarUrl) ?: JSONObject.NULL)
+            .put("level", level.name)
+            .put("ovrRating", ovrRating)
+            .put("clubName", clubName)
+            .put("status", if (autoApprove) PlayerStatus.APPROVED.name else PlayerStatus.PENDING.name)
+        return executeJsonRequest("POST", "/api/tournaments/$tournamentId/players", body) { json ->
+            parsePlayer(json.getJSONObject("player"))
+        }
+    }
+
     suspend fun updatePlayerStatus(playerId: Long, status: PlayerStatus): ApiResult<Unit> {
         val body = JSONObject().put("status", status.name)
         return executeJsonRequest("PATCH", "/api/players/$playerId/status", body) { Unit }
@@ -422,6 +455,7 @@ class ApiService(
         val body = JSONObject()
             .put("name", player.name)
             .put("elysiumNetId", player.elysiumNetId)
+            .put("avatarUrl", toServerMediaPath(player.avatarUri) ?: JSONObject.NULL)
             .put("clubName", player.clubName)
             .put("level", player.level.name)
             .put("ovrRating", player.ovrRating)

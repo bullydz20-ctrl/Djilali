@@ -1,11 +1,16 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -77,19 +83,38 @@ import com.example.ui.viewmodel.TournamentUiState
 @Composable
 fun AdminPlayersTab(
     uiState: TournamentUiState,
+    onImportAvatar: (Uri, (String) -> Unit) -> Unit = { _, _ -> },
+    onAdminAddPlayer: (String, String, String?, PlayerLevel, Int, String, Boolean, () -> Unit) -> Unit = { _, _, _, _, _, _, _, _ -> },
     onStatusChange: (PlayerEntity, PlayerStatus) -> Unit,
     onUpdateDetails: (PlayerEntity) -> Unit,
     onDeletePlayer: (PlayerEntity) -> Unit
 ) {
     var editingPlayer by remember { mutableStateOf<PlayerEntity?>(null) }
+    var showAddPlayerDialog by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // Pending queue
-        Text(
-            text = "طلبات التسجيل الجديدة (${uiState.pendingPlayers.size})",
-            style = MaterialTheme.typography.titleMedium,
-            color = ChampionshipGold
-        )
+        // Pending queue + direct add CTA
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "طلبات التسجيل الجديدة (${uiState.pendingPlayers.size})",
+                style = MaterialTheme.typography.titleMedium,
+                color = ChampionshipGold
+            )
+            Button(
+                onClick = { showAddPlayerDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.testTag("admin_add_player_button")
+            ) {
+                Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("إضافة لاعب مباشرة", style = MaterialTheme.typography.labelMedium)
+            }
+        }
 
         if (uiState.pendingPlayers.isEmpty()) {
             Card(
@@ -151,10 +176,23 @@ fun AdminPlayersTab(
         }
     }
 
+    if (showAddPlayerDialog) {
+        AdminAddPlayerDialog(
+            onDismiss = { showAddPlayerDialog = false },
+            onImportAvatar = onImportAvatar,
+            onAdd = { name, elysiumId, avatarUri, level, ovr, club, autoApprove ->
+                onAdminAddPlayer(name, elysiumId, avatarUri, level, ovr, club, autoApprove) {
+                    showAddPlayerDialog = false
+                }
+            }
+        )
+    }
+
     editingPlayer?.let { target ->
         EditPlayerDialog(
             player = target,
             onDismiss = { editingPlayer = null },
+            onImportAvatar = onImportAvatar,
             onSave = { updated ->
                 onUpdateDetails(updated)
                 editingPlayer = null
@@ -219,9 +257,113 @@ private fun AdminPlayerRow(
 }
 
 @Composable
+private fun AdminAddPlayerDialog(
+    onDismiss: () -> Unit,
+    onImportAvatar: (Uri, (String) -> Unit) -> Unit,
+    onAdd: (String, String, String?, PlayerLevel, Int, String, Boolean) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var elysiumId by remember { mutableStateOf("") }
+    var club by remember { mutableStateOf("") }
+    var level by remember { mutableStateOf(PlayerLevel.INTERMEDIATE) }
+    var ovr by remember { mutableStateOf(PlayerLevel.INTERMEDIATE.defaultOvr.toString()) }
+    var avatarUri by remember { mutableStateOf<String?>(null) }
+    var autoApprove by remember { mutableStateOf(true) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            onImportAvatar(uri) { savedUrl -> avatarUri = savedUrl }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MidnightSurface,
+        title = { Text("إضافة لاعب مباشرة للبطولة", color = ChampionshipGold) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    PlayerAvatar(avatarUri = avatarUri, playerName = name.ifBlank { "P" }, size = 50.dp)
+                    OutlinedButton(
+                        onClick = {
+                            photoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (avatarUri == null) "إضافة صورة" else "تغيير الصورة")
+                    }
+                    if (avatarUri != null) {
+                        IconButton(onClick = { avatarUri = null }) {
+                            Icon(Icons.Default.Close, contentDescription = "إزالة الصورة", tint = CrimsonLoss)
+                        }
+                    }
+                }
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("اسم اللاعب *") }, singleLine = true)
+                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("معرف ElysiumNet *") }, singleLine = true)
+                OutlinedTextField(value = club, onValueChange = { club = it }, label = { Text("النادي / الشخصية المفضلة") }, singleLine = true)
+                OutlinedTextField(
+                    value = ovr,
+                    onValueChange = { if (it.all { c -> c.isDigit() } && it.length <= 2) ovr = it },
+                    label = { Text("التقييم (60-99)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    PlayerLevel.entries.forEach { lvl ->
+                        FilterChip(
+                            selected = level == lvl,
+                            onClick = {
+                                level = lvl
+                                ovr = lvl.defaultOvr.toString()
+                            },
+                            label = { Text(lvl.labelAr, style = MaterialTheme.typography.labelSmall) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                PermissionToggleRow("اعتماد اللاعب مباشرة في البطولة", autoApprove) { autoApprove = it }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onAdd(
+                        name.trim(),
+                        elysiumId.trim(),
+                        avatarUri,
+                        level,
+                        (ovr.toIntOrNull() ?: level.defaultOvr).coerceIn(60, 99),
+                        club.trim(),
+                        autoApprove
+                    )
+                },
+                enabled = name.isNotBlank() && elysiumId.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt)
+            ) { Text("إضافة اللاعب") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
+    )
+}
+
+@Composable
 private fun EditPlayerDialog(
     player: PlayerEntity,
     onDismiss: () -> Unit,
+    onImportAvatar: (Uri, (String) -> Unit) -> Unit,
     onSave: (PlayerEntity) -> Unit
 ) {
     var name by remember(player.id) { mutableStateOf(player.name) }
@@ -229,6 +371,15 @@ private fun EditPlayerDialog(
     var club by remember(player.id) { mutableStateOf(player.clubName) }
     var level by remember(player.id) { mutableStateOf(player.level) }
     var ovr by remember(player.id) { mutableStateOf(player.ovrRating.toString()) }
+    var avatarUri by remember(player.id) { mutableStateOf(player.avatarUri) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            onImportAvatar(uri) { savedUrl -> avatarUri = savedUrl }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -239,6 +390,31 @@ private fun EditPlayerDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    PlayerAvatar(avatarUri = avatarUri, playerName = name.ifBlank { player.name }, size = 50.dp)
+                    OutlinedButton(
+                        onClick = {
+                            photoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (avatarUri == null) "إضافة صورة" else "تغيير الصورة")
+                    }
+                    if (avatarUri != null) {
+                        IconButton(onClick = { avatarUri = null }) {
+                            Icon(Icons.Default.Close, contentDescription = "إزالة الصورة", tint = CrimsonLoss)
+                        }
+                    }
+                }
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("الاسم") }, singleLine = true)
                 OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("معرف ElysiumNet") }, singleLine = true)
                 OutlinedTextField(value = club, onValueChange = { club = it }, label = { Text("النادي") }, singleLine = true)
@@ -271,6 +447,7 @@ private fun EditPlayerDialog(
                         player.copy(
                             name = name.trim(),
                             elysiumNetId = elysiumId.trim(),
+                            avatarUri = avatarUri,
                             clubName = club.trim(),
                             level = level,
                             ovrRating = (ovr.toIntOrNull() ?: level.defaultOvr).coerceIn(60, 99)

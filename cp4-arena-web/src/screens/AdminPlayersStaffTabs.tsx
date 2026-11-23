@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Check, Edit3, Plus, Trash2, Trophy, UserPlus, X } from 'lucide-react';
+import { Check, Edit3, ImagePlus, Plus, Trash2, Trophy, UserPlus, X } from 'lucide-react';
+import { uploadImageFileApi } from '../api';
 import { MatchResultsTable } from '../components/MatchResultsTable';
 import { PlayerAvatar } from '../components/PlayerAvatar';
 import {
@@ -12,22 +13,47 @@ import type { AdminAccount, ArenaState, Match, Player, PlayerLevel, PlayerStatus
 
 export function AdminPlayersTab({
   state,
+  onAdminAddPlayer,
   onStatusChange,
   onUpdateDetails,
   onDeletePlayer
 }: {
   state: ArenaState;
+  onAdminAddPlayer: (payload: {
+    name: string;
+    elysiumNetId: string;
+    avatarUrl: string | null;
+    level: PlayerLevel;
+    ovrRating: number;
+    clubName: string;
+    status: PlayerStatus;
+  }) => Promise<void>;
   onStatusChange: (id: number, status: PlayerStatus) => Promise<void>;
   onUpdateDetails: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onDeletePlayer: (id: number) => Promise<void>;
 }) {
   const [editing, setEditing] = useState<Player | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   return (
     <div className="stack-col">
-      <div style={{ fontWeight: 800, color: 'var(--championship-gold)' }}>
-        طلبات التسجيل الجديدة ({state.pendingPlayers.length})
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+        <div style={{ fontWeight: 800, color: 'var(--championship-gold)' }}>
+          طلبات التسجيل الجديدة ({state.pendingPlayers.length})
+        </div>
+        {state.tournament && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ padding: '7px 12px', fontSize: '0.82rem' }}
+            onClick={() => setShowAddModal(true)}
+          >
+            <UserPlus size={16} />
+            <span>إضافة لاعب مباشرة</span>
+          </button>
+        )}
       </div>
+
       {state.pendingPlayers.length === 0 ? (
         <div className="arena-card" style={{ color: 'var(--text-secondary)', fontSize: '0.86rem' }}>
           لا توجد طلبات بانتظار المراجعة حالياً.
@@ -73,6 +99,16 @@ export function AdminPlayersTab({
             />
           ))}
         </>
+      )}
+
+      {showAddModal && (
+        <AdminAddPlayerModal
+          onClose={() => setShowAddModal(false)}
+          onAdd={async (payload) => {
+            await onAdminAddPlayer(payload);
+            setShowAddModal(false);
+          }}
+        />
       )}
 
       {editing && (
@@ -135,6 +171,134 @@ function AdminPlayerRow({
   );
 }
 
+function AdminAddPlayerModal({
+  onClose,
+  onAdd
+}: {
+  onClose: () => void;
+  onAdd: (payload: {
+    name: string;
+    elysiumNetId: string;
+    avatarUrl: string | null;
+    level: PlayerLevel;
+    ovrRating: number;
+    clubName: string;
+    status: PlayerStatus;
+  }) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [elysiumId, setElysiumId] = useState('');
+  const [clubName, setClubName] = useState('');
+  const [level, setLevel] = useState<PlayerLevel>('INTERMEDIATE');
+  const [ovrRating, setOvrRating] = useState(String(LEVEL_LABELS.INTERMEDIATE.ovr));
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [autoApprove, setAutoApprove] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function handleFileChange(file: File | null) {
+    if (!file) return;
+    setErr('');
+    setUploading(true);
+    try {
+      const url = await uploadImageFileApi(file);
+      setAvatarUrl(url);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'تعذر رفع الصورة.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>إضافة لاعب مباشرة للبطولة</h3>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <PlayerAvatar avatarUrl={avatarUrl} name={name || 'P'} size={52} />
+          <label className="btn btn-outline" style={{ cursor: 'pointer', flex: 1 }}>
+            <ImagePlus size={17} />
+            <span>{uploading ? 'جاري الرفع...' : avatarUrl ? 'تغيير الصورة' : 'رفع صورة (اختياري)'}</span>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              style={{ display: 'none' }}
+              disabled={uploading}
+              onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+            />
+          </label>
+          {avatarUrl && (
+            <button type="button" className="icon-btn" onClick={() => setAvatarUrl(null)} title="إزالة الصورة">
+              <X size={16} />
+            </button>
+          )}
+        </div>
+
+        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="اسم اللاعب *" />
+        <input className="input" value={elysiumId} onChange={(e) => setElysiumId(e.target.value)} placeholder="معرف ElysiumNet *" />
+        <input className="input" value={clubName} onChange={(e) => setClubName(e.target.value)} placeholder="النادي / الشخصية المفضلة" />
+        <input className="input" type="number" min={60} max={99} value={ovrRating} onChange={(e) => setOvrRating(e.target.value)} placeholder="التقييم (60-99)" />
+
+        <div className="chip-row">
+          {(['BEGINNER', 'INTERMEDIATE', 'PRO', 'LEGEND'] as PlayerLevel[]).map((lvl) => (
+            <button
+              key={lvl}
+              type="button"
+              className={`chip ${level === lvl ? 'selected' : ''}`}
+              onClick={() => {
+                setLevel(lvl);
+                setOvrRating(String(LEVEL_LABELS[lvl].ovr));
+              }}
+            >
+              {LEVEL_LABELS[lvl].label}
+            </button>
+          ))}
+        </div>
+
+        <div className="arena-subcard" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.84rem', fontWeight: 700 }}>اعتماد اللاعب مباشرة في البطولة</span>
+          <button type="button" className={`switch-pill ${autoApprove ? 'on' : ''}`} onClick={() => setAutoApprove((v) => !v)}>
+            <span className="switch-knob" />
+          </button>
+        </div>
+
+        {err && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>}
+
+        <div className="grid-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={saving || uploading || !name.trim() || !elysiumId.trim()}
+            onClick={async () => {
+              setSaving(true);
+              try {
+                await onAdd({
+                  name: name.trim(),
+                  elysiumNetId: elysiumId.trim(),
+                  avatarUrl,
+                  level,
+                  ovrRating: Number(ovrRating) || LEVEL_LABELS[level].ovr,
+                  clubName: clubName.trim(),
+                  status: autoApprove ? 'APPROVED' : 'PENDING'
+                });
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? 'جاري الإضافة...' : 'إضافة اللاعب'}
+          </button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EditPlayerModal({
   player,
   onClose,
@@ -149,11 +313,47 @@ function EditPlayerModal({
   const [clubName, setClubName] = useState(player.clubName);
   const [level, setLevel] = useState<PlayerLevel>(player.level);
   const [ovrRating, setOvrRating] = useState(String(player.ovrRating));
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(player.avatarUrl ?? null);
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function handleFileChange(file: File | null) {
+    if (!file) return;
+    setErr('');
+    setUploading(true);
+    try {
+      const url = await uploadImageFileApi(file);
+      setAvatarUrl(url);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'تعذر رفع الصورة.');
+    } finally {
+      setUploading(false);
+    }
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>تعديل بيانات اللاعب</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <PlayerAvatar avatarUrl={avatarUrl} name={name || player.name} size={52} />
+          <label className="btn btn-outline" style={{ cursor: 'pointer', flex: 1 }}>
+            <ImagePlus size={17} />
+            <span>{uploading ? 'جاري الرفع...' : avatarUrl ? 'تغيير الصورة' : 'إضافة صورة'}</span>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              style={{ display: 'none' }}
+              disabled={uploading}
+              onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+            />
+          </label>
+          {avatarUrl && (
+            <button type="button" className="icon-btn" onClick={() => setAvatarUrl(null)} title="إزالة الصورة">
+              <X size={16} />
+            </button>
+          )}
+        </div>
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="الاسم" />
         <input className="input" value={elysiumId} onChange={(e) => setElysiumId(e.target.value)} placeholder="معرف ElysiumNet" />
         <input className="input" value={clubName} onChange={(e) => setClubName(e.target.value)} placeholder="النادي / الفريق" />
@@ -173,11 +373,13 @@ function EditPlayerModal({
             </button>
           ))}
         </div>
+        {err && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>}
         <div className="grid-2">
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => onSave({ name, elysiumNetId: elysiumId, clubName, level, ovrRating: Number(ovrRating) || 81 })}
+            disabled={uploading || !name.trim() || !elysiumId.trim()}
+            onClick={() => onSave({ name, elysiumNetId: elysiumId, clubName, level, ovrRating: Number(ovrRating) || 81, avatarUrl })}
           >
             حفظ
           </button>

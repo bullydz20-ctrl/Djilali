@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Dices, LogOut, Settings, Shield, Trophy, UserCog, Users } from 'lucide-react';
+import { Dices, KeyRound, LogOut, Settings, Shield, Trophy, UserCog, Users } from 'lucide-react';
 import { EmptyStatePanel } from '../components/PlayerAvatar';
-import { adminHasPermission } from '../types';
-import type { ArenaState, Match, PlayerStatus } from '../types';
+import { adminHasPermission, evaluatePinStrengthClient } from '../types';
+import type { ArenaState, Match, PlayerLevel, PlayerStatus } from '../types';
 import { AdminAuthGate } from './AdminAuthGate';
 import { AdminChampionTab, AdminMatchesTab, AdminPlayersTab, AdminSubAdminsTab } from './AdminPlayersStaffTabs';
 import { AdminDrawTab, AdminTournamentSettingsTab } from './AdminTournamentDrawTabs';
@@ -17,6 +17,7 @@ export function AdminScreen({
   onSaveTournament,
   onCreateFreshTournament,
   onDeleteTournament,
+  onAdminAddPlayer,
   onUpdatePlayerStatus,
   onUpdatePlayerDetails,
   onDeletePlayer,
@@ -24,6 +25,7 @@ export function AdminScreen({
   onGenerateKnockout,
   onEditMatch,
   onQuickUpdateGoals,
+  onUpdateOwnProfile,
   onChangeOwnPin,
   onCreateSubAdmin,
   onUpdateSubAdmin,
@@ -38,6 +40,15 @@ export function AdminScreen({
   onSaveTournament: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onCreateFreshTournament: (payload: Record<string, unknown>) => Promise<void>;
   onDeleteTournament: (id: number) => Promise<void>;
+  onAdminAddPlayer: (payload: {
+    name: string;
+    elysiumNetId: string;
+    avatarUrl: string | null;
+    level: PlayerLevel;
+    ovrRating: number;
+    clubName: string;
+    status: PlayerStatus;
+  }) => Promise<void>;
   onUpdatePlayerStatus: (id: number, status: PlayerStatus) => Promise<void>;
   onUpdatePlayerDetails: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onDeletePlayer: (id: number) => Promise<void>;
@@ -45,6 +56,7 @@ export function AdminScreen({
   onGenerateKnockout: () => Promise<void>;
   onEditMatch: (m: Match) => void;
   onQuickUpdateGoals: (m: Match, g1: number, g2: number) => void;
+  onUpdateOwnProfile: (payload: { displayName: string; username?: string }) => Promise<void>;
   onChangeOwnPin: (currentPin: string, newPin: string) => Promise<void>;
   onCreateSubAdmin: (payload: {
     username: string;
@@ -74,6 +86,7 @@ export function AdminScreen({
   onOpenExportShare: () => void;
 }) {
   const admin = state.currentAdmin;
+  const [showOwnAccountModal, setShowOwnAccountModal] = useState(false);
 
   const allowedSections: Array<{ key: SectionKey; label: string; icon: React.ReactNode }> = [];
   if (admin) {
@@ -123,16 +136,30 @@ export function AdminScreen({
 
   return (
     <div className="stack-col">
-      <div className="arena-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px' }}>
-        <div>
-          <div style={{ fontWeight: 800, color: 'var(--championship-gold)' }}>لوحة تحكم: {admin.displayName}</div>
+      <div className="arena-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '12px 16px' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 800, color: 'var(--championship-gold)' }}>
+            لوحة تحكم: {admin.displayName} <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>(@{admin.username})</span>
+          </div>
           <div style={{ fontSize: '0.76rem', color: 'var(--cyber-sky)' }}>
             {admin.role === 'HEAD_ADMIN' ? 'المشرف الرئيسي' : 'مشرف مساعد'} • جلسة آمنة نشطة
           </div>
         </div>
-        <button type="button" className="icon-btn" onClick={onLogout} title="تسجيل الخروج" style={{ color: 'var(--crimson-loss)' }}>
-          <LogOut size={18} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <button
+            type="button"
+            className="btn btn-outline"
+            style={{ padding: '7px 11px', fontSize: '0.8rem' }}
+            onClick={() => setShowOwnAccountModal(true)}
+            title="حسابي والأمان"
+          >
+            <KeyRound size={15} />
+            <span>حسابي</span>
+          </button>
+          <button type="button" className="icon-btn" onClick={onLogout} title="تسجيل الخروج" style={{ color: 'var(--crimson-loss)' }}>
+            <LogOut size={18} />
+          </button>
+        </div>
       </div>
 
       {allowedSections.length === 0 ? (
@@ -169,6 +196,7 @@ export function AdminScreen({
             {selected === 'PLAYERS' && (
               <AdminPlayersTab
                 state={state}
+                onAdminAddPlayer={onAdminAddPlayer}
                 onStatusChange={onUpdatePlayerStatus}
                 onUpdateDetails={onUpdatePlayerDetails}
                 onDeletePlayer={onDeletePlayer}
@@ -221,6 +249,158 @@ export function AdminScreen({
           </div>
         </>
       )}
+
+      {showOwnAccountModal && (
+        <AdminOwnAccountModal
+          username={admin.username}
+          displayName={admin.displayName}
+          roleLabel={admin.role === 'HEAD_ADMIN' ? 'المشرف الرئيسي' : 'مشرف مساعد'}
+          onClose={() => setShowOwnAccountModal(false)}
+          onSaveProfile={async (payload) => {
+            await onUpdateOwnProfile(payload);
+            setShowOwnAccountModal(false);
+          }}
+          onChangePin={async (curr, next) => {
+            await onChangeOwnPin(curr, next);
+            setShowOwnAccountModal(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AdminOwnAccountModal({
+  username: initialUsername,
+  displayName: initialDisplayName,
+  roleLabel,
+  onClose,
+  onSaveProfile,
+  onChangePin
+}: {
+  username: string;
+  displayName: string;
+  roleLabel: string;
+  onClose: () => void;
+  onSaveProfile: (payload: { displayName: string; username?: string }) => Promise<void>;
+  onChangePin: (currentPin: string, newPin: string) => Promise<void>;
+}) {
+  const [displayName, setDisplayName] = useState(initialDisplayName);
+  const [username, setUsername] = useState(initialUsername);
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [busyProfile, setBusyProfile] = useState(false);
+  const [busyPin, setBusyPin] = useState(false);
+
+  const strength = evaluatePinStrengthClient(newPin);
+  const profileValid = displayName.trim().length >= 1 && username.trim().length >= 3;
+  const pinValid = /^\d{6}$/.test(currentPin) && /^\d{6}$/.test(newPin) && newPin === confirmPin;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
+        <div>
+          <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>إدارة حساب المشرف والأمان</h3>
+          <div style={{ fontSize: '0.78rem', color: 'var(--cyber-sky)', marginTop: 3 }}>
+            الصلاحية: {roleLabel}
+          </div>
+        </div>
+
+        <div className="arena-subcard stack-col" style={{ gap: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--championship-gold)' }}>
+            بيانات الحساب التعريفية
+          </div>
+          <div className="field-group">
+            <label className="field-label">الاسم الظاهر</label>
+            <input
+              className="input"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="الاسم الظاهر في اللوحة"
+            />
+          </div>
+          <div className="field-group">
+            <label className="field-label">اسم المستخدم للدخول</label>
+            <input
+              className="input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="اسم المستخدم (3 أحرف على الأقل)"
+            />
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!profileValid || busyProfile}
+            onClick={async () => {
+              setBusyProfile(true);
+              try {
+                await onSaveProfile({ displayName: displayName.trim(), username: username.trim() });
+              } finally {
+                setBusyProfile(false);
+              }
+            }}
+          >
+            {busyProfile ? 'جاري الحفظ...' : 'حفظ الاسم واسم المستخدم'}
+          </button>
+        </div>
+
+        <div className="arena-subcard stack-col" style={{ gap: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--cyber-sky)' }}>
+            تغيير رمز الأمان (PIN)
+          </div>
+          <input
+            className="input score-num"
+            type="password"
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="رمز PIN الحالي (6 أرقام)"
+            value={currentPin}
+            onChange={(e) => setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          />
+          <input
+            className="input score-num"
+            type="password"
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="رمز PIN الجديد (6 أرقام)"
+            value={newPin}
+            onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          />
+          {newPin && (
+            <div style={{ fontSize: '0.76rem', color: 'var(--cyber-sky)' }}>قوة الرمز: {strength.label}</div>
+          )}
+          <input
+            className="input score-num"
+            type="password"
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="تأكيد رمز PIN الجديد"
+            value={confirmPin}
+            onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          />
+          <button
+            type="button"
+            className="btn btn-outline"
+            disabled={!pinValid || busyPin}
+            onClick={async () => {
+              setBusyPin(true);
+              try {
+                await onChangePin(currentPin, newPin);
+              } finally {
+                setBusyPin(false);
+              }
+            }}
+          >
+            {busyPin ? 'جاري التحديث...' : 'تحديث رمز PIN وإنهاء الجلسات الأخرى'}
+          </button>
+        </div>
+
+        <button type="button" className="btn btn-outline" onClick={onClose}>
+          إغلاق
+        </button>
+      </div>
     </div>
   );
 }

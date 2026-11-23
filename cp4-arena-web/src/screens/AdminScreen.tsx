@@ -1,5 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Dices, KeyRound, LogOut, Settings, Shield, Trophy, UserCog, Users } from 'lucide-react';
+import {
+  AlertTriangle,
+  Cloud,
+  Dices,
+  Download,
+  HardDrive,
+  KeyRound,
+  LogOut,
+  Settings,
+  Shield,
+  Trophy,
+  Upload,
+  UserCog,
+  Users
+} from 'lucide-react';
 import { EmptyStatePanel } from '../components/PlayerAvatar';
 import { adminHasPermission, evaluatePinStrengthClient } from '../types';
 import type { ArenaState, Match, PlayerLevel, PlayerStatus } from '../types';
@@ -31,7 +45,9 @@ export function AdminScreen({
   onUpdateSubAdmin,
   onDeleteSubAdmin,
   onCrownChampion,
-  onOpenExportShare
+  onOpenExportShare,
+  onDownloadBackup,
+  onRestoreBackup
 }: {
   state: ArenaState;
   onSetupHead: (p: { username: string; displayName: string; pin: string; keepSignedIn: boolean }) => Promise<void>;
@@ -84,9 +100,13 @@ export function AdminScreen({
   onDeleteSubAdmin: (id: number) => Promise<void>;
   onCrownChampion: (playerId: number | null) => Promise<void>;
   onOpenExportShare: () => void;
+  onDownloadBackup: () => Promise<void>;
+  onRestoreBackup: (backupData: unknown) => Promise<void>;
 }) {
   const admin = state.currentAdmin;
   const [showOwnAccountModal, setShowOwnAccountModal] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupError, setBackupError] = useState('');
 
   const allowedSections: Array<{ key: SectionKey; label: string; icon: React.ReactNode }> = [];
   if (admin) {
@@ -162,6 +182,105 @@ export function AdminScreen({
           </button>
         </div>
       </div>
+
+      {admin.role === 'HEAD_ADMIN' && state.persistence && (
+        <div
+          className={`arena-card stack-col ${state.persistence.mode === 'ephemeral' ? 'arena-card-gold' : ''}`}
+          style={{
+            gap: 8,
+            padding: '12px 16px',
+            borderColor:
+              state.persistence.mode === 'ephemeral'
+                ? 'rgba(245, 158, 11, 0.7)'
+                : state.persistence.mode === 'postgres'
+                  ? 'rgba(16, 185, 129, 0.55)'
+                  : 'rgba(56, 189, 248, 0.45)'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              {state.persistence.mode === 'ephemeral' ? (
+                <AlertTriangle size={18} color="var(--championship-gold)" />
+              ) : state.persistence.mode === 'postgres' ? (
+                <Cloud size={18} color="var(--emerald-win)" />
+              ) : (
+                <HardDrive size={18} color="var(--cyber-sky)" />
+              )}
+              <span
+                style={{
+                  fontWeight: 800,
+                  fontSize: '0.86rem',
+                  color:
+                    state.persistence.mode === 'ephemeral'
+                      ? 'var(--championship-gold)'
+                      : state.persistence.mode === 'postgres'
+                        ? 'var(--emerald-win)'
+                        : 'var(--cyber-sky)'
+                }}
+              >
+                {state.persistence.labelAr}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ padding: '6px 10px', fontSize: '0.78rem' }}
+                disabled={backupBusy}
+                onClick={async () => {
+                  setBackupError('');
+                  setBackupBusy(true);
+                  try {
+                    await onDownloadBackup();
+                  } catch (err) {
+                    setBackupError(err instanceof Error ? err.message : 'تعذر تصدير النسخة الاحتياطية.');
+                  } finally {
+                    setBackupBusy(false);
+                  }
+                }}
+              >
+                <Download size={14} />
+                <span>تصدير نسخة (JSON)</span>
+              </button>
+              <label
+                className="btn btn-outline"
+                style={{ padding: '6px 10px', fontSize: '0.78rem', cursor: backupBusy ? 'wait' : 'pointer' }}
+              >
+                <Upload size={14} />
+                <span>{backupBusy ? 'جاري الاستعادة...' : 'استعادة نسخة'}</span>
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  style={{ display: 'none' }}
+                  disabled={backupBusy}
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!file) return;
+                    setBackupError('');
+                    setBackupBusy(true);
+                    try {
+                      const text = await file.text();
+                      const parsed = JSON.parse(text);
+                      await onRestoreBackup(parsed);
+                    } catch (err) {
+                      setBackupError(err instanceof Error ? err.message : 'ملف النسخة الاحتياطية غير صالح.');
+                    } finally {
+                      setBackupBusy(false);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+          <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+            {state.persistence.detailAr}
+          </div>
+          {backupError && (
+            <div style={{ fontSize: '0.76rem', color: 'var(--crimson-loss)', fontWeight: 700 }}>{backupError}</div>
+          )}
+        </div>
+      )}
 
       {allowedSections.length === 0 ? (
         <EmptyStatePanel

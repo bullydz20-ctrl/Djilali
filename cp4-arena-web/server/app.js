@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
+import { createCloudStore, getPersistenceDiagnostics } from './cloudStore.js';
 import { openDatabase } from './db.js';
+import { createMediaStore } from './mediaStore.js';
 import { ArenaService } from './service.js';
 
 function getBearerToken(req) {
@@ -44,10 +46,46 @@ function parseValidatedImageDataUrl(dataUrl) {
   return { ext, buffer };
 }
 
-export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
-  const db = openDatabase(dbPath);
-  const resolvedUploadsDir = path.resolve(uploadsDir || path.resolve(process.cwd(), 'data', 'uploads'));
-  fs.mkdirSync(resolvedUploadsDir, { recursive: true });
+function resolveEffectiveDbPath(dbPath) {
+  return (
+    dbPath ||
+    (process.env.CP4_DB_PATH && process.env.CP4_DB_PATH.trim()) ||
+    path.resolve(process.cwd(), 'data', 'cp4_arena.db')
+  );
+}
+
+export async function createArenaAppAsync({ dbPath, uploadsDir, distDir, cloudStore = null, cloudAdapter = null } = {}) {
+  const resolvedDbPath = resolveEffectiveDbPath(dbPath);
+  const activeCloudStore = cloudStore || createCloudStore({ adapter: cloudAdapter });
+  if (activeCloudStore.isEnabled()) {
+    await activeCloudStore.initAndHydrate(resolvedDbPath);
+  }
+  const bundle = createArenaApp({
+    dbPath: resolvedDbPath,
+    uploadsDir,
+    distDir,
+    cloudStore: activeCloudStore
+  });
+  if (activeCloudStore.isEnabled()) {
+    await activeCloudStore.syncDatabaseNow(bundle.db, resolvedDbPath);
+  }
+  return bundle;
+}
+
+export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null } = {}) {
+  const resolvedDbPath = resolveEffectiveDbPath(dbPath);
+  const db = openDatabase(resolvedDbPath);
+  const mediaStore = createMediaStore({
+    dbPath: resolvedDbPath,
+    uploadsDir: uploadsDir || path.resolve(process.cwd(), 'data', 'uploads'),
+    cloudStore
+  });
+
+  async function syncCloud(force = false) {
+    if (cloudStore?.isEnabled?.()) {
+      await cloudStore.syncDatabaseNow(db, resolvedDbPath, { force });
+    }
+  }
 
   const sseClients = new Set();
   const service = new ArenaService(db, (event) => {
@@ -73,12 +111,18 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
     }
     next();
   });
-  app.use(express.json({ limit: '4.5mb' }));
+  app.use((req, res, next) => {
+    if (req.path === '/api/admin/restore') {
+      return express.json({ limit: '25mb' })(req, res, next);
+    }
+    return express.json({ limit: '4.5mb' })(req, res, next);
+  });
 
   app.get('/api/health', (_req, res) => {
     try {
       db.prepare('SELECT 1 AS ok').get();
-      res.json({ ok: true, service: 'cp4-arena-api', ts: Date.now() });
+      const persistence = getPersistenceDiagnostics({ dbPath: resolvedDbPath, cloudStore });
+      res.json({ ok: true, service: 'cp4-arena-api', ts: Date.now(), persistence });
     } catch {
       res.status(503).json({ ok: false, service: 'cp4-arena-api', ts: Date.now() });
     }
@@ -112,7 +156,8 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
         ? req.query.username.trim()
         : null;
     const state = service.getPublicState(tournamentId, getBearerToken(req), getClientKey(req), requestedUsername);
-    res.json(state);
+    const persistence = getPersistenceDiagnostics({ dbPath: resolvedDbPath, cloudStore });
+    res.json({ ...state, persistence });
   });
 
   app.get('/api/tournaments/:id/export', (req, res) => {
@@ -121,64 +166,92 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
     res.json(out);
   });
 
-  // Safe image upload for player avatars & tournament banners
-  app.post('/api/uploads/image', (req, res) => {
-    const parsed = parseValidatedImageDataUrl(req.body?.dataUrl);
-    if (!parsed) {
-      return res.status(400).json({ error: 'صيغة الصورة غير مدعومة أو حجمها يتجاوز 3 ميجابايت.' });
+  // Safe image upload for player avatars & tournament banners (disk + media DB + optional cloud)
+  app.post('/api/uploads/image', async (req, res) => {
+    try {
+      const parsed = parseValidatedImageDataUrl(req.body?.dataUrl);
+      if (!parsed) {
+        return res.status(400).json({ error: 'صيغة الصورة غير مدعومة أو حجمها يتجاوز 3 ميجابايت.' });
+      }
+      const filename = `${crypto.randomUUID()}.${parsed.ext}`;
+      const saved = await mediaStore.saveImage({ filename, ext: parsed.ext, buffer: parsed.buffer });
+      res.status(201).json({ url: saved.url });
+    } catch {
+      res.status(500).json({ error: 'تعذر حفظ الصورة على الخادم.' });
     }
-    const filename = `${crypto.randomUUID()}.${parsed.ext}`;
-    const targetPath = path.resolve(resolvedUploadsDir, filename);
-    if (!targetPath.startsWith(resolvedUploadsDir + path.sep)) {
-      return res.status(400).json({ error: 'مسار غير صالح.' });
-    }
-    fs.writeFileSync(targetPath, parsed.buffer);
-    res.status(201).json({ url: `/uploads/${filename}` });
   });
 
-  app.get('/uploads/:file', (req, res) => {
+  app.get('/uploads/:file', async (req, res) => {
     const name = String(req.params.file || '');
     if (!/^[a-zA-Z0-9_-]+\.(png|jpg|webp)$/.test(name)) {
       return res.status(400).end();
     }
-    const targetPath = path.resolve(resolvedUploadsDir, name);
-    if (!targetPath.startsWith(resolvedUploadsDir + path.sep) || !fs.existsSync(targetPath)) {
-      return res.status(404).end();
+    try {
+      const img = await mediaStore.getImage(name);
+      if (!img) {
+        return res.status(404).end();
+      }
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Content-Type', img.mimeType);
+      res.send(img.buffer);
+    } catch {
+      res.status(500).end();
     }
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    res.sendFile(targetPath);
+  });
+
+  // Head Admin portable JSON Backup & Restore
+  app.get('/api/admin/backup', (req, res) => {
+    const mediaItems = mediaStore.exportAllMedia();
+    const out = service.exportBackup(getBearerToken(req), mediaItems);
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    const stamp = new Date(out.backup.exportedAt).toISOString().slice(0, 10);
+    res.setHeader('Content-Disposition', `attachment; filename="cp4-arena-backup-${stamp}.json"`);
+    res.json(out.backup);
+  });
+
+  app.post('/api/admin/restore', async (req, res) => {
+    const backupObj = req.body?.backup && typeof req.body.backup === 'object' ? req.body.backup : req.body;
+    const out = service.restoreBackup(getBearerToken(req), backupObj);
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    const restoredMedia = await mediaStore.restoreAllMedia(backupObj?.mediaFiles || []);
+    await syncCloud(true);
+    res.status(out.status).json({ ...out, restoredMedia });
   });
 
   // Public player registration
-  app.post('/api/players/register', (req, res) => {
+  app.post('/api/players/register', async (req, res) => {
     const out = service.registerPlayer(req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
   // Public/shared match reminders
-  app.post('/api/reminders', (req, res) => {
+  app.post('/api/reminders', async (req, res) => {
     const out = service.scheduleReminder(req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.delete('/api/reminders/:matchId', (req, res) => {
+  app.delete('/api/reminders/:matchId', async (req, res) => {
     const out = service.cancelReminder(Number(req.params.matchId));
+    if (out.ok) await syncCloud();
     res.status(out.status).json(out);
   });
 
   // Admin auth routes
-  app.post('/api/admin/setup-head', (req, res) => {
+  app.post('/api/admin/setup-head', async (req, res) => {
     const out = service.setupHeadAdmin({
       ...(req.body || {}),
       clientKey: getClientKey(req)
     });
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.post('/api/admin/login', (req, res) => {
+  app.post('/api/admin/login', async (req, res) => {
     const out = service.loginAdmin({
       ...(req.body || {}),
       clientKey: getClientKey(req)
@@ -186,116 +259,135 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
     if (!out.ok) {
       return res.status(out.status).json({ error: out.error, lockoutState: out.lockoutState });
     }
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.post('/api/admin/logout', (req, res) => {
+  app.post('/api/admin/logout', async (req, res) => {
     const out = service.logoutAdmin(getBearerToken(req));
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.post('/api/admin/change-pin', (req, res) => {
+  app.post('/api/admin/change-pin', async (req, res) => {
     const out = service.changeOwnPin(getBearerToken(req), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.patch('/api/admin/profile', (req, res) => {
+  app.patch('/api/admin/profile', async (req, res) => {
     const out = service.updateOwnProfile(getBearerToken(req), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.post('/api/admin/sub-admins', (req, res) => {
+  app.post('/api/admin/sub-admins', async (req, res) => {
     const out = service.createSubAdmin(getBearerToken(req), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.patch('/api/admin/sub-admins/:id', (req, res) => {
+  app.patch('/api/admin/sub-admins/:id', async (req, res) => {
     const out = service.updateSubAdmin(getBearerToken(req), Number(req.params.id), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.delete('/api/admin/sub-admins/:id', (req, res) => {
+  app.delete('/api/admin/sub-admins/:id', async (req, res) => {
     const out = service.deleteSubAdmin(getBearerToken(req), Number(req.params.id));
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
   // Protected tournament management
-  app.post('/api/tournaments', (req, res) => {
+  app.post('/api/tournaments', async (req, res) => {
     const out = service.createTournament(getBearerToken(req), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.put('/api/tournaments/:id', (req, res) => {
+  app.put('/api/tournaments/:id', async (req, res) => {
     const out = service.updateTournament(getBearerToken(req), Number(req.params.id), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.delete('/api/tournaments/:id', (req, res) => {
+  app.delete('/api/tournaments/:id', async (req, res) => {
     const out = service.deleteTournament(getBearerToken(req), Number(req.params.id));
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
   // Protected player management
-  app.post('/api/tournaments/:id/players', (req, res) => {
+  app.post('/api/tournaments/:id/players', async (req, res) => {
     const out = service.adminAddPlayer(getBearerToken(req), Number(req.params.id), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.patch('/api/players/:id/status', (req, res) => {
+  app.patch('/api/players/:id/status', async (req, res) => {
     const out = service.updatePlayerStatus(getBearerToken(req), Number(req.params.id), req.body?.status);
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.patch('/api/players/:id', (req, res) => {
+  app.patch('/api/players/:id', async (req, res) => {
     const out = service.updatePlayerDetails(getBearerToken(req), Number(req.params.id), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.delete('/api/players/:id', (req, res) => {
+  app.delete('/api/players/:id', async (req, res) => {
     const out = service.deletePlayer(getBearerToken(req), Number(req.params.id));
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
   // Protected draw & knockout progression
-  app.post('/api/tournaments/:id/draw', (req, res) => {
+  app.post('/api/tournaments/:id/draw', async (req, res) => {
     const out = service.runDraw(getBearerToken(req), Number(req.params.id), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.post('/api/tournaments/:id/knockout-from-standings', (req, res) => {
+  app.post('/api/tournaments/:id/knockout-from-standings', async (req, res) => {
     const out = service.generateKnockoutFromStandings(getBearerToken(req), Number(req.params.id));
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.patch('/api/matches/:id/score', (req, res) => {
+  app.patch('/api/matches/:id/score', async (req, res) => {
     const out = service.updateMatchScore(getBearerToken(req), Number(req.params.id), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.patch('/api/matches/:id/winner', (req, res) => {
+  app.patch('/api/matches/:id/winner', async (req, res) => {
     const out = service.updateKnockoutMatchWinner(getBearerToken(req), Number(req.params.id), req.body?.winnerPlayerId ?? null);
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
-  app.post('/api/tournaments/:id/champion', (req, res) => {
+  app.post('/api/tournaments/:id/champion', async (req, res) => {
     const out = service.crownChampion(getBearerToken(req), Number(req.params.id), req.body?.playerId ?? null);
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
     res.status(out.status).json(out);
   });
 
@@ -312,5 +404,23 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
     });
   }
 
-  return { app, db, service };
+  async function shutdownResources() {
+    try {
+      await cloudStore?.flushAndClose?.(db, resolvedDbPath);
+    } catch {
+      // ignore cloud close errors on exit
+    }
+    try {
+      mediaStore.close();
+    } catch {
+      // ignore close errors
+    }
+    try {
+      db.close();
+    } catch {
+      // ignore close errors
+    }
+  }
+
+  return { app, db, service, mediaStore, cloudStore, shutdownResources };
 }

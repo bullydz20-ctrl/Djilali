@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.example.data.local.PlayerEntity
 import com.example.data.model.PlayerLevel
 import com.example.ui.components.EmptyStatePanel
 import com.example.ui.components.FifaPlayerCard
@@ -68,6 +69,7 @@ import com.example.ui.viewmodel.TournamentUiState
 fun PlayersScreen(
     uiState: TournamentUiState,
     onOpenRegister: () -> Unit,
+    onPlayerClick: (PlayerEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -201,7 +203,8 @@ fun PlayersScreen(
                         player = player,
                         stats = statsById[player.id],
                         scoreUnitLabel = scoreUnit,
-                        isChampion = uiState.championPlayer?.id == player.id
+                        isChampion = uiState.championPlayer?.id == player.id,
+                        onClick = { onPlayerClick(player) }
                     )
                 }
             }

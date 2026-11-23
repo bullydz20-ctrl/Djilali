@@ -34,6 +34,7 @@ data class TournamentEntity(
     val matchDurationMinutes: Int = 12,
     val targetGoalsRule: String = "المباراة الكاملة (6 دقائق لكل شوط)",
     val isRegistrationClosedManual: Boolean = false,
+    val isThirdPlaceEnabled: Boolean = false,
     val status: TournamentStatus = TournamentStatus.REGISTRATION_OPEN,
     val championPlayerId: Long? = null,
     val createdAt: Long = System.currentTimeMillis()
@@ -131,7 +132,17 @@ data class MatchEntity(
     val nextMatchId: Long? = null,
     val nextMatchSlot: Int = 1,
     val scheduledLabel: String = "",
-    val scheduledAtMillis: Long? = null
+    val scheduledAtMillis: Long? = null,
+    val p1CheckedIn: Boolean = false,
+    val p2CheckedIn: Boolean = false,
+    val isWalkover: Boolean = false,
+    val walkoverReason: String = "",
+    val disputeNote: String = "",
+    val disputeScreenshotUrl: String? = null,
+    val disputeSubmittedBy: String = "",
+    val disputeStatus: String = "NONE",
+    val votesP1: Int = 0,
+    val votesP2: Int = 0
 )
 
 @Entity(

@@ -32,7 +32,7 @@ export function BracketScreen({
   }
 
   const byStage = new Map<MatchStage, Match[]>();
-  for (const st of KNOCKOUT_STAGES) {
+  for (const st of [...KNOCKOUT_STAGES, 'THIRD_PLACE' as MatchStage]) {
     const list = state.knockoutMatches
       .filter((m) => m.stage === st)
       .sort((a, b) => a.bracketIndex - b.bracketIndex);
@@ -40,6 +40,7 @@ export function BracketScreen({
   }
 
   const presentStages = KNOCKOUT_STAGES.filter((st) => byStage.has(st));
+  const thirdPlaceMatch = byStage.get('THIRD_PLACE')?.[0] ?? null;
   const finalMatch = byStage.get('FINAL')?.[0] ?? null;
   const resolvedChampion =
     state.championPlayer ?? (finalMatch?.winnerId ? playersById.get(finalMatch.winnerId) || null : null);
@@ -71,6 +72,15 @@ export function BracketScreen({
             </button>
           );
         })}
+        {thirdPlaceMatch && (
+          <button
+            type="button"
+            className={`chip ${selectedStage === 'THIRD_PLACE' ? 'selected' : ''}`}
+            onClick={() => setSelectedStage('THIRD_PLACE')}
+          >
+            المركز الثالث ({thirdPlaceMatch.isCompleted ? '1/1' : '0/1'})
+          </button>
+        )}
       </div>
 
       {selectedStage === null ? (
@@ -234,6 +244,27 @@ export function BracketScreen({
               onTap={() => setWinnerDialogMatch(m)}
             />
           ))}
+        </div>
+      )}
+
+      {selectedStage === null && thirdPlaceMatch && (
+        <div className="arena-card stack-col" style={{ gap: 10, borderColor: 'rgba(56,189,248,0.45)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontWeight: 800, color: 'var(--cyber-sky)', fontSize: '0.95rem' }}>
+              مباراة تحديد المركز الثالث والرابع 🥉
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              {thirdPlaceMatch.isCompleted ? 'حُسم المركز الثالث' : 'خاسرا نصف النهائي'}
+            </span>
+          </div>
+          <BracketMatchCard
+            match={thirdPlaceMatch}
+            player1={thirdPlaceMatch.player1Id ? playersById.get(thirdPlaceMatch.player1Id) || null : null}
+            player2={thirdPlaceMatch.player2Id ? playersById.get(thirdPlaceMatch.player2Id) || null : null}
+            isFinal={false}
+            canEdit={canEdit}
+            onTap={() => setWinnerDialogMatch(thirdPlaceMatch)}
+          />
         </div>
       )}
 

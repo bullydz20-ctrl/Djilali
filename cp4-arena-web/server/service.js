@@ -1968,4 +1968,270 @@ export class ArenaService {
     this.emitChange('reminder_updated');
     return { ok: true, status: 200, messageAr: 'تم إلغاء التنبيه المجدول للمباراة.' };
   }
+
+  exportBackup(rawToken, mediaItems = []) {
+    const auth = this.requirePermission(rawToken, null);
+    if (!auth.ok) return auth;
+    if (auth.session.rawAdmin.role !== AdminRole.HEAD_ADMIN) {
+      return { ok: false, status: 403, error: 'المشرف الرئيسي فقط يمتلك صلاحية تصدير النسخة الاحتياطية الكاملة.' };
+    }
+
+    const tournaments = this.db.prepare('SELECT * FROM tournaments ORDER BY id ASC').all();
+    const tournamentGroups = this.db.prepare('SELECT * FROM tournament_groups ORDER BY id ASC').all();
+    const players = this.db.prepare('SELECT * FROM players ORDER BY id ASC').all();
+    const matches = this.db.prepare('SELECT * FROM matches ORDER BY id ASC').all();
+    const matchReminders = this.db.prepare('SELECT * FROM match_reminders ORDER BY id ASC').all();
+    const adminAccounts = this.db.prepare('SELECT * FROM admin_accounts ORDER BY id ASC').all();
+    const revokedAdmins = this.db.prepare('SELECT * FROM revoked_admins ORDER BY revoked_at ASC').all();
+    const appMeta = this.db
+      .prepare("SELECT key, value FROM app_meta WHERE key != 'server_session_secret' ORDER BY key ASC")
+      .all();
+
+    return {
+      ok: true,
+      status: 200,
+      backup: {
+        schemaVersion: 1,
+        app: 'CP4_ARENA',
+        exportedAt: Date.now(),
+        tournaments,
+        tournamentGroups,
+        players,
+        matches,
+        matchReminders,
+        adminAccounts,
+        revokedAdmins,
+        appMeta,
+        mediaFiles: Array.isArray(mediaItems) ? mediaItems : []
+      }
+    };
+  }
+
+  restoreBackup(rawToken, rawPayload = {}) {
+    const auth = this.requirePermission(rawToken, null);
+    if (!auth.ok) return auth;
+    if (auth.session.rawAdmin.role !== AdminRole.HEAD_ADMIN) {
+      return { ok: false, status: 403, error: 'المشرف الرئيسي فقط يمتلك صلاحية استعادة النسخة الاحتياطية.' };
+    }
+
+    const backup = rawPayload?.backup && typeof rawPayload.backup === 'object' ? rawPayload.backup : rawPayload;
+    if (
+      !backup ||
+      typeof backup !== 'object' ||
+      !Array.isArray(backup.tournaments) ||
+      !Array.isArray(backup.players) ||
+      !Array.isArray(backup.matches)
+    ) {
+      return { ok: false, status: 400, error: 'ملف النسخة الاحتياطية غير صالح أو تالف.' };
+    }
+
+    const tournamentGroups = Array.isArray(backup.tournamentGroups) ? backup.tournamentGroups : [];
+    const matchReminders = Array.isArray(backup.matchReminders) ? backup.matchReminders : [];
+    const adminAccounts = Array.isArray(backup.adminAccounts) ? backup.adminAccounts : [];
+    const revokedAdmins = Array.isArray(backup.revokedAdmins) ? backup.revokedAdmins : [];
+    const appMeta = Array.isArray(backup.appMeta) ? backup.appMeta : [];
+
+    this.withTx(() => {
+      this.db.prepare('DELETE FROM match_reminders').run();
+      this.db.prepare('DELETE FROM matches').run();
+      this.db.prepare('DELETE FROM players').run();
+      this.db.prepare('DELETE FROM tournament_groups').run();
+      this.db.prepare('DELETE FROM tournaments').run();
+      this.db.prepare('DELETE FROM revoked_tokens').run();
+      this.db.prepare('DELETE FROM revoked_admins').run();
+      this.db.prepare('DELETE FROM auth_lockout').run();
+      this.db.prepare("DELETE FROM app_meta WHERE key != 'server_session_secret'").run();
+
+      const insertTournament = this.db.prepare(`
+        INSERT INTO tournaments (
+          id, name, game_title, game_category, score_unit_label, description,
+          banner_url, start_date_time, max_participants, format, group_count,
+          qualifiers_per_group, draw_mode, knockout_tie_rule, match_duration_minutes,
+          target_goals_rule, is_registration_closed_manual, status, champion_player_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const t of backup.tournaments) {
+        insertTournament.run(
+          Number(t.id),
+          String(t.name || ''),
+          String(t.game_title || 'FIFA 22'),
+          String(t.game_category || 'كرة قدم'),
+          String(t.score_unit_label || 'هدف'),
+          String(t.description || ''),
+          t.banner_url ?? null,
+          String(t.start_date_time || ''),
+          Number(t.max_participants) || 16,
+          String(t.format || TournamentFormat.GROUPS_KNOCKOUT),
+          Number(t.group_count) || 4,
+          Number(t.qualifiers_per_group) || 2,
+          String(t.draw_mode || DrawMode.RANDOM),
+          String(t.knockout_tie_rule || KnockoutTieRule.SINGLE_MATCH_PENALTIES),
+          Number(t.match_duration_minutes) || 12,
+          String(t.target_goals_rule || ''),
+          t.is_registration_closed_manual ? 1 : 0,
+          String(t.status || TournamentStatus.REGISTRATION_OPEN),
+          t.champion_player_id != null ? Number(t.champion_player_id) : null,
+          Number(t.created_at) || Date.now()
+        );
+      }
+
+      const insertGroup = this.db.prepare(
+        'INSERT INTO tournament_groups (id, tournament_id, name, display_order) VALUES (?, ?, ?, ?)'
+      );
+      for (const g of tournamentGroups) {
+        insertGroup.run(Number(g.id), Number(g.tournament_id), String(g.name || ''), Number(g.display_order) || 0);
+      }
+
+      const insertPlayer = this.db.prepare(`
+        INSERT INTO players (
+          id, tournament_id, name, elysium_net_id, avatar_url, level,
+          ovr_rating, club_name, status, group_id, seed_order, registered_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const p of backup.players) {
+        insertPlayer.run(
+          Number(p.id),
+          Number(p.tournament_id),
+          String(p.name || ''),
+          String(p.elysium_net_id || ''),
+          p.avatar_url ?? null,
+          String(p.level || PlayerLevel.INTERMEDIATE),
+          Number(p.ovr_rating) || 81,
+          String(p.club_name || ''),
+          String(p.status || PlayerStatus.PENDING),
+          p.group_id != null ? Number(p.group_id) : null,
+          Number(p.seed_order) || 0,
+          Number(p.registered_at) || Date.now()
+        );
+      }
+
+      const insertMatch = this.db.prepare(`
+        INSERT INTO matches (
+          id, tournament_id, stage, group_id, round_number, bracket_index,
+          player1_id, player2_id, leg1_score1, leg1_score2, leg2_score1, leg2_score2,
+          penalty_score1, penalty_score2, is_two_legged, is_completed, winner_id,
+          next_match_id, next_match_slot, scheduled_label, scheduled_at_millis
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const m of backup.matches) {
+        insertMatch.run(
+          Number(m.id),
+          Number(m.tournament_id),
+          String(m.stage || MatchStage.GROUP),
+          m.group_id != null ? Number(m.group_id) : null,
+          Number(m.round_number) || 1,
+          Number(m.bracket_index) || 0,
+          m.player1_id != null ? Number(m.player1_id) : null,
+          m.player2_id != null ? Number(m.player2_id) : null,
+          m.leg1_score1 ?? null,
+          m.leg1_score2 ?? null,
+          m.leg2_score1 ?? null,
+          m.leg2_score2 ?? null,
+          m.penalty_score1 ?? null,
+          m.penalty_score2 ?? null,
+          m.is_two_legged ? 1 : 0,
+          m.is_completed ? 1 : 0,
+          m.winner_id != null ? Number(m.winner_id) : null,
+          m.next_match_id != null ? Number(m.next_match_id) : null,
+          Number(m.next_match_slot) || 1,
+          String(m.scheduled_label || ''),
+          m.scheduled_at_millis ?? null
+        );
+      }
+
+      const insertReminder = this.db.prepare(`
+        INSERT INTO match_reminders (
+          id, match_id, tournament_id, match_title, match_stage_label,
+          scheduled_at_millis, remind_at_millis, lead_minutes, is_enabled
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const r of matchReminders) {
+        insertReminder.run(
+          Number(r.id),
+          Number(r.match_id),
+          Number(r.tournament_id),
+          String(r.match_title || ''),
+          String(r.match_stage_label || ''),
+          Number(r.scheduled_at_millis) || Date.now(),
+          Number(r.remind_at_millis) || Date.now(),
+          Number(r.lead_minutes) || 15,
+          r.is_enabled ? 1 : 0
+        );
+      }
+
+      if (adminAccounts.length > 0) {
+        this.db.prepare('DELETE FROM admin_sessions').run();
+        this.db.prepare('DELETE FROM admin_accounts').run();
+        const insertAdmin = this.db.prepare(`
+          INSERT INTO admin_accounts (
+            id, username, display_name, role, pin_hash, pin_salt,
+            can_manage_tournament, can_manage_players, can_run_draw,
+            can_edit_scores, can_crown_champion, permissions_hash,
+            pin_updated_at, is_active, last_login_at, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const a of adminAccounts) {
+          insertAdmin.run(
+            Number(a.id),
+            String(a.username || ''),
+            String(a.display_name || ''),
+            String(a.role || AdminRole.SUB_ADMIN),
+            String(a.pin_hash || ''),
+            String(a.pin_salt || ''),
+            a.can_manage_tournament ? 1 : 0,
+            a.can_manage_players ? 1 : 0,
+            a.can_run_draw ? 1 : 0,
+            a.can_edit_scores ? 1 : 0,
+            a.can_crown_champion ? 1 : 0,
+            String(a.permissions_hash || ''),
+            Number(a.pin_updated_at) || 0,
+            a.is_active ? 1 : 0,
+            a.last_login_at ?? null,
+            Number(a.created_at) || Date.now()
+          );
+        }
+      }
+
+      for (const ra of revokedAdmins) {
+        this.db
+          .prepare('INSERT OR REPLACE INTO revoked_admins (username, revoked_at) VALUES (?, ?)')
+          .run(String(ra.username || ''), Number(ra.revoked_at) || Date.now());
+      }
+
+      for (const meta of appMeta) {
+        if (meta?.key && meta.key !== 'server_session_secret') {
+          this.db
+            .prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)')
+            .run(String(meta.key), String(meta.value ?? ''));
+        }
+      }
+      this.db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_tournament_seeded', '1')").run();
+
+      // Re-align sqlite_sequence so subsequent inserts get clean incremental IDs
+      for (const table of [
+        'tournaments',
+        'tournament_groups',
+        'players',
+        'matches',
+        'match_reminders',
+        'admin_accounts'
+      ]) {
+        const maxRow = this.db.prepare(`SELECT COALESCE(MAX(id), 0) AS max_id FROM ${table}`).get();
+        this.db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
+        if (maxRow.max_id > 0) {
+          this.db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, maxRow.max_id);
+        }
+      }
+    });
+
+    this.emitChange('backup_restored');
+    return {
+      ok: true,
+      status: 200,
+      tournamentsCount: backup.tournaments.length,
+      playersCount: backup.players.length,
+      matchesCount: backup.matches.length,
+      messageAr: `تمت استعادة النسخة الاحتياطية بنجاح (${backup.tournaments.length} بطولة، ${backup.players.length} لاعب، ${backup.matches.length} مباراة).`
+    };
+  }
 }

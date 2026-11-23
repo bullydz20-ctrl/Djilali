@@ -410,3 +410,25 @@ function compressImageToDataUrl(file: File, maxDim: number, quality: number): Pr
     reader.readAsDataURL(file);
   });
 }
+
+export async function downloadBackupApi(): Promise<{ ok: boolean; messageAr: string }> {
+  const backup = await apiRequest<Record<string, unknown>>('/api/admin/backup');
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const datePart = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `cp4-arena-backup-${datePart}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return { ok: true, messageAr: 'تم تنزيل ملف النسخة الاحتياطية الكاملة (JSON) بنجاح.' };
+}
+
+export async function restoreBackupApi(backupData: unknown) {
+  return apiRequest<{ ok: boolean; messageAr: string }>('/api/admin/restore', {
+    method: 'POST',
+    body: JSON.stringify(backupData)
+  });
+}

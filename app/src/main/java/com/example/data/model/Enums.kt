@@ -41,7 +41,8 @@ enum class MatchStage(val labelAr: String, val order: Int) {
     ROUND_OF_16("دور الـ 16", 2),
     QUARTER_FINAL("ربع النهائي", 3),
     SEMI_FINAL("نصف النهائي", 4),
-    FINAL("المباراة النهائية", 5)
+    THIRD_PLACE("تحديد المركز الثالث", 5),
+    FINAL("المباراة النهائية", 6)
 }
 
 enum class AdminRole(val labelAr: String) {

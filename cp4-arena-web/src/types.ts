@@ -164,6 +164,15 @@ export interface LockoutState {
   lockedUntilMillis: number;
 }
 
+export interface PersistenceInfo {
+  mode: 'postgres' | 'persistent_disk' | 'ephemeral';
+  isDurable: boolean;
+  labelAr: string;
+  detailAr: string;
+  lastCloudSyncAt: number | null;
+  cloudError: string | null;
+}
+
 export interface GameCatalogItem {
   id: string;
   label: string;
@@ -198,6 +207,7 @@ export interface ArenaState {
   keepSignedIn: boolean;
   lockoutState: LockoutState;
   gameCatalog: GameCatalogItem[];
+  persistence?: PersistenceInfo;
 }
 
 export const FORMAT_LABELS: Record<TournamentFormat, string> = {

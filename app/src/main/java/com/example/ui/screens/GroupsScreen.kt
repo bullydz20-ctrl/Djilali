@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -41,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.MatchEntity
+import com.example.data.local.PlayerEntity
 import com.example.data.model.TournamentFormat
 import com.example.domain.GroupStandingRow
 import com.example.security.AdminPermission
@@ -63,6 +65,10 @@ import com.example.ui.viewmodel.TournamentUiState
 fun GroupsScreen(
     uiState: TournamentUiState,
     onEditMatch: (MatchEntity) -> Unit,
+    onToggleCheckIn: (MatchEntity, Int) -> Unit = { _, _ -> },
+    onVotePrediction: (MatchEntity, Int) -> Unit = { _, _ -> },
+    onOpenDispute: ((MatchEntity) -> Unit)? = null,
+    onPlayerClick: ((PlayerEntity) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val tournament = uiState.tournament
@@ -111,7 +117,8 @@ fun GroupsScreen(
             item {
                 StandingsTableCard(
                     title = "جدول ترتيب الدوري العام",
-                    rows = uiState.leagueStandings
+                    rows = uiState.leagueStandings,
+                    onPlayerClick = onPlayerClick
                 )
             }
             item {
@@ -127,7 +134,13 @@ fun GroupsScreen(
                     player1 = match.player1Id?.let { playersById[it] },
                     player2 = match.player2Id?.let { playersById[it] },
                     canEdit = canEditScores,
-                    onEditClick = { onEditMatch(match) }
+                    onEditClick = { onEditMatch(match) },
+                    onToggleCheckIn = { slot -> onToggleCheckIn(match, slot) },
+                    onVotePrediction = { slot -> onVotePrediction(match, slot) },
+                    onOpenDispute = if (onOpenDispute != null) {
+                        { onOpenDispute(match) }
+                    } else null,
+                    onPlayerClick = onPlayerClick
                 )
             }
         }
@@ -180,7 +193,8 @@ fun GroupsScreen(
         item {
             StandingsTableCard(
                 title = "ترتيب ${activeGroup.group.name}",
-                rows = activeGroup.standings
+                rows = activeGroup.standings,
+                onPlayerClick = onPlayerClick
             )
         }
 
@@ -198,7 +212,13 @@ fun GroupsScreen(
                 player1 = match.player1Id?.let { playersById[it] },
                 player2 = match.player2Id?.let { playersById[it] },
                 canEdit = canEditScores,
-                onEditClick = { onEditMatch(match) }
+                onEditClick = { onEditMatch(match) },
+                onToggleCheckIn = { slot -> onToggleCheckIn(match, slot) },
+                onVotePrediction = { slot -> onVotePrediction(match, slot) },
+                onOpenDispute = if (onOpenDispute != null) {
+                    { onOpenDispute(match) }
+                } else null,
+                onPlayerClick = onPlayerClick
             )
         }
     }
@@ -208,6 +228,7 @@ fun GroupsScreen(
 fun StandingsTableCard(
     title: String,
     rows: List<GroupStandingRow>,
+    onPlayerClick: ((PlayerEntity) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -273,6 +294,9 @@ fun StandingsTableCard(
                         .fillMaxWidth()
                         .background(
                             if (row.isQualified) ChampionshipGold.copy(alpha = 0.06f) else ObsidianVoid.copy(alpha = 0f)
+                        )
+                        .then(
+                            if (onPlayerClick != null) Modifier.clickable { onPlayerClick(row.player) } else Modifier
                         )
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically

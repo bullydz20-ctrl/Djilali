@@ -163,10 +163,51 @@ export function openDatabase(customPath) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      admin_id INTEGER,
+      admin_username TEXT NOT NULL,
+      admin_display_name TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      summary_ar TEXT NOT NULL,
+      tournament_id INTEGER,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS match_predictions (
+      match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+      voter_key TEXT NOT NULL,
+      picked_slot INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (match_id, voter_key)
+    );
   `);
 
+  ensureSchemaMigrations(db);
   ensureSeedData(db);
   return db;
+}
+
+function ensureColumn(db, tableName, columnName, columnDef) {
+  const cols = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!cols.some((c) => c.name === columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef}`);
+  }
+}
+
+function ensureSchemaMigrations(db) {
+  ensureColumn(db, 'tournaments', 'is_third_place_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'p1_checked_in', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'p2_checked_in', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'is_walkover', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'walkover_reason', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'matches', 'dispute_note', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'matches', 'dispute_screenshot_url', 'TEXT');
+  ensureColumn(db, 'matches', 'dispute_submitted_by', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'matches', 'dispute_status', "TEXT NOT NULL DEFAULT 'NONE'");
+  ensureColumn(db, 'matches', 'votes_p1', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'votes_p2', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 function ensureSeedData(db) {

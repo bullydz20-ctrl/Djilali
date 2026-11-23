@@ -1,17 +1,29 @@
 import { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
+  Award,
   BellRing,
+  CheckCircle2,
   Copy,
   Download,
+  Flag,
   ImagePlus,
   Share2,
+  Shield,
   Smartphone,
   Trophy,
   X
 } from 'lucide-react';
 import { uploadImageFileApi } from '../api';
 import { LEVEL_LABELS, STAGE_LABELS } from '../types';
-import type { Match, MatchReminder, Player, PlayerLevel } from '../types';
+import type {
+  Match,
+  MatchReminder,
+  Player,
+  PlayerLevel,
+  PlayerStats,
+  SeasonLeaderboardEntry
+} from '../types';
 import { PlayerAvatar } from './PlayerAvatar';
 
 export function RegisterPlayerModal({
@@ -182,7 +194,9 @@ export function ScoreEntryModal({
   player2,
   scoreUnitLabel,
   onClose,
-  onSave
+  onSave,
+  onWalkover,
+  onResolveDispute
 }: {
   match: Match;
   player1: Player;
@@ -197,6 +211,8 @@ export function ScoreEntryModal({
     penaltyScore1: number | null;
     penaltyScore2: number | null;
   }) => Promise<void>;
+  onWalkover?: (winnerSlot: 1 | 2, reason: string) => Promise<void>;
+  onResolveDispute?: (resolutionNote: string) => Promise<void>;
 }) {
   const [l1s1, setL1s1] = useState(match.leg1Score1 != null ? String(match.leg1Score1) : '');
   const [l1s2, setL1s2] = useState(match.leg1Score2 != null ? String(match.leg1Score2) : '');
@@ -204,6 +220,8 @@ export function ScoreEntryModal({
   const [l2s2, setL2s2] = useState(match.leg2Score2 != null ? String(match.leg2Score2) : '');
   const [p1, setP1] = useState(match.penaltyScore1 != null ? String(match.penaltyScore1) : '');
   const [p2, setP2] = useState(match.penaltyScore2 != null ? String(match.penaltyScore2) : '');
+  const [walkoverReason, setWalkoverReason] = useState(match.walkoverReason || 'عدم الحضور في الموعد');
+  const [resolutionNote, setResolutionNote] = useState('');
   const [saving, setSaving] = useState(false);
 
   const isKnockout = match.stage !== 'GROUP' && match.stage !== 'LEAGUE';
@@ -314,6 +332,98 @@ export function ScoreEntryModal({
             إلغاء
           </button>
         </div>
+
+        {onWalkover && (
+          <div className="arena-subcard stack-col" style={{ gap: 8, borderColor: 'rgba(245, 184, 46, 0.4)' }}>
+            <div style={{ fontWeight: 800, fontSize: '0.84rem', color: 'var(--championship-gold)' }}>
+              فوز بالانسحاب / الغياب (3 - 0)
+            </div>
+            <input
+              className="input"
+              value={walkoverReason}
+              onChange={(e) => setWalkoverReason(e.target.value)}
+              placeholder="سبب الانسحاب (اختياري)"
+            />
+            <div className="grid-2">
+              <button
+                type="button"
+                className="btn btn-outline"
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await onWalkover(1, walkoverReason);
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                فوز {player1.name} (3-0)
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline"
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await onWalkover(2, walkoverReason);
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                فوز {player2.name} (3-0)
+              </button>
+            </div>
+          </div>
+        )}
+
+        {match.disputeStatus === 'OPEN' && (
+          <div className="arena-subcard stack-col" style={{ gap: 8, borderColor: 'var(--crimson-loss)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--crimson-loss)', fontWeight: 800, fontSize: '0.86rem' }}>
+              <AlertTriangle size={16} />
+              <span>طعن / إثبات مفتوح ({match.disputeSubmittedBy})</span>
+            </div>
+            <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)' }}>{match.disputeNote}</div>
+            {match.disputeScreenshotUrl && (
+              <a
+                href={match.disputeScreenshotUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: '0.78rem', color: 'var(--cyber-sky)', fontWeight: 700 }}
+              >
+                عرض صورة الإثبات المرفقة ↗
+              </a>
+            )}
+            {onResolveDispute && (
+              <>
+                <input
+                  className="input"
+                  value={resolutionNote}
+                  onChange={(e) => setResolutionNote(e.target.value)}
+                  placeholder="قرار المشرف (اختياري)"
+                />
+                <button
+                  type="button"
+                  className="btn btn-gold"
+                  disabled={saving}
+                  onClick={async () => {
+                    setSaving(true);
+                    try {
+                      await onResolveDispute(resolutionNote);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                >
+                  <CheckCircle2 size={16} />
+                  <span>اعتماد وحسم الطعن</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -594,6 +704,294 @@ export function InstallPwaModal({
         <button type="button" className="btn btn-outline" onClick={onClose}>
           حسناً
         </button>
+      </div>
+    </div>
+  );
+}
+
+export function PlayerProfileModal({
+  player,
+  stats,
+  seasonEntry,
+  matches,
+  playersById,
+  scoreUnitLabel,
+  onClose
+}: {
+  player: Player;
+  stats: PlayerStats | null;
+  seasonEntry: SeasonLeaderboardEntry | null;
+  matches: Match[];
+  playersById: Map<number, Player>;
+  scoreUnitLabel: string;
+  onClose: () => void;
+}) {
+  const playerMatches = matches.filter((m) => m.player1Id === player.id || m.player2Id === player.id);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <PlayerAvatar avatarUrl={player.avatarUrl} name={player.name} size={58} borderColor="var(--championship-gold)" />
+            <div>
+              <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.12rem' }}>{player.name}</h2>
+              <div style={{ fontSize: '0.78rem', color: 'var(--cyber-sky)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Shield size={13} />
+                <span>{player.elysiumNetId}</span>
+              </div>
+              <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                {LEVEL_LABELS[player.level].label} • OVR {player.ovrRating}
+                {player.clubName ? ` • ${player.clubName}` : ''}
+              </div>
+            </div>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        {seasonEntry && (
+          <div className="arena-subcard stack-col" style={{ gap: 8, borderColor: 'rgba(245, 184, 46, 0.45)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--championship-gold)', fontWeight: 800, fontSize: '0.88rem' }}>
+                <Award size={16} />
+                <span>المسيرة العامة في الموسم</span>
+              </div>
+              <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--cyber-sky)' }}>
+                المركز #{seasonEntry.rank} • {seasonEntry.seasonPoints} نقطة
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, textAlign: 'center' }}>
+              <ProfileMiniBox label="ألقاب" value={seasonEntry.titles} color="var(--championship-gold)" />
+              <ProfileMiniBox label="وصافة" value={seasonEntry.runnerUps} color="var(--cyber-sky)" />
+              <ProfileMiniBox label="فوز" value={seasonEntry.wins} color="var(--emerald-win)" />
+              <ProfileMiniBox label="نسبة الفوز" value={`${seasonEntry.winRatePercent}%`} color="var(--text-primary)" />
+            </div>
+            <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+              {seasonEntry.tournamentsCount} بطولات • {seasonEntry.matchesPlayed} مباراة • سجل {seasonEntry.goalsScored} واستقبل {seasonEntry.goalsConceded} ({seasonEntry.cleanSheets} شباك نظيفة)
+            </div>
+          </div>
+        )}
+
+        <div className="arena-subcard stack-col" style={{ gap: 8 }}>
+          <div style={{ fontWeight: 800, fontSize: '0.86rem', color: 'var(--cyber-sky)' }}>
+            إحصائيات البطولة الحالية
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, textAlign: 'center' }}>
+            <ProfileMiniBox label="لعب" value={stats?.matchesPlayed ?? 0} />
+            <ProfileMiniBox label="فوز" value={stats?.wins ?? 0} color="var(--emerald-win)" />
+            <ProfileMiniBox label={scoreUnitLabel} value={stats?.goalsScored ?? 0} color="var(--championship-gold)" />
+            <ProfileMiniBox label="عليه" value={stats?.goalsConceded ?? 0} />
+          </div>
+        </div>
+
+        <div className="stack-col" style={{ gap: 6 }}>
+          <div style={{ fontWeight: 800, fontSize: '0.86rem', color: 'var(--text-primary)' }}>
+            مباريات اللاعب ({playerMatches.length})
+          </div>
+          {playerMatches.length === 0 ? (
+            <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>لا توجد مباريات مسجلة بعد.</div>
+          ) : (
+            playerMatches.map((m) => {
+              const isP1 = m.player1Id === player.id;
+              const oppId = isP1 ? m.player2Id : m.player1Id;
+              const opp = oppId ? playersById.get(oppId) : null;
+              const sSelf = m.isTwoLegged
+                ? isP1
+                  ? (m.leg1Score1 ?? 0) + (m.leg2Score1 ?? 0)
+                  : (m.leg1Score2 ?? 0) + (m.leg2Score2 ?? 0)
+                : isP1
+                ? m.leg1Score1
+                : m.leg1Score2;
+              const sOpp = m.isTwoLegged
+                ? isP1
+                  ? (m.leg1Score2 ?? 0) + (m.leg2Score2 ?? 0)
+                  : (m.leg1Score1 ?? 0) + (m.leg2Score1 ?? 0)
+                : isP1
+                ? m.leg1Score2
+                : m.leg1Score1;
+              const won = m.isCompleted && m.winnerId === player.id;
+              const lost = m.isCompleted && m.winnerId != null && m.winnerId !== player.id;
+
+              return (
+                <div
+                  key={m.id}
+                  className="arena-subcard"
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                >
+                  <div>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 700 }}>
+                      ضد {opp?.name || 'بانتظار المتأهل'}
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      {STAGE_LABELS[m.stage].label}
+                      {m.isWalkover ? ' • انسحاب' : ''}
+                    </div>
+                  </div>
+                  <div
+                    className="score-num"
+                    style={{
+                      fontSize: '0.95rem',
+                      color: won ? 'var(--emerald-win)' : lost ? 'var(--crimson-loss)' : 'var(--championship-gold)'
+                    }}
+                  >
+                    {m.leg1Score1 != null ? `${sSelf ?? '-'} : ${sOpp ?? '-'}` : 'لم تُلعب'}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfileMiniBox({ label, value, color }: { label: string; value: number | string; color?: string }) {
+  return (
+    <div style={{ background: 'rgba(7, 9, 19, 0.55)', borderRadius: 10, padding: '6px 4px' }}>
+      <div className="score-num" style={{ fontSize: '1rem', color: color || 'var(--text-primary)' }}>
+        {value}
+      </div>
+      <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>{label}</div>
+    </div>
+  );
+}
+
+export function DisputeMatchModal({
+  match,
+  player1,
+  player2,
+  onClose,
+  onSubmit
+}: {
+  match: Match;
+  player1: Player | null;
+  player2: Player | null;
+  onClose: () => void;
+  onSubmit: (payload: { submittedBy: string; note: string; screenshotUrl?: string | null }) => Promise<void>;
+}) {
+  const [submittedBy, setSubmittedBy] = useState(player1?.name || '');
+  const [note, setNote] = useState(match.disputeNote || '');
+  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(match.disputeScreenshotUrl || null);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function handleFileChange(file: File | null) {
+    if (!file) return;
+    setErr('');
+    setUploading(true);
+    try {
+      const url = await uploadImageFileApi(file);
+      setScreenshotUrl(url);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'تعذر رفع صورة الإثبات.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Flag size={19} color="var(--championship-gold)" />
+            <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.05rem' }}>
+              إثبات النتيجة / رفع طعن
+            </h2>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ fontSize: '0.82rem', color: 'var(--cyber-sky)', fontWeight: 700 }}>
+          {player1?.name || 'اللاعب 1'} ضد {player2?.name || 'اللاعب 2'} • {STAGE_LABELS[match.stage].label}
+        </div>
+
+        {match.disputeStatus !== 'NONE' && (
+          <div className="arena-subcard" style={{ borderColor: match.disputeStatus === 'OPEN' ? 'var(--crimson-loss)' : 'var(--emerald-win)' }}>
+            <div style={{ fontSize: '0.78rem', fontWeight: 800, color: match.disputeStatus === 'OPEN' ? 'var(--crimson-loss)' : 'var(--emerald-win)' }}>
+              {match.disputeStatus === 'OPEN' ? 'يوجد طعن قيد المراجعة حالياً' : 'تم حسم الطعن السابق من المشرف'}
+            </div>
+            {match.disputeNote && (
+              <div style={{ fontSize: '0.8rem', marginTop: 4 }}>{match.disputeNote}</div>
+            )}
+          </div>
+        )}
+
+        <div className="field-group">
+          <label className="field-label">اسم مقدّم الإثبات أو الطعن *</label>
+          <input
+            className="input"
+            value={submittedBy}
+            onChange={(e) => setSubmittedBy(e.target.value)}
+            placeholder="اسم اللاعب أو معرف ElysiumNet/ XeMoNat"
+          />
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">النتيجة الفعلية أو تفاصيل الطعن *</label>
+          <textarea
+            className="input"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="اكتب النتيجة الحقيقية أو سبب الاعتراض بوضوح..."
+          />
+        </div>
+
+        <label className="btn btn-outline" style={{ cursor: 'pointer' }}>
+          <ImagePlus size={17} />
+          <span>{uploading ? 'جاري رفع لقطة الشاشة...' : screenshotUrl ? 'تم إرفاق صورة إثبات ✓' : 'إرفاق لقطة شاشة (اختياري)'}</span>
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            style={{ display: 'none' }}
+            disabled={uploading}
+            onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+          />
+        </label>
+
+        {screenshotUrl && (
+          <img
+            src={screenshotUrl}
+            alt="إثبات النتيجة"
+            style={{ width: '100%', maxHeight: 160, objectFit: 'cover', borderRadius: 12, border: '1px solid var(--card-border)' }}
+          />
+        )}
+
+        {err && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>}
+
+        <div className="grid-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={saving || uploading || !submittedBy.trim() || !note.trim()}
+            onClick={async () => {
+              setSaving(true);
+              setErr('');
+              try {
+                await onSubmit({
+                  submittedBy: submittedBy.trim(),
+                  note: note.trim(),
+                  screenshotUrl
+                });
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : 'تعذر إرسال الطعن.');
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? 'جاري الإرسال...' : 'إرسال للمراجعة'}
+          </button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            إغلاق
+          </button>
+        </div>
       </div>
     </div>
   );

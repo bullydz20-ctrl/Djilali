@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createArenaApp } from './app.js';
+import { createArenaAppAsync } from './app.js';
+import { getPersistenceDiagnostics } from './cloudStore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -36,28 +37,32 @@ const resolvedUploadsDir = process.env.CP4_UPLOADS_DIR?.trim()
   ? path.resolve(process.env.CP4_UPLOADS_DIR.trim())
   : path.join(path.dirname(resolvedDbPath), 'uploads');
 
-const { app, db } = createArenaApp({
+const { app, cloudStore, shutdownResources } = await createArenaAppAsync({
   dbPath: resolvedDbPath,
   uploadsDir: resolvedUploadsDir,
   distDir: path.join(rootDir, 'dist')
 });
 
+const diagnostics = getPersistenceDiagnostics({ dbPath: resolvedDbPath, cloudStore });
+console.log(`[CP4 ARENA] Persistence mode: ${diagnostics.mode} (durable=${diagnostics.isDurable})`);
+if (!diagnostics.isDurable) {
+  console.warn('[CP4 ARENA] WARNING: Running on ephemeral filesystem without DATABASE_URL. Data may be wiped when container sleeps!');
+}
+
 const server = app.listen(port, host, () => {
   console.log(`CP4 ARENA server running at http://${host}:${port}`);
 });
 
+let shuttingDown = false;
 function shutdown(signal) {
-  console.log(`Received ${signal}, shutting down CP4 ARENA gracefully...`);
-  server.close(() => {
-    try {
-      db.close();
-    } catch {
-      // ignore close errors during exit
-    }
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Received ${signal}, flushing & shutting down CP4 ARENA gracefully...`);
+  server.close(async () => {
+    await shutdownResources();
     process.exit(0);
   });
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-

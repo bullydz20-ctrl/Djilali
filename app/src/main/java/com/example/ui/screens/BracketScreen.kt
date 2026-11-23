@@ -100,7 +100,13 @@ fun BracketScreen(
     }
 
     val rounds = remember(matchesByStage) {
-        matchesByStage.toList().sortedBy { it.first.order }
+        matchesByStage
+            .filterKeys { it != MatchStage.THIRD_PLACE }
+            .toList()
+            .sortedBy { it.first.order }
+    }
+    val thirdPlaceMatches = remember(matchesByStage) {
+        matchesByStage[MatchStage.THIRD_PLACE].orEmpty()
     }
 
     var selectedStage by remember(knockoutMatches.size) { mutableStateOf<MatchStage?>(null) }
@@ -198,6 +204,7 @@ fun BracketScreen(
             if (focusedStage == null) {
                 FullKnockoutTreeCanvas(
                     rounds = rounds,
+                    thirdPlaceMatches = thirdPlaceMatches,
                     playersById = playersById,
                     championPlayer = championPlayer,
                     canEditScores = canEditScores,
@@ -250,6 +257,7 @@ fun BracketScreen(
 @Composable
 private fun FullKnockoutTreeCanvas(
     rounds: List<Pair<MatchStage, List<MatchEntity>>>,
+    thirdPlaceMatches: List<MatchEntity>,
     playersById: Map<Long, PlayerEntity>,
     championPlayer: PlayerEntity?,
     canEditScores: Boolean,
@@ -290,7 +298,8 @@ private fun FullKnockoutTreeCanvas(
             .padding(16.dp)
             .testTag("bracket_full_tree")
     ) {
-        Row(verticalAlignment = Alignment.Top) {
+        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
             rounds.forEachIndexed { roundIdx, (stage, sortedMatches) ->
                 val multiplier = 1 shl roundIdx
                 val slotHeight = baseSlotHeight * multiplier
@@ -423,12 +432,46 @@ private fun FullKnockoutTreeCanvas(
                         .height(totalBracketHeight),
                     contentAlignment = Alignment.Center
                 ) {
-                    ChampionPedestalNode(
-                        champion = championPlayer,
-                        modifier = Modifier
-                            .width(championColumnWidth)
-                            .height(championCardHeight)
-                    )
+                        ChampionPedestalNode(
+                            champion = championPlayer,
+                            modifier = Modifier
+                                .width(championColumnWidth)
+                                .height(championCardHeight)
+                        )
+                    }
+                }
+            }
+
+            if (thirdPlaceMatches.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        color = ElevatedNavy,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "مباراة تحديد المركز الثالث 🥉",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ChampionshipGold,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        thirdPlaceMatches.forEach { m ->
+                            BracketMatchNode(
+                                match = m,
+                                player1 = m.player1Id?.let { playersById[it] },
+                                player2 = m.player2Id?.let { playersById[it] },
+                                isFinal = false,
+                                canEdit = canEditScores,
+                                onClick = { onMatchClick(m) },
+                                modifier = Modifier
+                                    .width(cardWidth)
+                                    .height(cardHeight)
+                            )
+                        }
+                    }
                 }
             }
         }

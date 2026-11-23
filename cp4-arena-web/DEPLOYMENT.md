@@ -1,17 +1,42 @@
 # دليل تجهيز وتشغيل CP4 ARENA على استضافة خارجية
 
 ## المتطلبات الأساسية
-- **Node.js `>= 22.5.0`** (ضروري لأن قاعدة البيانات تستخدم `node:sqlite` المدمجة في Node 22).
-- **قرص تخزين دائم (Persistent Disk / Volume)** لحفظ ملف قاعدة البيانات `cp4_arena.db` ومجلد الصور المرفوعة `uploads/`.
+- **Node.js `>= 22.5.0`** (لأن المحرك الداخلي يستخدم `node:sqlite` المدمج في Node 22).
+- **لحفظ المعطيات بشكل دائم 100% على باقة Render المجانية (مهم جداً):**
+  - أضف متغير البيئة `DATABASE_URL` برابط قاعدة بيانات **PostgreSQL** مجانية (مثل **Neon.tech** أو **Supabase** أو **Render Postgres**).
+  - يقوم الخادم بمزامنة البطولات واللاعبين والمباريات والحسابات **وحتى الصور المرفوعة** تلقائياً مع PostgreSQL عند كل تعديل، ويسترجعها فور استيقاظ الموقع بعد السكون دون أي فقدان للبيانات.
 
 ---
 
-## 1. التشغيل المحلي أو على VPS (Ubuntu / Debian)
+## 1. النشر على Render (الباقة المجانية Free بدون ضياع البيانات بعد السكون)
+على باقة **Render Free**، يدخل الخادم في وضع السكون (Sleep) بعد 15 دقيقة من عدم النشاط ويُعاد إنشاؤه بقرص مؤقت فارغ؛ لذا اتبع الخطوات التالية لحفظ كل شيء دائماً:
+
+1. أنشئ قاعدة بيانات **PostgreSQL مجانية** (مثلاً على [Neon.tech](https://neon.tech) أو من لوحة Render نفسها عبر **New + -> PostgreSQL**) وانسخ رابط الاتصال (`postgres://...` أو `postgresql://...`).
+2. في إعدادات خدمة الويب على Render (**Environment -> Environment Variables**)، أضف المتغيرات التالية:
+   - `DATABASE_URL` = رابط PostgreSQL الذي نسخته (ضروري لمنع مسح البيانات والصور بعد سكون الموقع).
+   - `JWT_SECRET` = أي نص عشوائي طويل (يبقيك والمشرفين المساعدين مسجلين تلقائياً بعد السكون وإعادة التشغيل).
+   - `CP4_HEAD_ADMIN_USERNAME` = `Djilali` (اختياري).
+   - `CP4_HEAD_ADMIN_PIN` = رمز PIN من 6 أرقام (اختياري؛ إذا تركته فارغاً تنشئه من واجهة الموقع عند أول فتح).
+3. إعدادات البناء والتشغيل في Render (**Web Service** وليس Static Site):
+   - **Root Directory:** `cp4-arena-web` (إذا كان في مجلد فرعي داخل المستودع)
+   - **Build Command:** `npm ci --include=dev && npm run build`
+   - **Start Command:** `npm start`
+4. بمجرد إعادة التشغيل، ستظهر في لوحة الإدارة شارة خضراء: **«حفظ سحابي دائم (PostgreSQL)»**.
+   - كما يمكنك في أي وقت تنزيل **نسخة احتياطية كاملة (JSON)** أو استعادتها بنقرة واحدة من أعلى لوحة المشرف الرئيسي.
+
+> **ملاحظة:** إذا كنت تستخدم باقة **Starter** المدفوعة من Render مع قرص دائم على `/var/data` بدون PostgreSQL، اضبط:
+> - `CP4_DB_PATH=/var/data/cp4_arena.db`
+> - `CP4_UPLOADS_DIR=/var/data/uploads`
+> - `CP4_PERSISTENT_STORAGE=true`
+
+---
+
+## 2. التشغيل المحلي أو على VPS (Ubuntu / Debian)
 
 ```bash
 cd cp4-arena-web
 cp .env.example .env
-# عدّل .env وأضف قيمة قوية للمتغير CP4_SESSION_SECRET
+# عدّل .env وأضف JWT_SECRET (و DATABASE_URL إذا أردت مزامنة سحابية)
 
 npm ci
 npm run build
@@ -52,7 +77,7 @@ server {
 
 ---
 
-## 2. التشغيل عبر Docker
+## 3. التشغيل عبر Docker
 ```bash
 cd cp4-arena-web
 docker build -t cp4-arena-web .
@@ -61,32 +86,13 @@ docker run -d \
   --restart unless-stopped \
   -p 3000:3000 \
   -v cp4_arena_data:/data \
-  -e CP4_SESSION_SECRET="ضع-مفتاحاً-عشوائياً-من-64-حرفاً" \
+  -e JWT_SECRET="ضع-مفتاحاً-عشوائياً-من-64-حرفاً" \
+  -e DATABASE_URL="postgres://..." \
   cp4-arena-web
 ```
 
 ---
 
-## 3. النشر على Render أو Railway
-- أنشئ الخدمة على Render كـ **Web Service** (وليس Static Site، لأن المشروع يجمع الواجهة والخادم وقاعدة البيانات معاً).
-- إذا رفعت مجلد `cp4-arena-web/` داخل مستودع، اضبط **Root Directory** على `cp4-arena-web` (أو ارفع محتوى `cp4-arena-web/` مباشرة في الجذر).
-- **Build Command:** `npm ci --include=dev && npm run build` (مهم لتثبيت `vite` و`typescript` حتى مع وجود `NODE_ENV=production`).
-- **Start Command:** `npm start`
-- اربط قرصاً دائماً (Persistent Disk / Volume) على المسار `/var/data` (في Render يمكنك استخدام ملف `render.yaml` الجاهز).
-- اضبط المتغيرات البيئية التالية:
-  - `CP4_DB_PATH=/var/data/cp4_arena.db`
-  - `CP4_UPLOADS_DIR=/var/data/uploads`
-  - `JWT_SECRET=<مفتاح عشوائي طويل>` (لتوقيع جلسات المشرف الرئيسي والحسابات المساعدة وحفظ الدخول تلقائياً حتى بعد إعادة تشغيل الخادم؛ وإذا لم يُضبط يُستخدم `ADMIN_PASSWORD` أو `CP4_SESSION_SECRET`)
-  - `CP4_HEAD_ADMIN_USERNAME=Djilali` (اختياري)
-  - `CP4_HEAD_ADMIN_PIN=<رمز PIN من 6 أرقام>` (اختياري؛ إذا تركته فارغاً يمكنك إنشاء المشرف الرئيسي من شاشة الإدارة عند أول دخول)
-
-> **تنبيه مهم:** إذا ظهرت رسالة `Not Found` عند فتح الموقع على Render، فغالباً السبب أحد ثلاثة أمور:
-> 1. الخدمة لم تُنشر بعد على هذا الرابط أو أن Render أعطاك رابطاً مختلفاً (مثل `https://cp4-arena-xxxx.onrender.com`).
-> 2. تم نشر المشروع كـ **Static Site** بدلاً من **Web Service (Node)**.
-> 3. لم يتم ضبط **Root Directory** على `cp4-arena-web` عند الرفع، أو لم يُبنَ مجلد `dist/` عبر `npm ci --include=dev && npm run build`.
-
----
-
 ## 4. التحقق بعد التشغيل
-- افحص صحة الخادم وقاعدة البيانات: `GET /api/health` -> يعيد `{"ok":true,"service":"cp4-arena-api",...}`
-- احتفظ بنسخة احتياطية دورية من مجلد البيانات (`cp4_arena.db*` و`uploads/`).
+- افحص صحة الخادم وحالة التخزين: `GET /api/health` -> يعيد `{"ok":true,"persistence":{"mode":"postgres","isDurable":true,...}}`
+- إذا ظهرت رسالة `Not Found` عند فتح الموقع على Render، فتأكد أن النوع **Web Service (Node)** وليس Static Site وأن `npm run build` أُنجز بنجاح.

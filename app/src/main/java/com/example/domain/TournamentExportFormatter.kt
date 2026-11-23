@@ -28,8 +28,16 @@ object TournamentExportFormatter {
         val scoreUnit = t?.scoreUnitLabel?.ifBlank { "نقطة" } ?: "هدف"
         val stats = uiState.overviewStats
         val finalMatch = uiState.knockoutMatches.find { it.stage == MatchStage.FINAL }
+        val thirdMatch = uiState.knockoutMatches.find { it.stage == MatchStage.THIRD_PLACE }
         val resolvedChampion = uiState.championPlayer
             ?: finalMatch?.winnerId?.let { playersById[it] }
+        val runnerUp = if (finalMatch?.isCompleted == true && finalMatch.winnerId != null) {
+            val loserId = if (finalMatch.winnerId == finalMatch.player1Id) finalMatch.player2Id else finalMatch.player1Id
+            loserId?.let { playersById[it] }
+        } else null
+        val thirdPlacePlayer = if (thirdMatch?.isCompleted == true && thirdMatch.winnerId != null) {
+            playersById[thirdMatch.winnerId]
+        } else null
 
         return buildString {
             appendLine("════════════════════════════════════════")
@@ -55,6 +63,12 @@ object TournamentExportFormatter {
                 appendLine("🥇 بطل البطولة: ${resolvedChampion.name} (${resolvedChampion.elysiumNetId})")
                 if (resolvedChampion.clubName.isNotBlank()) {
                     appendLine("   النادي: ${resolvedChampion.clubName}")
+                }
+                if (runnerUp != null) {
+                    appendLine("🥈 الوصيف: ${runnerUp.name} (${runnerUp.elysiumNetId})")
+                }
+                if (thirdPlacePlayer != null) {
+                    appendLine("🥉 المركز الثالث: ${thirdPlacePlayer.name} (${thirdPlacePlayer.elysiumNetId})")
                 }
                 appendLine()
             }
@@ -131,8 +145,16 @@ object TournamentExportFormatter {
         val gameTag = gameTitle.replace(Regex("[^A-Za-z0-9]+"), "").ifBlank { "CP4Arena" }
         val stats = uiState.overviewStats
         val finalMatch = uiState.knockoutMatches.find { it.stage == MatchStage.FINAL }
+        val thirdMatch = uiState.knockoutMatches.find { it.stage == MatchStage.THIRD_PLACE }
         val resolvedChampion = uiState.championPlayer
             ?: finalMatch?.winnerId?.let { playersById[it] }
+        val runnerUp = if (finalMatch?.isCompleted == true && finalMatch.winnerId != null) {
+            val loserId = if (finalMatch.winnerId == finalMatch.player1Id) finalMatch.player2Id else finalMatch.player1Id
+            loserId?.let { playersById[it] }
+        } else null
+        val thirdPlacePlayer = if (thirdMatch?.isCompleted == true && thirdMatch.winnerId != null) {
+            playersById[thirdMatch.winnerId]
+        } else null
 
         return buildString {
             appendLine("🏆 ${t?.name ?: "بطولة CP4 ARENA"} ($gameTitle)")
@@ -140,12 +162,18 @@ object TournamentExportFormatter {
             appendLine()
             if (resolvedChampion != null) {
                 appendLine("👑 البطل المتوج: ${resolvedChampion.name} (${resolvedChampion.elysiumNetId})")
+                if (runnerUp != null) appendLine("🥈 الوصيف: ${runnerUp.name}")
+                if (thirdPlacePlayer != null) appendLine("🥉 المركز الثالث: ${thirdPlacePlayer.name}")
             } else {
                 appendLine("📊 الحالة: ${t?.status?.labelAr ?: "جارية"} (${stats.completedMatches}/${stats.totalMatches} مباراة)")
             }
 
             if (finalMatch != null && (finalMatch.isCompleted || finalMatch.leg1Score1 != null)) {
                 appendLine("🔥 النهائي: ${formatMatchLine(finalMatch, playersById)}")
+            }
+
+            if (thirdMatch != null && (thirdMatch.isCompleted || thirdMatch.leg1Score1 != null)) {
+                appendLine("🥉 المركز الثالث: ${formatMatchLine(thirdMatch, playersById)}")
             }
 
             val semis = uiState.knockoutMatches

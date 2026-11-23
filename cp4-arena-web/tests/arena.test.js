@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createArenaApp } from '../server/app.js';
+import { createArenaApp, createArenaAppAsync } from '../server/app.js';
+import { createMemoryCloudAdapter } from '../server/cloudStore.js';
 
 function startServer(opts) {
-  const { app, db, service } = createArenaApp(opts);
+  const { app, db, service, shutdownResources } = createArenaApp(opts);
   return new Promise((resolve) => {
     const server = app.listen(0, '127.0.0.1', () => {
       const addr = server.address();
@@ -16,12 +17,29 @@ function startServer(opts) {
         service,
         close: () =>
           new Promise((res) => {
-            server.close(() => {
-              try {
-                db.close();
-              } catch {
-                // ignore
-              }
+            server.close(async () => {
+              await shutdownResources();
+              res();
+            });
+          })
+      });
+    });
+  });
+}
+
+async function startAsyncServer(opts) {
+  const { app, db, service, shutdownResources } = await createArenaAppAsync(opts);
+  return new Promise((resolve) => {
+    const server = app.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      resolve({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        db,
+        service,
+        close: () =>
+          new Promise((res) => {
+            server.close(async () => {
+              await shutdownResources();
               res();
             });
           })
@@ -798,5 +816,219 @@ test('Stateless HMAC-SHA256 JWT keeps Head Admin and Sub-Admins authenticated ac
     else process.env.ADMIN_PASSWORD = prevAdminPass;
     if (prevSessionSecret !== undefined) process.env.CP4_SESSION_SECRET = prevSessionSecret;
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Uploaded images survive disk deletion via media DB & Head Admin JSON backup/restore recovers full arena state', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-backup-media-'));
+  const dbPath = path.join(tmpDir, 'arena.db');
+  const uploadsDir = path.join(tmpDir, 'uploads');
+
+  let srv = await startServer({ dbPath, uploadsDir });
+  try {
+    const setup = await api(srv.baseUrl, '/api/admin/setup-head', {
+      method: 'POST',
+      body: { username: 'BackupOwner', displayName: 'Backup Owner', pin: '258147', keepSignedIn: true }
+    });
+    assert.equal(setup.status, 201);
+    const headToken = setup.json.token;
+
+    // Create sub-admin and check 403 on backup export
+    await api(srv.baseUrl, '/api/admin/sub-admins', {
+      method: 'POST',
+      token: headToken,
+      body: { username: 'helper_no_backup', displayName: 'مساعد', pin: '147258', canEditScores: true }
+    });
+    const subLogin = await api(srv.baseUrl, '/api/admin/login', {
+      method: 'POST',
+      headers: { 'X-Forwarded-For': '10.88.1.1' },
+      body: { username: 'helper_no_backup', pin: '147258' }
+    });
+    const subBackupDenied = await api(srv.baseUrl, '/api/admin/backup', { token: subLogin.json.token });
+    assert.equal(subBackupDenied.status, 403);
+
+    // Upload image -> delete from disk -> verify HTTP 200 fallback from media.db
+    const imgRes = await api(srv.baseUrl, '/api/uploads/image', {
+      method: 'POST',
+      body: { dataUrl: `data:image/png;base64,${TINY_PNG_BASE64}` }
+    });
+    assert.equal(imgRes.status, 201);
+    const imgFilename = path.basename(imgRes.json.url);
+    fs.rmSync(path.join(uploadsDir, imgFilename), { force: true });
+    assert.equal(fs.existsSync(path.join(uploadsDir, imgFilename)), false);
+
+    const recoveredImg = await fetch(`${srv.baseUrl}${imgRes.json.url}`);
+    assert.equal(recoveredImg.status, 200);
+    assert.equal(recoveredImg.headers.get('content-type'), 'image/png');
+
+    // Create tournament & approved players & score
+    const createT = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token: headToken,
+      body: {
+        name: 'كأس النسخة الاحتياطية',
+        gameTitle: 'FIFA 22',
+        bannerUrl: imgRes.json.url,
+        format: 'DIRECT_KNOCKOUT',
+        maxParticipants: 4
+      }
+    });
+    assert.equal(createT.status, 201);
+    const tid = createT.json.tournament.id;
+
+    for (const pName of ['بطل ١', 'بطل ٢']) {
+      await api(srv.baseUrl, `/api/tournaments/${tid}/players`, {
+        method: 'POST',
+        token: headToken,
+        body: { name: pName, elysiumNetId: `ELY-${pName}`, avatarUrl: imgRes.json.url, status: 'APPROVED' }
+      });
+    }
+    await api(srv.baseUrl, `/api/tournaments/${tid}/draw`, { method: 'POST', token: headToken, body: {} });
+    const beforeBackup = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`);
+    assert.equal(beforeBackup.json.allMatches.length, 1);
+
+    // Export full backup
+    const exportRes = await api(srv.baseUrl, '/api/admin/backup', { token: headToken });
+    assert.equal(exportRes.status, 200);
+    const backupPayload = exportRes.json;
+    assert.ok(backupPayload.mediaFiles.some((m) => m.filename === imgFilename));
+
+    // Delete all tournaments & wipe uploads file
+    for (const t of beforeBackup.json.tournaments) {
+      await api(srv.baseUrl, `/api/tournaments/${t.id}`, { method: 'DELETE', token: headToken });
+    }
+    fs.rmSync(path.join(uploadsDir, imgFilename), { force: true });
+
+    const emptyCheck = await api(srv.baseUrl, '/api/state');
+    assert.equal(emptyCheck.json.tournaments.length, 0);
+
+    // Restore backup on a completely fresh server instance
+    await srv.close();
+    const dbPath2 = path.join(tmpDir, 'fresh.db');
+    const uploadsDir2 = path.join(tmpDir, 'fresh_uploads');
+    srv = await startServer({ dbPath: dbPath2, uploadsDir: uploadsDir2 });
+    const setup2 = await api(srv.baseUrl, '/api/admin/setup-head', {
+      method: 'POST',
+      body: { username: 'TempAdmin', displayName: 'Temp', pin: '999111' }
+    });
+    const restoreRes = await api(srv.baseUrl, '/api/admin/restore', {
+      method: 'POST',
+      token: setup2.json.token,
+      body: backupPayload
+    });
+    assert.equal(restoreRes.status, 200);
+
+    const restoredState = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`);
+    assert.equal(restoredState.json.tournament?.name, 'كأس النسخة الاحتياطية');
+    assert.equal(restoredState.json.approvedPlayers.length, 2);
+    assert.equal(restoredState.json.allMatches.length, 1);
+
+    const restoredAvatar = await fetch(`${srv.baseUrl}${imgRes.json.url}`);
+    assert.equal(restoredAvatar.status, 200);
+  } finally {
+    await srv.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Cloud persistence (PostgreSQL snapshot adapter) preserves all tournaments, players, admins, scores, and uploads after total Render container disk wipe', async () => {
+  const cloudAdapter = createMemoryCloudAdapter();
+  const dir1 = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-sleep-c1-'));
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-sleep-c2-'));
+
+  let srv = await startAsyncServer({
+    dbPath: path.join(dir1, 'cp4_arena.db'),
+    uploadsDir: path.join(dir1, 'uploads'),
+    cloudAdapter
+  });
+
+  try {
+    const health1 = await api(srv.baseUrl, '/api/health');
+    assert.equal(health1.status, 200);
+    assert.equal(health1.json.persistence.mode, 'postgres');
+    assert.equal(health1.json.persistence.isDurable, true);
+
+    const setup = await api(srv.baseUrl, '/api/admin/setup-head', {
+      method: 'POST',
+      body: { username: 'DjilaliCloud', displayName: 'Djilali Cloud', pin: '551199', keepSignedIn: true }
+    });
+    assert.equal(setup.status, 201);
+    const headToken = setup.json.token;
+
+    const upload = await api(srv.baseUrl, '/api/uploads/image', {
+      method: 'POST',
+      body: { dataUrl: `data:image/png;base64,${TINY_PNG_BASE64}` }
+    });
+    assert.equal(upload.status, 201);
+
+    const created = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token: headToken,
+      body: {
+        name: 'بطولة بعد سكون السيرفر',
+        gameTitle: 'Tekken 8',
+        bannerUrl: upload.json.url,
+        format: 'DIRECT_KNOCKOUT',
+        maxParticipants: 4
+      }
+    });
+    const tid = created.json.tournament.id;
+
+    await api(srv.baseUrl, `/api/tournaments/${tid}/players`, {
+      method: 'POST',
+      token: headToken,
+      body: { name: 'سالم', elysiumNetId: 'SALEM-99', avatarUrl: upload.json.url, status: 'APPROVED' }
+    });
+    await api(srv.baseUrl, `/api/tournaments/${tid}/players`, {
+      method: 'POST',
+      token: headToken,
+      body: { name: 'ياسين', elysiumNetId: 'YASSINE-77', status: 'APPROVED' }
+    });
+    await api(srv.baseUrl, `/api/tournaments/${tid}/draw`, { method: 'POST', token: headToken, body: {} });
+    const midState = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`);
+    const matchId = midState.json.allMatches[0].id;
+    await api(srv.baseUrl, `/api/matches/${matchId}/score`, {
+      method: 'PATCH',
+      token: headToken,
+      body: { leg1Score1: 3, leg1Score2: 2 }
+    });
+
+    // Simulate Render Free sleep: stop server #1 & completely destroy dir1 container filesystem
+    await srv.close();
+    fs.rmSync(dir1, { recursive: true, force: true });
+
+    // Wake up on a brand-new empty container dir2 connected to same cloudAdapter
+    srv = await startAsyncServer({
+      dbPath: path.join(dir2, 'cp4_arena.db'),
+      uploadsDir: path.join(dir2, 'uploads'),
+      cloudAdapter
+    });
+
+    const wokenState = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`, { token: headToken });
+    assert.equal(wokenState.status, 200);
+    assert.equal(wokenState.json.persistence.mode, 'postgres');
+    assert.equal(wokenState.json.currentAdmin?.username, 'DjilaliCloud');
+    assert.equal(wokenState.json.tournament?.name, 'بطولة بعد سكون السيرفر');
+    assert.equal(wokenState.json.approvedPlayers.length, 2);
+    assert.equal(wokenState.json.allMatches[0].isCompleted, true);
+    assert.equal(wokenState.json.allMatches[0].leg1Score1, 3);
+    assert.equal(wokenState.json.allMatches[0].leg1Score2, 2);
+
+    // Uploaded image must ALSO serve 200 from cloud cp4_media_files after total disk wipe
+    const wokenImg = await fetch(`${srv.baseUrl}${upload.json.url}`);
+    assert.equal(wokenImg.status, 200);
+    assert.equal(wokenImg.headers.get('content-type'), 'image/png');
+
+    // Original Head Admin PIN login must still work after wake-up
+    const wokenLogin = await api(srv.baseUrl, '/api/admin/login', {
+      method: 'POST',
+      headers: { 'X-Forwarded-For': '10.99.0.1' },
+      body: { username: 'DjilaliCloud', pin: '551199' }
+    });
+    assert.equal(wokenLogin.status, 200);
+  } finally {
+    await srv.close();
+    fs.rmSync(dir1, { recursive: true, force: true });
+    fs.rmSync(dir2, { recursive: true, force: true });
   }
 });

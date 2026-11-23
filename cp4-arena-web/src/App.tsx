@@ -10,6 +10,7 @@ import {
   deletePlayerApi,
   deleteSubAdminApi,
   deleteTournamentApi,
+  downloadBackupApi,
   fetchArenaState,
   generateKnockoutApi,
   getAuthToken,
@@ -17,6 +18,7 @@ import {
   loginAdminApi,
   logoutAdminApi,
   registerPlayerApi,
+  restoreBackupApi,
   runDrawApi,
   scheduleReminderApi,
   setAuthToken,
@@ -412,6 +414,13 @@ export default function App() {
                   }}
                   onOpenExportShare={() => {
                     if (state.tournament) setShowExportModal(true);
+                  }}
+                  onDownloadBackup={async () => {
+                    const res = await downloadBackupApi();
+                    if (res.messageAr) showToast(res.messageAr);
+                  }}
+                  onRestoreBackup={async (backupData) => {
+                    await runAction(() => restoreBackupApi(backupData));
                   }}
                 />
               )}

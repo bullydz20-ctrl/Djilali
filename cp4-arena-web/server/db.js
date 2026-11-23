@@ -50,6 +50,7 @@ export function openDatabase(customPath) {
       match_duration_minutes INTEGER NOT NULL DEFAULT 12,
       target_goals_rule TEXT NOT NULL DEFAULT 'المباراة الكاملة (6 دقائق لكل شوط)',
       is_registration_closed_manual INTEGER NOT NULL DEFAULT 0,
+      is_third_place_enabled INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT '${TournamentStatus.REGISTRATION_OPEN}',
       champion_player_id INTEGER,
       created_at INTEGER NOT NULL
@@ -101,7 +102,18 @@ export function openDatabase(customPath) {
       next_match_id INTEGER,
       next_match_slot INTEGER NOT NULL DEFAULT 1,
       scheduled_label TEXT NOT NULL DEFAULT '',
-      scheduled_at_millis INTEGER
+      scheduled_at_millis INTEGER,
+      p1_checked_in INTEGER NOT NULL DEFAULT 0,
+      p2_checked_in INTEGER NOT NULL DEFAULT 0,
+      votes_p1 INTEGER NOT NULL DEFAULT 0,
+      votes_p2 INTEGER NOT NULL DEFAULT 0,
+      is_walkover INTEGER NOT NULL DEFAULT 0,
+      walkover_reason TEXT,
+      dispute_status TEXT NOT NULL DEFAULT 'NONE',
+      dispute_note TEXT,
+      dispute_submitted_by TEXT,
+      dispute_screenshot_url TEXT,
+      dispute_resolution_note TEXT
     );
 
     CREATE TABLE IF NOT EXISTS match_reminders (
@@ -163,10 +175,43 @@ export function openDatabase(customPath) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS admin_audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tournament_id INTEGER,
+      actor_username TEXT NOT NULL,
+      actor_display_name TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      summary_ar TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
   `);
 
+  ensureSchemaMigrations(db);
   ensureSeedData(db);
   return db;
+}
+
+function ensureColumn(db, tableName, columnName, alterSql) {
+  const cols = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!cols.some((c) => c.name === columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${alterSql}`);
+  }
+}
+
+function ensureSchemaMigrations(db) {
+  ensureColumn(db, 'tournaments', 'is_third_place_enabled', 'is_third_place_enabled INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'matches', 'p1_checked_in', 'p1_checked_in INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'p2_checked_in', 'p2_checked_in INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'votes_p1', 'votes_p1 INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'votes_p2', 'votes_p2 INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'is_walkover', 'is_walkover INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'matches', 'walkover_reason', 'walkover_reason TEXT');
+  ensureColumn(db, 'matches', 'dispute_status', "dispute_status TEXT NOT NULL DEFAULT 'NONE'");
+  ensureColumn(db, 'matches', 'dispute_note', 'dispute_note TEXT');
+  ensureColumn(db, 'matches', 'dispute_submitted_by', 'dispute_submitted_by TEXT');
+  ensureColumn(db, 'matches', 'dispute_screenshot_url', 'dispute_screenshot_url TEXT');
+  ensureColumn(db, 'matches', 'dispute_resolution_note', 'dispute_resolution_note TEXT');
 }
 
 function ensureSeedData(db) {

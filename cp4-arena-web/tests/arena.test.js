@@ -1071,3 +1071,149 @@ test('CP4_SUB_ADMINS_JSON seeds sub-admin accounts cleanly across wiped ephemera
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Features 1, 3, 4: Season leaderboard, Hall of Fame, Check-in, Predictions, Disputes, Walkovers, Third Place, Bulk Import, Audit Logs', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-features-134-'));
+  const srv = await startServer({
+    dbPath: path.join(tmpDir, 'features.db'),
+    uploadsDir: path.join(tmpDir, 'uploads')
+  });
+
+  try {
+    const setup = await api(srv.baseUrl, '/api/admin/setup-head', {
+      method: 'POST',
+      body: { username: 'FeatureLead', displayName: 'قائد الميزات', pin: '258369', keepSignedIn: true }
+    });
+    assert.equal(setup.status, 201);
+    const token = setup.json.token;
+
+    const createT = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token,
+      body: {
+        name: 'كأس الميزات الشاملة',
+        format: 'DIRECT_KNOCKOUT',
+        maxParticipants: 8,
+        isThirdPlaceEnabled: true
+      }
+    });
+    assert.equal(createT.status, 201);
+    const tid = createT.json.tournament.id;
+
+    // Bulk import 4 players
+    const bulkRes = await api(srv.baseUrl, `/api/tournaments/${tid}/players/bulk`, {
+      method: 'POST',
+      token,
+      body: {
+        linesText: 'أحمد | ahmed_99 | Real\nسالم | salem_88 | Barca\nيوسف | yousef_77 | Milan\nخالد | khaled_66 | City',
+        status: 'APPROVED'
+      }
+    });
+    assert.equal(bulkRes.status, 201);
+    assert.equal(bulkRes.json.importedCount, 4);
+
+    // Draw direct knockout (4 players => 2 Semi-Finals + Final + Third Place)
+    const drawRes = await api(srv.baseUrl, `/api/tournaments/${tid}/draw`, {
+      method: 'POST',
+      token,
+      body: {}
+    });
+    assert.equal(drawRes.status, 200);
+
+    // Auto-schedule
+    const schedRes = await api(srv.baseUrl, `/api/tournaments/${tid}/auto-schedule`, {
+      method: 'POST',
+      token,
+      body: { startAtMillis: Date.now() + 600_000, intervalMinutes: 20 }
+    });
+    assert.equal(schedRes.status, 200);
+    assert.ok(schedRes.json.scheduledCount >= 3);
+
+    const state1 = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`, { token });
+    const semis = state1.json.knockoutMatches.filter((m) => m.stage === 'SEMI_FINAL');
+    const thirdMatchBefore = state1.json.knockoutMatches.find((m) => m.stage === 'THIRD_PLACE');
+    assert.equal(semis.length, 2);
+    assert.ok(thirdMatchBefore);
+
+    // Check-in & prediction vote & dispute on Semi #1
+    const sf1 = semis[0];
+    const checkIn = await api(srv.baseUrl, `/api/matches/${sf1.id}/check-in`, {
+      method: 'POST',
+      body: { slot: 1 }
+    });
+    assert.equal(checkIn.status, 200);
+    assert.equal(checkIn.json.checkedIn, true);
+
+    const vote = await api(srv.baseUrl, `/api/matches/${sf1.id}/vote`, {
+      method: 'POST',
+      body: { slot: 2 }
+    });
+    assert.equal(vote.status, 200);
+
+    const disputeOpen = await api(srv.baseUrl, `/api/matches/${sf1.id}/dispute`, {
+      method: 'POST',
+      body: { submittedBy: 'أحمد', note: 'الخصم تأخر ثم لعبنا وانتهت 3-1' }
+    });
+    assert.equal(disputeOpen.status, 200);
+
+    const disputeResolve = await api(srv.baseUrl, `/api/matches/${sf1.id}/dispute/resolve`, {
+      method: 'POST',
+      token,
+      body: { resolutionNote: 'تم التحقق والاعتماد' }
+    });
+    assert.equal(disputeResolve.status, 200);
+
+    // Finish SF1 by score & SF2 by walkover 3-0
+    const sf1Score = await api(srv.baseUrl, `/api/matches/${sf1.id}/score`, {
+      method: 'PATCH',
+      token,
+      body: { leg1Score1: 3, leg1Score2: 1 }
+    });
+    assert.equal(sf1Score.status, 200);
+
+    const sf2 = semis[1];
+    const sf2Walkover = await api(srv.baseUrl, `/api/matches/${sf2.id}/walkover`, {
+      method: 'POST',
+      token,
+      body: { winnerSlot: 1, reason: 'تأخر عن الموعد' }
+    });
+    assert.equal(sf2Walkover.status, 200);
+
+    // Verify Third Place match now has both semi-final losers & Final has both winners
+    const state2 = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`, { token });
+    const thirdMatch = state2.json.knockoutMatches.find((m) => m.stage === 'THIRD_PLACE');
+    const finalMatch = state2.json.knockoutMatches.find((m) => m.stage === 'FINAL');
+    assert.equal(thirdMatch.player1Id, sf1.player2Id);
+    assert.equal(thirdMatch.player2Id, sf2.player2Id);
+    assert.equal(finalMatch.player1Id, sf1.player1Id);
+    assert.equal(finalMatch.player2Id, sf2.player1Id);
+
+    // Complete third place and final
+    await api(srv.baseUrl, `/api/matches/${thirdMatch.id}/score`, {
+      method: 'PATCH',
+      token,
+      body: { leg1Score1: 2, leg1Score2: 0 }
+    });
+    await api(srv.baseUrl, `/api/matches/${finalMatch.id}/score`, {
+      method: 'PATCH',
+      token,
+      body: { leg1Score1: 4, leg1Score2: 2 }
+    });
+    await api(srv.baseUrl, `/api/tournaments/${tid}/champion`, {
+      method: 'POST',
+      token,
+      body: { playerId: sf1.player1Id }
+    });
+
+    const finalState = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`, { token });
+    assert.ok(finalState.json.seasonLeaderboard.length >= 4);
+    assert.equal(finalState.json.seasonLeaderboard[0].rank, 1);
+    assert.ok(finalState.json.hallOfFame.length >= 1);
+    assert.ok(finalState.json.hallOfFame[0].thirdPlaceName);
+    assert.ok((finalState.json.auditLogs || []).length >= 5);
+  } finally {
+    await srv.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

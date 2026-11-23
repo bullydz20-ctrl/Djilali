@@ -286,7 +286,7 @@ export function AdminTournamentSettingsTab({
             role="switch"
             aria-checked={isThirdPlaceEnabled}
             className={`switch-pill ${isThirdPlaceEnabled ? 'on' : ''}`}
-            onClick={() => setIsThirdPlaceEnabled((v) => !v)}
+            onClick={() => setIsThirdPlaceEnabled((v: boolean) => !v)}
           >
             <span className="switch-knob" />
           </button>

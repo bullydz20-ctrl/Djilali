@@ -334,6 +334,20 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null 
     res.status(out.status).json(out);
   });
 
+  app.post('/api/tournaments/:id/players/bulk', async (req, res) => {
+    const out = service.bulkImportPlayers(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/tournaments/:id/auto-schedule', async (req, res) => {
+    const out = service.autoScheduleMatches(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
   app.patch('/api/players/:id/status', async (req, res) => {
     const out = service.updatePlayerStatus(getBearerToken(req), Number(req.params.id), req.body?.status);
     if (!out.ok) return res.status(out.status).json({ error: out.error });
@@ -379,6 +393,41 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null 
 
   app.patch('/api/matches/:id/winner', async (req, res) => {
     const out = service.updateKnockoutMatchWinner(getBearerToken(req), Number(req.params.id), req.body?.winnerPlayerId ?? null);
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/check-in', async (req, res) => {
+    const out = service.toggleMatchCheckIn(Number(req.params.id), req.body?.slot);
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/vote', async (req, res) => {
+    const out = service.voteMatchPrediction(Number(req.params.id), req.body?.slot);
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/dispute', async (req, res) => {
+    const out = service.submitMatchDispute(Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/dispute/resolve', async (req, res) => {
+    const out = service.resolveMatchDispute(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/walkover', async (req, res) => {
+    const out = service.applyMatchWalkover(getBearerToken(req), Number(req.params.id), req.body || {});
     if (!out.ok) return res.status(out.status).json({ error: out.error });
     await syncCloud();
     res.status(out.status).json(out);

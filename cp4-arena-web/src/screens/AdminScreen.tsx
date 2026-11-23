@@ -5,6 +5,7 @@ import {
   Dices,
   Download,
   HardDrive,
+  History,
   KeyRound,
   LogOut,
   RotateCcw,
@@ -20,10 +21,16 @@ import { EmptyStatePanel } from '../components/PlayerAvatar';
 import { adminHasPermission, evaluatePinStrengthClient } from '../types';
 import type { ArenaState, Match, PlayerLevel, PlayerStatus } from '../types';
 import { AdminAuthGate } from './AdminAuthGate';
-import { AdminChampionTab, AdminMatchesTab, AdminPlayersTab, AdminSubAdminsTab } from './AdminPlayersStaffTabs';
+import {
+  AdminAuditLogTab,
+  AdminChampionTab,
+  AdminMatchesTab,
+  AdminPlayersTab,
+  AdminSubAdminsTab
+} from './AdminPlayersStaffTabs';
 import { AdminDrawTab, AdminTournamentSettingsTab } from './AdminTournamentDrawTabs';
 
-type SectionKey = 'TOURNAMENT' | 'PLAYERS' | 'DRAW' | 'MATCHES' | 'SUB_ADMINS' | 'CHAMPION';
+type SectionKey = 'TOURNAMENT' | 'PLAYERS' | 'DRAW' | 'MATCHES' | 'SUB_ADMINS' | 'CHAMPION' | 'AUDIT';
 
 export function AdminScreen({
   state,
@@ -34,6 +41,7 @@ export function AdminScreen({
   onCreateFreshTournament,
   onDeleteTournament,
   onAdminAddPlayer,
+  onBulkImport,
   onUpdatePlayerStatus,
   onUpdatePlayerDetails,
   onDeletePlayer,
@@ -41,6 +49,9 @@ export function AdminScreen({
   onGenerateKnockout,
   onEditMatch,
   onQuickUpdateGoals,
+  onAutoSchedule,
+  onToggleCheckIn,
+  onOpenDispute,
   onUpdateOwnProfile,
   onChangeOwnPin,
   onCreateSubAdmin,
@@ -67,6 +78,7 @@ export function AdminScreen({
     clubName: string;
     status: PlayerStatus;
   }) => Promise<void>;
+  onBulkImport: (linesText: string, status: 'APPROVED' | 'PENDING') => Promise<void>;
   onUpdatePlayerStatus: (id: number, status: PlayerStatus) => Promise<void>;
   onUpdatePlayerDetails: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onDeletePlayer: (id: number) => Promise<void>;
@@ -74,6 +86,9 @@ export function AdminScreen({
   onGenerateKnockout: () => Promise<void>;
   onEditMatch: (m: Match) => void;
   onQuickUpdateGoals: (m: Match, g1: number, g2: number) => void;
+  onAutoSchedule: (payload: { startAtMillis?: number; intervalMinutes?: number; onlyUnscheduled?: boolean }) => Promise<void>;
+  onToggleCheckIn: (m: Match, slot: 1 | 2) => void;
+  onOpenDispute: (m: Match) => void;
   onUpdateOwnProfile: (payload: { displayName: string; username?: string }) => Promise<void>;
   onChangeOwnPin: (currentPin: string, newPin: string) => Promise<void>;
   onCreateSubAdmin: (payload: {
@@ -141,6 +156,9 @@ export function AdminScreen({
     }
     if (adminHasPermission(admin, 'CROWN_CHAMPION')) {
       allowedSections.push({ key: 'CHAMPION', label: 'التتويج', icon: <Shield size={15} /> });
+    }
+    if (admin.role === 'HEAD_ADMIN') {
+      allowedSections.push({ key: 'AUDIT', label: 'السجل', icon: <History size={15} /> });
     }
   }
 
@@ -367,6 +385,7 @@ export function AdminScreen({
               <AdminPlayersTab
                 state={state}
                 onAdminAddPlayer={onAdminAddPlayer}
+                onBulkImport={onBulkImport}
                 onStatusChange={onUpdatePlayerStatus}
                 onUpdateDetails={onUpdatePlayerDetails}
                 onDeletePlayer={onDeletePlayer}
@@ -391,6 +410,9 @@ export function AdminScreen({
                 state={state}
                 onEditMatch={onEditMatch}
                 onQuickUpdateGoals={onQuickUpdateGoals}
+                onAutoSchedule={onAutoSchedule}
+                onToggleCheckIn={onToggleCheckIn}
+                onOpenDispute={onOpenDispute}
               />
             )}
             {selected === 'SUB_ADMINS' && (
@@ -416,6 +438,7 @@ export function AdminScreen({
                   subtitle="أنشئ بطولة جديدة من تبويب البطولة لمتابعة التقدم والتتويج."
                 />
               ))}
+            {selected === 'AUDIT' && <AdminAuditLogTab state={state} />}
           </div>
         </>
       )}

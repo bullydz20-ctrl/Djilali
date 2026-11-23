@@ -3,7 +3,14 @@ export type DrawMode = 'RANDOM' | 'MANUAL';
 export type KnockoutTieRule = 'SINGLE_MATCH_PENALTIES' | 'TWO_LEGS_FINAL_SINGLE';
 export type PlayerStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type PlayerLevel = 'BEGINNER' | 'INTERMEDIATE' | 'PRO' | 'LEGEND';
-export type MatchStage = 'GROUP' | 'LEAGUE' | 'ROUND_OF_16' | 'QUARTER_FINAL' | 'SEMI_FINAL' | 'FINAL';
+export type MatchStage =
+  | 'GROUP'
+  | 'LEAGUE'
+  | 'ROUND_OF_16'
+  | 'QUARTER_FINAL'
+  | 'SEMI_FINAL'
+  | 'THIRD_PLACE'
+  | 'FINAL';
 export type AdminRole = 'HEAD_ADMIN' | 'SUB_ADMIN';
 export type TournamentStatus =
   | 'REGISTRATION_OPEN'
@@ -37,6 +44,7 @@ export interface Tournament {
   matchDurationMinutes: number;
   targetGoalsRule: string;
   isRegistrationClosedManual: boolean;
+  isThirdPlaceEnabled?: boolean;
   status: TournamentStatus;
   championPlayerId: number | null;
   createdAt: number;
@@ -86,6 +94,17 @@ export interface Match {
   nextMatchSlot: number;
   scheduledLabel: string;
   scheduledAtMillis: number | null;
+  p1CheckedIn: boolean;
+  p2CheckedIn: boolean;
+  votesP1: number;
+  votesP2: number;
+  isWalkover: boolean;
+  walkoverReason: string | null;
+  disputeStatus: 'NONE' | 'OPEN' | 'RESOLVED';
+  disputeNote: string | null;
+  disputeSubmittedBy: string | null;
+  disputeScreenshotUrl: string | null;
+  disputeResolutionNote: string | null;
 }
 
 export interface MatchReminder {
@@ -182,6 +201,58 @@ export interface GameCatalogItem {
   defaultDuration: number;
 }
 
+export interface SeasonLeaderboardEntry {
+  rank: number;
+  elysiumKey: string;
+  displayName: string;
+  elysiumNetId: string;
+  avatarUrl: string | null;
+  clubName: string;
+  level: PlayerLevel;
+  ovrRating: number;
+  tournamentsCount: number;
+  titles: number;
+  runnerUps: number;
+  thirdPlaces: number;
+  matchesPlayed: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  goalsScored: number;
+  goalsConceded: number;
+  cleanSheets: number;
+  winRatePercent: number;
+  seasonPoints: number;
+}
+
+export interface HallOfFameEntry {
+  tournamentId: number;
+  tournamentName: string;
+  gameTitle: string;
+  gameCategory: string;
+  scoreUnitLabel: string;
+  startDateTime: string;
+  createdAt: number;
+  completedMatches: number;
+  totalMatches: number;
+  totalGoals: number;
+  championName: string;
+  championElysiumNetId: string;
+  championAvatarUrl: string | null;
+  runnerUpName: string | null;
+  thirdPlaceName: string | null;
+}
+
+export interface AuditLogEntry {
+  id: number;
+  tournamentId: number | null;
+  actorUsername: string;
+  actorDisplayName: string;
+  actionType: string;
+  summaryAr: string;
+  createdAt: number;
+}
+
 export interface ArenaState {
   tournaments: Tournament[];
   tournament: Tournament | null;
@@ -197,6 +268,9 @@ export interface ArenaState {
   matchReminders: MatchReminder[];
   playerStats: PlayerStats[];
   overviewStats: TournamentOverviewStats;
+  seasonLeaderboard: SeasonLeaderboardEntry[];
+  hallOfFame: HallOfFameEntry[];
+  auditLogs?: AuditLogEntry[];
   championPlayer: Player | null;
   isRegistrationOpenNow: boolean;
   hasHeadAdmin: boolean;
@@ -253,7 +327,8 @@ export const STAGE_LABELS: Record<MatchStage, { label: string; order: number }> 
   ROUND_OF_16: { label: 'دور الـ 16', order: 2 },
   QUARTER_FINAL: { label: 'ربع النهائي', order: 3 },
   SEMI_FINAL: { label: 'نصف النهائي', order: 4 },
-  FINAL: { label: 'المباراة النهائية', order: 5 }
+  THIRD_PLACE: { label: 'المركز الثالث والرابع', order: 5 },
+  FINAL: { label: 'المباراة النهائية', order: 6 }
 };
 
 export const ADMIN_PERMISSIONS_META: Array<{

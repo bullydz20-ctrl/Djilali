@@ -14,8 +14,10 @@ import {
 } from './constants.js';
 import {
   buildExportData,
+  buildHallOfFame,
   buildKnockoutSeedPairsFromGroups,
   buildKnockoutTreeDrafts,
+  computeSeasonLeaderboard,
   computeStandings,
   computeTournamentStats,
   distributePlayersIntoGroups,
@@ -65,6 +67,7 @@ function mapTournament(row) {
     matchDurationMinutes: row.match_duration_minutes,
     targetGoalsRule: row.target_goals_rule,
     isRegistrationClosedManual: Boolean(row.is_registration_closed_manual),
+    isThirdPlaceEnabled: row.is_third_place_enabled === undefined ? true : Boolean(row.is_third_place_enabled),
     status: row.status,
     championPlayerId: row.champion_player_id ?? null,
     createdAt: row.created_at
@@ -119,7 +122,30 @@ function mapMatch(row) {
     nextMatchId: row.next_match_id ?? null,
     nextMatchSlot: row.next_match_slot ?? 1,
     scheduledLabel: row.scheduled_label ?? '',
-    scheduledAtMillis: row.scheduled_at_millis ?? null
+    scheduledAtMillis: row.scheduled_at_millis ?? null,
+    p1CheckedIn: Boolean(row.p1_checked_in),
+    p2CheckedIn: Boolean(row.p2_checked_in),
+    votesP1: Number(row.votes_p1) || 0,
+    votesP2: Number(row.votes_p2) || 0,
+    isWalkover: Boolean(row.is_walkover),
+    walkoverReason: row.walkover_reason ?? null,
+    disputeStatus: row.dispute_status || 'NONE',
+    disputeNote: row.dispute_note ?? null,
+    disputeSubmittedBy: row.dispute_submitted_by ?? null,
+    disputeScreenshotUrl: row.dispute_screenshot_url ?? null,
+    disputeResolutionNote: row.dispute_resolution_note ?? null
+  };
+}
+
+function mapAuditLog(row) {
+  return {
+    id: row.id,
+    tournamentId: row.tournament_id ?? null,
+    actorUsername: row.actor_username,
+    actorDisplayName: row.actor_display_name,
+    actionType: row.action_type,
+    summaryAr: row.summary_ar,
+    createdAt: row.created_at
   };
 }
 
@@ -183,6 +209,28 @@ export class ArenaService {
 
   emitChange(type = 'state_updated', payload = {}) {
     this.onEvent({ type, ts: Date.now(), ...payload });
+  }
+
+  logAudit(admin, tournamentId, actionType, summaryAr) {
+    if (!admin) return;
+    try {
+      this.db
+        .prepare(`
+          INSERT INTO admin_audit_logs (
+            tournament_id, actor_username, actor_display_name, action_type, summary_ar, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          tournamentId ?? null,
+          String(admin.username || 'admin'),
+          String(admin.displayName || admin.username || 'المشرف'),
+          String(actionType || 'ACTION'),
+          String(summaryAr || ''),
+          Date.now()
+        );
+    } catch {
+      // keep audit logging non-fatal
+    }
   }
 
   getLockoutState(clientKey = 'default') {
@@ -958,10 +1006,13 @@ export class ArenaService {
         m.stage === MatchStage.ROUND_OF_16 ||
         m.stage === MatchStage.QUARTER_FINAL ||
         m.stage === MatchStage.SEMI_FINAL ||
-        m.stage === MatchStage.FINAL
+        m.stage === MatchStage.FINAL ||
+        m.stage === MatchStage.THIRD_PLACE
     );
 
     const { playerStats, overviewStats } = computeTournamentStats(approvedPlayers, allMatches);
+    const seasonLeaderboard = computeSeasonLeaderboard(this.db);
+    const hallOfFame = buildHallOfFame(this.db);
     const championPlayer = tournament?.championPlayerId
       ? players.find((p) => p.id === tournament.championPlayerId) || null
       : null;
@@ -982,6 +1033,10 @@ export class ArenaService {
         approvedPlayers.length < tournament.maxParticipants
     );
 
+    const auditLogs = session
+      ? this.db.prepare('SELECT * FROM admin_audit_logs ORDER BY id DESC LIMIT 60').all().map(mapAuditLog)
+      : [];
+
     return {
       tournaments,
       tournament,
@@ -997,6 +1052,9 @@ export class ArenaService {
       matchReminders,
       playerStats,
       overviewStats,
+      seasonLeaderboard,
+      hallOfFame,
+      auditLogs,
       championPlayer,
       isRegistrationOpenNow,
       hasHeadAdmin: this.hasHeadAdmin() || session?.admin?.role === AdminRole.HEAD_ADMIN,
@@ -1045,6 +1103,7 @@ export class ArenaService {
     const matchDurationMinutes = Math.max(3, Math.min(60, Number(payload.matchDurationMinutes) || 12));
     const targetGoalsRule = String(payload.targetGoalsRule || '').trim() || 'المباراة الكاملة';
     const bannerUrl = payload.bannerUrl ? String(payload.bannerUrl).trim() : null;
+    const isThirdPlaceEnabled = payload.isThirdPlaceEnabled !== undefined ? Boolean(payload.isThirdPlaceEnabled) : true;
     const now = Date.now();
 
     const info = this.db
@@ -1053,8 +1112,9 @@ export class ArenaService {
           name, game_title, game_category, score_unit_label, description,
           banner_url, start_date_time, max_participants, format, group_count,
           qualifiers_per_group, draw_mode, knockout_tie_rule, match_duration_minutes,
-          target_goals_rule, is_registration_closed_manual, status, champion_player_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?)
+          target_goals_rule, is_registration_closed_manual, is_third_place_enabled,
+          status, champion_player_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?)
       `)
       .run(
         name,
@@ -1072,11 +1132,13 @@ export class ArenaService {
         knockoutTieRule,
         matchDurationMinutes,
         targetGoalsRule,
+        isThirdPlaceEnabled ? 1 : 0,
         TournamentStatus.REGISTRATION_OPEN,
         now
       );
 
     const created = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(info.lastInsertRowid));
+    this.logAudit(auth.session.rawAdmin, created.id, 'CREATE_TOURNAMENT', `إنشاء بطولة جديدة: ${created.name}`);
     this.emitChange('tournament_created', { tournamentId: created.id });
     return { ok: true, status: 201, tournament: created, messageAr: 'تم إنشاء البطولة الجديدة بنجاح.' };
   }
@@ -1104,6 +1166,10 @@ export class ArenaService {
       payload.isRegistrationClosedManual !== undefined
         ? Boolean(payload.isRegistrationClosedManual)
         : current.isRegistrationClosedManual;
+    const isThirdPlaceEnabled =
+      payload.isThirdPlaceEnabled !== undefined
+        ? Boolean(payload.isThirdPlaceEnabled)
+        : current.isThirdPlaceEnabled;
 
     const approvedCount = this.db
       .prepare('SELECT COUNT(*) AS c FROM players WHERE tournament_id = ? AND status = ?')
@@ -1125,7 +1191,7 @@ export class ArenaService {
           description = ?, banner_url = ?, start_date_time = ?, max_participants = ?,
           format = ?, group_count = ?, qualifiers_per_group = ?, draw_mode = ?,
           knockout_tie_rule = ?, match_duration_minutes = ?, target_goals_rule = ?,
-          is_registration_closed_manual = ?, status = ?
+          is_registration_closed_manual = ?, is_third_place_enabled = ?, status = ?
         WHERE id = ?
       `)
       .run(
@@ -1145,10 +1211,12 @@ export class ArenaService {
         matchDurationMinutes,
         String(payload.targetGoalsRule ?? current.targetGoalsRule).trim() || 'المباراة الكاملة',
         manualClosed ? 1 : 0,
+        isThirdPlaceEnabled ? 1 : 0,
         status,
         current.id
       );
 
+    this.logAudit(auth.session.rawAdmin, current.id, 'UPDATE_TOURNAMENT', `تحديث إعدادات البطولة: ${name}`);
     this.emitChange('tournament_updated', { tournamentId: current.id });
     const updated = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(current.id));
     return { ok: true, status: 200, tournament: updated, messageAr: 'تم حفظ إعدادات البطولة بنجاح.' };
@@ -1362,6 +1430,103 @@ export class ArenaService {
     return res;
   }
 
+  bulkImportPlayers(rawToken, tournamentId, { linesText = '', status = PlayerStatus.APPROVED } = {}) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
+    if (!auth.ok) return auth;
+
+    const desiredStatus = status === PlayerStatus.PENDING ? PlayerStatus.PENDING : PlayerStatus.APPROVED;
+    const rawLines = String(linesText || '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    if (rawLines.length === 0) {
+      return { ok: false, status: 400, error: 'يرجى إدخال سطر واحد على الأقل للاستيراد.' };
+    }
+
+    const res = this.withTx(() => {
+      const tournament = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(Number(tournamentId)));
+      if (!tournament) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
+
+      let approvedCount = this.db
+        .prepare('SELECT COUNT(*) AS c FROM players WHERE tournament_id = ? AND status = ?')
+        .get(tournament.id, PlayerStatus.APPROVED).c;
+
+      const insertStmt = this.db.prepare(`
+        INSERT INTO players (
+          tournament_id, name, elysium_net_id, avatar_url, level,
+          ovr_rating, club_name, status, group_id, seed_order, registered_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, 0, ?)
+      `);
+      const dupStmt = this.db.prepare('SELECT id FROM players WHERE tournament_id = ? AND LOWER(elysium_net_id) = LOWER(?)');
+
+      let importedCount = 0;
+      let skippedCount = 0;
+      const now = Date.now();
+
+      for (const line of rawLines) {
+        const parts = line.includes('|')
+          ? line.split('|').map((s) => s.trim())
+          : line.includes('\t')
+          ? line.split('\t').map((s) => s.trim())
+          : line.split(',').map((s) => s.trim());
+
+        const pName = (parts[0] || '').slice(0, 50);
+        const pElysium = (parts[1] || parts[0] || '').slice(0, 50);
+        const pClub = (parts[2] || '').slice(0, 50);
+        if (!pName || !pElysium) {
+          skippedCount += 1;
+          continue;
+        }
+        if (dupStmt.get(tournament.id, pElysium)) {
+          skippedCount += 1;
+          continue;
+        }
+        if (desiredStatus === PlayerStatus.APPROVED && approvedCount >= tournament.maxParticipants) {
+          skippedCount += 1;
+          continue;
+        }
+
+        insertStmt.run(
+          tournament.id,
+          pName,
+          pElysium,
+          PlayerLevel.INTERMEDIATE,
+          PLAYER_LEVEL_META[PlayerLevel.INTERMEDIATE].defaultOvr,
+          pClub,
+          desiredStatus,
+          now + importedCount
+        );
+        importedCount += 1;
+        if (desiredStatus === PlayerStatus.APPROVED) approvedCount += 1;
+      }
+
+      if (approvedCount >= tournament.maxParticipants && tournament.status === TournamentStatus.REGISTRATION_OPEN) {
+        this.db
+          .prepare('UPDATE tournaments SET is_registration_closed_manual = 1, status = ? WHERE id = ?')
+          .run(TournamentStatus.REGISTRATION_CLOSED, tournament.id);
+      }
+
+      this.logAudit(
+        auth.session.rawAdmin,
+        tournament.id,
+        'BULK_IMPORT_PLAYERS',
+        `استيراد ${importedCount} لاعب دفعة واحدة (تخطي ${skippedCount})`
+      );
+
+      return {
+        ok: true,
+        status: 201,
+        importedCount,
+        skippedCount,
+        messageAr: `تم استيراد ${importedCount} لاعب بنجاح${skippedCount > 0 ? ` (تم تخطي ${skippedCount})` : ''}.`
+      };
+    });
+
+    if (res.ok) this.emitChange('player_added');
+    return res;
+  }
+
   updatePlayerDetails(rawToken, playerId, payload) {
     const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
     if (!auth.ok) return auth;
@@ -1466,7 +1631,8 @@ export class ArenaService {
     const drafts = buildKnockoutTreeDrafts({
       tournamentId: tournament.id,
       seededSlots,
-      tieRule: tournament.knockoutTieRule
+      tieRule: tournament.knockoutTieRule,
+      includeThirdPlace: Boolean(tournament.isThirdPlaceEnabled)
     });
 
     const tempToRealId = new Map();
@@ -1719,6 +1885,36 @@ export class ArenaService {
     }
   }
 
+  syncThirdPlaceParticipant(match, newWinnerId) {
+    if (match.stage !== MatchStage.SEMI_FINAL) return;
+    const thirdRow = this.db
+      .prepare('SELECT * FROM matches WHERE tournament_id = ? AND stage = ? LIMIT 1')
+      .get(match.tournamentId, MatchStage.THIRD_PLACE);
+    if (!thirdRow) return;
+    const thirdMatch = mapMatch(thirdRow);
+    const slot = match.bracketIndex === 0 ? 1 : 2;
+    let loserId = null;
+    if (newWinnerId != null && match.player1Id != null && match.player2Id != null) {
+      loserId = newWinnerId === match.player1Id ? match.player2Id : match.player1Id;
+    }
+    const nextP1 = slot === 1 ? loserId : thirdMatch.player1Id;
+    const nextP2 = slot === 2 ? loserId : thirdMatch.player2Id;
+    const changed = nextP1 !== thirdMatch.player1Id || nextP2 !== thirdMatch.player2Id;
+    if (changed) {
+      this.db
+        .prepare(`
+          UPDATE matches SET
+            player1_id = ?, player2_id = ?,
+            leg1_score1 = NULL, leg1_score2 = NULL,
+            leg2_score1 = NULL, leg2_score2 = NULL,
+            penalty_score1 = NULL, penalty_score2 = NULL,
+            is_completed = 0, is_walkover = 0, walkover_reason = NULL, winner_id = NULL
+          WHERE id = ?
+        `)
+        .run(nextP1 ?? null, nextP2 ?? null, thirdMatch.id);
+    }
+  }
+
   updateMatchScore(rawToken, matchId, payload) {
     const auth = this.requirePermission(rawToken, 'EDIT_SCORES');
     if (!auth.ok) return auth;
@@ -1753,7 +1949,7 @@ export class ArenaService {
             leg1_score1 = ?, leg1_score2 = ?,
             leg2_score1 = ?, leg2_score2 = ?,
             penalty_score1 = ?, penalty_score2 = ?,
-            is_completed = ?, winner_id = ?
+            is_completed = ?, is_walkover = 0, walkover_reason = NULL, winner_id = ?
           WHERE id = ?
         `)
         .run(
@@ -1775,6 +1971,7 @@ export class ArenaService {
       if (match.nextMatchId != null) {
         this.propagateWinnerAndResetIfChanged(match.nextMatchId, match.nextMatchSlot, oldWinnerId, resolution.winnerId ?? null);
       }
+      this.syncThirdPlaceParticipant(match, resolution.winnerId ?? null);
 
       if (match.stage === MatchStage.FINAL) {
         const t = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(match.tournamentId));
@@ -1789,6 +1986,12 @@ export class ArenaService {
         }
       }
 
+      this.logAudit(
+        auth.session.rawAdmin,
+        match.tournamentId,
+        'UPDATE_SCORE',
+        `تحديث نتيجة مباراة #${match.id} (${leg1S1 ?? '-'} : ${leg1S2 ?? '-'})`
+      );
       return { ok: true, status: 200, messageAr: 'تم حفظ النتيجة وتحديث المخطط بنجاح.' };
     });
 
@@ -1856,6 +2059,7 @@ export class ArenaService {
       if (match.nextMatchId != null) {
         this.propagateWinnerAndResetIfChanged(match.nextMatchId, match.nextMatchSlot, oldWinnerId, chosenWinnerId);
       }
+      this.syncThirdPlaceParticipant(match, chosenWinnerId);
 
       if (match.stage === MatchStage.FINAL) {
         if (chosenWinnerId == null) {
@@ -1875,7 +2079,203 @@ export class ArenaService {
           : match.stage === MatchStage.FINAL
           ? 'تم اعتماد الفائز بالنهائي وتتويجه بطلاً للبطولة!'
           : 'تم تحديث الفائز وتأهيله للدور التالي بنجاح.';
+      this.logAudit(auth.session.rawAdmin, match.tournamentId, 'SELECT_WINNER', msg);
       return { ok: true, status: 200, messageAr: msg };
+    });
+
+    if (res.ok) this.emitChange('match_updated');
+    return res;
+  }
+
+  autoScheduleMatches(rawToken, tournamentId, { startAtMillis, intervalMinutes = 30, onlyUnscheduled = false } = {}) {
+    const auth = this.requirePermission(rawToken, 'EDIT_SCORES');
+    if (!auth.ok) return auth;
+
+    const baseStart = Number.isFinite(Number(startAtMillis)) ? Number(startAtMillis) : Date.now() + 15 * 60_000;
+    const stepMinutes = Math.max(5, Math.min(240, Number(intervalMinutes) || 30));
+
+    const res = this.withTx(() => {
+      const tournament = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(Number(tournamentId)));
+      if (!tournament) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
+
+      const candidates = this.db
+        .prepare('SELECT * FROM matches WHERE tournament_id = ? AND is_completed = 0 ORDER BY round_number ASC, bracket_index ASC, id ASC')
+        .all(tournament.id)
+        .filter((m) => (!onlyUnscheduled ? true : m.scheduled_at_millis == null));
+
+      if (candidates.length === 0) {
+        return { ok: false, status: 400, error: 'لا توجد مباريات غير مكتملة لتحديد مواعيدها.' };
+      }
+
+      const stmt = this.db.prepare('UPDATE matches SET scheduled_at_millis = ?, scheduled_label = ? WHERE id = ?');
+      candidates.forEach((m, idx) => {
+        const ts = baseStart + idx * stepMinutes * 60_000;
+        const label = new Date(ts).toLocaleString('ar-EG', {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        stmt.run(ts, label, m.id);
+      });
+
+      this.logAudit(
+        auth.session.rawAdmin,
+        tournament.id,
+        'AUTO_SCHEDULE',
+        `جدولة ${candidates.length} مباراة تلقائياً (كل ${stepMinutes} دقيقة)`
+      );
+      return {
+        ok: true,
+        status: 200,
+        scheduledCount: candidates.length,
+        messageAr: `تم تحديد مواعيد ${candidates.length} مباراة تلقائياً (كل ${stepMinutes} دقيقة).`
+      };
+    });
+
+    if (res.ok) this.emitChange('match_updated');
+    return res;
+  }
+
+  toggleMatchCheckIn(matchId, slot) {
+    const slotNum = Number(slot);
+    if (slotNum !== 1 && slotNum !== 2) {
+      return { ok: false, status: 400, error: 'طرف المباراة غير صالح.' };
+    }
+    const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+    if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+    if (row.is_completed) return { ok: false, status: 400, error: 'المباراة منتهية بالفعل.' };
+    if (row.player1_id == null || row.player2_id == null) {
+      return { ok: false, status: 400, error: 'بانتظار تحديد طرفي المباراة.' };
+    }
+
+    const col = slotNum === 1 ? 'p1_checked_in' : 'p2_checked_in';
+    const nextVal = row[col] ? 0 : 1;
+    this.db.prepare(`UPDATE matches SET ${col} = ? WHERE id = ?`).run(nextVal, row.id);
+    this.emitChange('match_updated');
+    return {
+      ok: true,
+      status: 200,
+      checkedIn: Boolean(nextVal),
+      messageAr: nextVal ? 'تم تأكيد جاهزية اللاعب ✓' : 'تم إلغاء حالة الجاهزية.'
+    };
+  }
+
+  voteMatchPrediction(matchId, slot) {
+    const slotNum = Number(slot);
+    if (slotNum !== 1 && slotNum !== 2) {
+      return { ok: false, status: 400, error: 'خيار التصويت غير صالح.' };
+    }
+    const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+    if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+    if (row.is_completed) return { ok: false, status: 400, error: 'تم إغلاق التصويت بانتهاء المباراة.' };
+    if (row.player1_id == null || row.player2_id == null) {
+      return { ok: false, status: 400, error: 'بانتظار تحديد طرفي المباراة.' };
+    }
+
+    const col = slotNum === 1 ? 'votes_p1' : 'votes_p2';
+    this.db.prepare(`UPDATE matches SET ${col} = COALESCE(${col}, 0) + 1 WHERE id = ?`).run(row.id);
+    this.emitChange('match_updated');
+    return { ok: true, status: 200, messageAr: 'تم تسجيل توقعك بنجاح!' };
+  }
+
+  submitMatchDispute(matchId, { submittedBy, note, screenshotUrl = null } = {}) {
+    const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+    if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+    const cleanBy = String(submittedBy || '').trim().slice(0, 60);
+    const cleanNote = String(note || '').trim().slice(0, 500);
+    if (!cleanBy || !cleanNote) {
+      return { ok: false, status: 400, error: 'يرجى إدخال اسم مقدّم الطعن وتفاصيل النتيجة.' };
+    }
+    const cleanUrl = screenshotUrl ? String(screenshotUrl).trim().slice(0, 300) : null;
+
+    this.db
+      .prepare(`
+        UPDATE matches SET
+          dispute_status = 'OPEN',
+          dispute_submitted_by = ?,
+          dispute_note = ?,
+          dispute_screenshot_url = ?,
+          dispute_resolution_note = NULL
+        WHERE id = ?
+      `)
+      .run(cleanBy, cleanNote, cleanUrl, row.id);
+
+    this.emitChange('match_updated');
+    return { ok: true, status: 200, messageAr: 'تم إرسال الإثبات / الطعن لمراجعة المشرفين.' };
+  }
+
+  resolveMatchDispute(rawToken, matchId, { resolutionNote = '' } = {}) {
+    const auth = this.requirePermission(rawToken, 'EDIT_SCORES');
+    if (!auth.ok) return auth;
+
+    const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+    if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+
+    const cleanNote = String(resolutionNote || '').trim().slice(0, 300) || 'تمت المراجعة وحسم النتيجة من المشرف';
+    this.db
+      .prepare("UPDATE matches SET dispute_status = 'RESOLVED', dispute_resolution_note = ? WHERE id = ?")
+      .run(cleanNote, row.id);
+
+    this.logAudit(auth.session.rawAdmin, row.tournament_id, 'RESOLVE_DISPUTE', `حسم طعن المباراة #${row.id}: ${cleanNote}`);
+    this.emitChange('match_updated');
+    return { ok: true, status: 200, messageAr: 'تم حسم الطعن وإغلاقه بنجاح.' };
+  }
+
+  applyMatchWalkover(rawToken, matchId, { winnerSlot, reason = '' } = {}) {
+    const auth = this.requirePermission(rawToken, 'EDIT_SCORES');
+    if (!auth.ok) return auth;
+
+    const slotNum = Number(winnerSlot);
+    if (slotNum !== 1 && slotNum !== 2) {
+      return { ok: false, status: 400, error: 'يرجى اختيار الطرف الفائز بالانسحاب.' };
+    }
+
+    const res = this.withTx(() => {
+      const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+      if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+      const match = mapMatch(row);
+      if (match.player1Id == null || match.player2Id == null) {
+        return { ok: false, status: 400, error: 'لا يمكن احتساب انسحاب قبل تحديد طرفي المباراة.' };
+      }
+
+      const winnerId = slotNum === 1 ? match.player1Id : match.player2Id;
+      const s1 = slotNum === 1 ? 3 : 0;
+      const s2 = slotNum === 2 ? 3 : 0;
+      const cleanReason = String(reason || '').trim().slice(0, 120) || 'عدم الحضور في الموعد';
+      const oldWinnerId = match.winnerId;
+
+      this.db
+        .prepare(`
+          UPDATE matches SET
+            leg1_score1 = ?, leg1_score2 = ?,
+            leg2_score1 = NULL, leg2_score2 = NULL,
+            penalty_score1 = NULL, penalty_score2 = NULL,
+            is_completed = 1, is_walkover = 1, walkover_reason = ?,
+            winner_id = ?
+          WHERE id = ?
+        `)
+        .run(s1, s2, cleanReason, winnerId, match.id);
+
+      this.db.prepare('DELETE FROM match_reminders WHERE match_id = ?').run(match.id);
+      if (match.nextMatchId != null) {
+        this.propagateWinnerAndResetIfChanged(match.nextMatchId, match.nextMatchSlot, oldWinnerId, winnerId);
+      }
+      this.syncThirdPlaceParticipant(match, winnerId);
+
+      if (match.stage === MatchStage.FINAL) {
+        this.db
+          .prepare('UPDATE tournaments SET champion_player_id = ?, status = ? WHERE id = ?')
+          .run(winnerId, TournamentStatus.COMPLETED, match.tournamentId);
+      }
+
+      this.logAudit(
+        auth.session.rawAdmin,
+        match.tournamentId,
+        'WALKOVER',
+        `احتساب فوز بالانسحاب (3-0) في المباراة #${match.id}: ${cleanReason}`
+      );
+      return { ok: true, status: 200, messageAr: 'تم احتساب الفوز بالانسحاب (3-0) وتحديث الجدول.' };
     });
 
     if (res.ok) this.emitChange('match_updated');
@@ -1983,6 +2383,7 @@ export class ArenaService {
     const matchReminders = this.db.prepare('SELECT * FROM match_reminders ORDER BY id ASC').all();
     const adminAccounts = this.db.prepare('SELECT * FROM admin_accounts ORDER BY id ASC').all();
     const revokedAdmins = this.db.prepare('SELECT * FROM revoked_admins ORDER BY revoked_at ASC').all();
+    const adminAuditLogs = this.db.prepare('SELECT * FROM admin_audit_logs ORDER BY id ASC').all();
     const appMeta = this.db
       .prepare("SELECT key, value FROM app_meta WHERE key != 'server_session_secret' ORDER BY key ASC")
       .all();
@@ -1991,7 +2392,7 @@ export class ArenaService {
       ok: true,
       status: 200,
       backup: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         app: 'CP4_ARENA',
         exportedAt: Date.now(),
         tournaments,
@@ -2001,6 +2402,7 @@ export class ArenaService {
         matchReminders,
         adminAccounts,
         revokedAdmins,
+        adminAuditLogs,
         appMeta,
         mediaFiles: Array.isArray(mediaItems) ? mediaItems : []
       }
@@ -2029,6 +2431,7 @@ export class ArenaService {
     const matchReminders = Array.isArray(backup.matchReminders) ? backup.matchReminders : [];
     const adminAccounts = Array.isArray(backup.adminAccounts) ? backup.adminAccounts : [];
     const revokedAdmins = Array.isArray(backup.revokedAdmins) ? backup.revokedAdmins : [];
+    const adminAuditLogs = Array.isArray(backup.adminAuditLogs) ? backup.adminAuditLogs : [];
     const appMeta = Array.isArray(backup.appMeta) ? backup.appMeta : [];
     const subAdminsRestoredCount = adminAccounts.filter((a) => a.role === AdminRole.SUB_ADMIN).length;
 
@@ -2040,6 +2443,7 @@ export class ArenaService {
       this.db.prepare('DELETE FROM tournaments').run();
       this.db.prepare('DELETE FROM revoked_tokens').run();
       this.db.prepare('DELETE FROM revoked_admins').run();
+      this.db.prepare('DELETE FROM admin_audit_logs').run();
       this.db.prepare('DELETE FROM auth_lockout').run();
       this.db.prepare("DELETE FROM app_meta WHERE key != 'server_session_secret'").run();
 
@@ -2048,8 +2452,9 @@ export class ArenaService {
           id, name, game_title, game_category, score_unit_label, description,
           banner_url, start_date_time, max_participants, format, group_count,
           qualifiers_per_group, draw_mode, knockout_tie_rule, match_duration_minutes,
-          target_goals_rule, is_registration_closed_manual, status, champion_player_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          target_goals_rule, is_registration_closed_manual, is_third_place_enabled,
+          status, champion_player_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const t of backup.tournaments) {
         insertTournament.run(
@@ -2070,6 +2475,7 @@ export class ArenaService {
           Number(t.match_duration_minutes) || 12,
           String(t.target_goals_rule || ''),
           t.is_registration_closed_manual ? 1 : 0,
+          t.is_third_place_enabled === undefined ? 1 : t.is_third_place_enabled ? 1 : 0,
           String(t.status || TournamentStatus.REGISTRATION_OPEN),
           t.champion_player_id != null ? Number(t.champion_player_id) : null,
           Number(t.created_at) || Date.now()
@@ -2111,8 +2517,11 @@ export class ArenaService {
           id, tournament_id, stage, group_id, round_number, bracket_index,
           player1_id, player2_id, leg1_score1, leg1_score2, leg2_score1, leg2_score2,
           penalty_score1, penalty_score2, is_two_legged, is_completed, winner_id,
-          next_match_id, next_match_slot, scheduled_label, scheduled_at_millis
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          next_match_id, next_match_slot, scheduled_label, scheduled_at_millis,
+          p1_checked_in, p2_checked_in, votes_p1, votes_p2,
+          is_walkover, walkover_reason, dispute_status, dispute_note,
+          dispute_submitted_by, dispute_screenshot_url, dispute_resolution_note
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const m of backup.matches) {
         insertMatch.run(
@@ -2136,7 +2545,18 @@ export class ArenaService {
           m.next_match_id != null ? Number(m.next_match_id) : null,
           Number(m.next_match_slot) || 1,
           String(m.scheduled_label || ''),
-          m.scheduled_at_millis ?? null
+          m.scheduled_at_millis ?? null,
+          m.p1_checked_in ? 1 : 0,
+          m.p2_checked_in ? 1 : 0,
+          Number(m.votes_p1) || 0,
+          Number(m.votes_p2) || 0,
+          m.is_walkover ? 1 : 0,
+          m.walkover_reason ?? null,
+          String(m.dispute_status || 'NONE'),
+          m.dispute_note ?? null,
+          m.dispute_submitted_by ?? null,
+          m.dispute_screenshot_url ?? null,
+          m.dispute_resolution_note ?? null
         );
       }
 
@@ -2230,6 +2650,24 @@ export class ArenaService {
             .run(String(meta.key), String(meta.value ?? ''));
         }
       }
+
+      const insertAudit = this.db.prepare(`
+        INSERT INTO admin_audit_logs (
+          id, tournament_id, actor_username, actor_display_name, action_type, summary_ar, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const log of adminAuditLogs) {
+        insertAudit.run(
+          Number(log.id),
+          log.tournament_id != null ? Number(log.tournament_id) : null,
+          String(log.actor_username || 'admin'),
+          String(log.actor_display_name || 'المشرف'),
+          String(log.action_type || 'ACTION'),
+          String(log.summary_ar || ''),
+          Number(log.created_at) || Date.now()
+        );
+      }
+
       this.db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_tournament_seeded', '1')").run();
 
       for (const table of [
@@ -2238,7 +2676,8 @@ export class ArenaService {
         'players',
         'matches',
         'match_reminders',
-        'admin_accounts'
+        'admin_accounts',
+        'admin_audit_logs'
       ]) {
         const maxRow = this.db.prepare(`SELECT COALESCE(MAX(id), 0) AS max_id FROM ${table}`).get();
         this.db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);

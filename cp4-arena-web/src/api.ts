@@ -345,6 +345,71 @@ export async function updateKnockoutWinnerApi(matchId: number, winnerPlayerId: n
   });
 }
 
+export async function bulkImportPlayersApi(
+  tournamentId: number,
+  linesText: string,
+  status: 'APPROVED' | 'PENDING'
+) {
+  return apiRequest<{ ok: boolean; importedCount: number; skippedCount: number; messageAr: string }>(
+    `/api/tournaments/${tournamentId}/players/bulk`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ linesText, status })
+    }
+  );
+}
+
+export async function autoScheduleMatchesApi(
+  tournamentId: number,
+  payload: { startAtMillis?: number; intervalMinutes?: number; onlyUnscheduled?: boolean }
+) {
+  return apiRequest<{ ok: boolean; scheduledCount: number; messageAr: string }>(
+    `/api/tournaments/${tournamentId}/auto-schedule`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function toggleMatchCheckInApi(matchId: number, slot: 1 | 2) {
+  return apiRequest<{ ok: boolean; checkedIn: boolean; messageAr: string }>(`/api/matches/${matchId}/check-in`, {
+    method: 'POST',
+    body: JSON.stringify({ slot })
+  });
+}
+
+export async function voteMatchPredictionApi(matchId: number, slot: 1 | 2) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/matches/${matchId}/vote`, {
+    method: 'POST',
+    body: JSON.stringify({ slot })
+  });
+}
+
+export async function submitMatchDisputeApi(
+  matchId: number,
+  payload: { submittedBy: string; note: string; screenshotUrl?: string | null }
+) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/matches/${matchId}/dispute`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function resolveMatchDisputeApi(matchId: number, resolutionNote: string) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/matches/${matchId}/dispute/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ resolutionNote })
+  });
+}
+
+export async function walkoverMatchApi(matchId: number, winnerSlot: 1 | 2, reason: string) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/matches/${matchId}/walkover`, {
+    method: 'POST',
+    body: JSON.stringify({ winnerSlot, reason })
+  });
+}
+
 export async function crownChampionApi(tournamentId: number, playerId: number | null) {
   return apiRequest<{ ok: boolean; messageAr: string }>(`/api/tournaments/${tournamentId}/champion`, {
     method: 'POST',

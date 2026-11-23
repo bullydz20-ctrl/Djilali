@@ -163,51 +163,10 @@ export function openDatabase(customPath) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
-
-    CREATE TABLE IF NOT EXISTS audit_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      admin_id INTEGER,
-      admin_username TEXT NOT NULL,
-      admin_display_name TEXT NOT NULL,
-      action_type TEXT NOT NULL,
-      summary_ar TEXT NOT NULL,
-      tournament_id INTEGER,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS match_predictions (
-      match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
-      voter_key TEXT NOT NULL,
-      picked_slot INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (match_id, voter_key)
-    );
   `);
 
-  ensureSchemaMigrations(db);
   ensureSeedData(db);
   return db;
-}
-
-function ensureColumn(db, tableName, columnName, columnDef) {
-  const cols = db.prepare(`PRAGMA table_info(${tableName})`).all();
-  if (!cols.some((c) => c.name === columnName)) {
-    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef}`);
-  }
-}
-
-function ensureSchemaMigrations(db) {
-  ensureColumn(db, 'tournaments', 'is_third_place_enabled', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'matches', 'p1_checked_in', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'matches', 'p2_checked_in', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'matches', 'is_walkover', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'matches', 'walkover_reason', "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, 'matches', 'dispute_note', "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, 'matches', 'dispute_screenshot_url', 'TEXT');
-  ensureColumn(db, 'matches', 'dispute_submitted_by', "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, 'matches', 'dispute_status', "TEXT NOT NULL DEFAULT 'NONE'");
-  ensureColumn(db, 'matches', 'votes_p1', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'matches', 'votes_p2', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 function ensureSeedData(db) {
@@ -300,6 +259,77 @@ function ensureSeedData(db) {
           pin_updated_at, is_active, last_login_at, created_at
         ) VALUES (?, ?, ?, ?, ?, 1, 1, 1, 1, 1, ?, 0, 1, NULL, ?)
       `).run(envUsername, envUsername, AdminRole.HEAD_ADMIN, pHash, salt, permHash, now);
+    }
+  }
+
+  // Optional env-configured Sub-Admins seeding (JSON array) for zero-DB / ephemeral resilience
+  const rawSubAdminsJson = process.env.CP4_SUB_ADMINS_JSON?.trim();
+  if (rawSubAdminsJson) {
+    try {
+      const parsed = JSON.parse(rawSubAdminsJson);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed.slice(0, 5)) {
+          const cleanUser = String(item?.username || '').trim();
+          const cleanDisplay = String(item?.displayName || cleanUser).trim();
+          const pin = String(item?.pin || '').trim();
+          if (cleanUser.length < 3 || !cleanDisplay || !isValidPinFormat(pin)) continue;
+
+          const exists = db
+            .prepare('SELECT id FROM admin_accounts WHERE username = ? COLLATE NOCASE')
+            .get(cleanUser);
+          const revoked = db
+            .prepare('SELECT revoked_at FROM revoked_admins WHERE username = ? COLLATE NOCASE')
+            .get(cleanUser);
+          const subCount = db.prepare('SELECT COUNT(*) AS c FROM admin_accounts WHERE role = ?').get(AdminRole.SUB_ADMIN).c;
+          if (exists || revoked || subCount >= 5) continue;
+
+          const p1 = Boolean(item.canManageTournament);
+          const p2 = Boolean(item.canManagePlayers);
+          const p3 = Boolean(item.canRunDraw);
+          const p4 = Boolean(item.canEditScores);
+          const p5 = Boolean(item.canCrownChampion);
+          const isActive = item.isActive === undefined ? true : Boolean(item.isActive);
+          const now = Date.now();
+          const salt = generateSalt();
+          const pHash = hashPin(pin, salt);
+          const permHash = computePermissionsHash({
+            username: cleanUser,
+            role: AdminRole.SUB_ADMIN,
+            canManageTournament: p1,
+            canManagePlayers: p2,
+            canRunDraw: p3,
+            canEditScores: p4,
+            canCrownChampion: p5,
+            pinSalt: salt,
+            pinHash: pHash
+          });
+
+          db.prepare(`
+            INSERT INTO admin_accounts (
+              username, display_name, role, pin_hash, pin_salt,
+              can_manage_tournament, can_manage_players, can_run_draw,
+              can_edit_scores, can_crown_champion, permissions_hash,
+              pin_updated_at, is_active, last_login_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?)
+          `).run(
+            cleanUser,
+            cleanDisplay,
+            AdminRole.SUB_ADMIN,
+            pHash,
+            salt,
+            p1 ? 1 : 0,
+            p2 ? 1 : 0,
+            p3 ? 1 : 0,
+            p4 ? 1 : 0,
+            p5 ? 1 : 0,
+            permHash,
+            isActive ? 1 : 0,
+            now
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('[CP4 ARENA] Invalid CP4_SUB_ADMINS_JSON env format:', err?.message || err);
     }
   }
 }

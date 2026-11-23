@@ -7,6 +7,7 @@ import {
   HardDrive,
   KeyRound,
   LogOut,
+  RotateCcw,
   Settings,
   Shield,
   Trophy,
@@ -14,6 +15,7 @@ import {
   UserCog,
   Users
 } from 'lucide-react';
+import { getHeadAutoBackupSummary } from '../api';
 import { EmptyStatePanel } from '../components/PlayerAvatar';
 import { adminHasPermission, evaluatePinStrengthClient } from '../types';
 import type { ArenaState, Match, PlayerLevel, PlayerStatus } from '../types';
@@ -107,6 +109,16 @@ export function AdminScreen({
   const [showOwnAccountModal, setShowOwnAccountModal] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupError, setBackupError] = useState('');
+  const autoBackup = admin?.role === 'HEAD_ADMIN' ? getHeadAutoBackupSummary() : null;
+  const serverLooksResetAfterSleep =
+    Boolean(autoBackup) &&
+    state.adminAccounts.filter((a) => a.role === 'SUB_ADMIN').length === 0 &&
+    state.players.length === 0 &&
+    state.allMatches.length === 0 &&
+    state.tournaments.length <= 1 &&
+    ((autoBackup?.subAdminsCount ?? 0) > 0 ||
+      (autoBackup?.playersCount ?? 0) > 0 ||
+      (autoBackup?.tournamentsCount ?? 0) > 1);
 
   const allowedSections: Array<{ key: SectionKey; label: string; icon: React.ReactNode }> = [];
   if (admin) {
@@ -182,6 +194,44 @@ export function AdminScreen({
           </button>
         </div>
       </div>
+
+      {admin.role === 'HEAD_ADMIN' && serverLooksResetAfterSleep && autoBackup && (
+        <div
+          className="arena-card arena-card-gold stack-col"
+          style={{ gap: 10, padding: '14px 16px', borderColor: 'rgba(245, 158, 11, 0.85)' }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--championship-gold)' }}>
+                تم رصد نسخة محفوظة على جهازك قبل سكون الخادم
+              </div>
+              <div style={{ fontSize: '0.77rem', color: 'var(--text-secondary)', marginTop: 3 }}>
+                تحتوي على: {autoBackup.tournamentsCount} بطولة • {autoBackup.playersCount} لاعب •{' '}
+                {autoBackup.subAdminsCount} حسابات مساعدين
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-gold"
+              disabled={backupBusy}
+              onClick={async () => {
+                setBackupError('');
+                setBackupBusy(true);
+                try {
+                  await onRestoreBackup(autoBackup.backup);
+                } catch (err) {
+                  setBackupError(err instanceof Error ? err.message : 'تعذر استعادة النسخة المحفوظة.');
+                } finally {
+                  setBackupBusy(false);
+                }
+              }}
+            >
+              <RotateCcw size={16} />
+              <span>{backupBusy ? 'جاري الاستعادة...' : 'استعادة البيانات وحسابات المساعدين الآن'}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {admin.role === 'HEAD_ADMIN' && state.persistence && (
         <div

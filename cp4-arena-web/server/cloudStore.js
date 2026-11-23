@@ -181,6 +181,7 @@ export function createCloudStore({ databaseUrl = resolveCloudDatabaseUrl(), adap
 
     const resolved = path.resolve(dbPath);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    const markerPath = `${resolved}.cloudmeta.json`;
 
     let shouldRestore = !fs.existsSync(resolved);
     if (!shouldRestore) {
@@ -190,10 +191,16 @@ export function createCloudStore({ databaseUrl = resolveCloudDatabaseUrl(), adap
       } else {
         const localSha = crypto.createHash('sha256').update(localBytes).digest('hex');
         if (localSha !== remote.sha256) {
-          // On a clean container wake-up, remote snapshot is canonical if file wasn't synced from it
-          // Check mtime vs remote updatedAt so stale build-baked DB never overrides newer cloud snapshot
-          const stat = fs.statSync(resolved);
-          if (remote.updatedAt > stat.mtimeMs + 1000) {
+          let localCloudVersion = 0;
+          if (fs.existsSync(markerPath)) {
+            try {
+              const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+              localCloudVersion = Number(marker.version || 0);
+            } catch {
+              localCloudVersion = 0;
+            }
+          }
+          if (remote.version >= localCloudVersion) {
             shouldRestore = true;
           }
         }
@@ -210,7 +217,16 @@ export function createCloudStore({ databaseUrl = resolveCloudDatabaseUrl(), adap
       const tmpPath = `${resolved}.cloudrestore.tmp`;
       fs.writeFileSync(tmpPath, remote.stateBlob);
       fs.renameSync(tmpPath, resolved);
-      lastSyncedSha256 = crypto.createHash('sha256').update(remote.stateBlob).digest('hex');
+      const restoredSha = crypto.createHash('sha256').update(remote.stateBlob).digest('hex');
+      lastSyncedSha256 = restoredSha;
+      try {
+        fs.writeFileSync(
+          markerPath,
+          JSON.stringify({ version: remote.version, sha256: restoredSha, updatedAt: remote.updatedAt })
+        );
+      } catch {
+        // ignore marker write errors
+      }
       return { hydrated: true, version: remote.version, bytes: remote.stateBlob.length };
     }
 
@@ -231,7 +247,7 @@ export function createCloudStore({ databaseUrl = resolveCloudDatabaseUrl(), adap
         try {
           db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
         } catch {
-          // ignore if connection is read-only or closing
+          // ignore if connection is closing
         }
 
         const resolved = path.resolve(dbPath);
@@ -252,6 +268,15 @@ export function createCloudStore({ databaseUrl = resolveCloudDatabaseUrl(), adap
           version: nextVersion,
           updatedAt: now
         });
+
+        try {
+          fs.writeFileSync(
+            `${resolved}.cloudmeta.json`,
+            JSON.stringify({ version: nextVersion, sha256, updatedAt: now })
+          );
+        } catch {
+          // ignore marker write errors
+        }
 
         lastSyncedSha256 = sha256;
         lastSyncedAt = now;
@@ -333,7 +358,7 @@ export function getPersistenceDiagnostics({ dbPath, cloudStore } = {}) {
       isDurable: true,
       labelAr: 'حفظ سحابي دائم (PostgreSQL)',
       detailAr:
-        'البطولات واللاعبون والنتائج والصور ومفاتيح المشرفين محفوظة تلقائياً في قاعدة البيانات السحابية ولن تُفقد بعد سكون الموقع.',
+        'البطولات واللاعبون والنتائج والصور وحسابات المشرفين والمساعدين محفوظة تلقائياً في قاعدة البيانات السحابية ولن تُفقد بعد سكون الموقع.',
       lastCloudSyncAt: cloudStatus.lastSyncedAt,
       cloudError: cloudStatus.lastError
     };
@@ -350,7 +375,7 @@ export function getPersistenceDiagnostics({ dbPath, cloudStore } = {}) {
       mode: 'persistent_disk',
       isDurable: true,
       labelAr: 'قرص تخزين دائم (Persistent Disk)',
-      detailAr: 'البيانات والصور محفوظة على قرص دائم خارجي على الخادم.',
+      detailAr: 'البيانات وحسابات المساعدين والصور محفوظة على قرص دائم خارجي على الخادم.',
       lastCloudSyncAt: null,
       cloudError: null
     };
@@ -370,7 +395,7 @@ export function getPersistenceDiagnostics({ dbPath, cloudStore } = {}) {
       isDurable: false,
       labelAr: 'تخزين مؤقت ⚠️ (معرّض للمسح بعد سكون الخادم)',
       detailAr:
-        'الخادم يعمل حالياً على قرص مؤقت بدون متغير DATABASE_URL. على باقة Render المجانية تُمسح البيانات بعد سكون الموقع؛ أضف قاعدة PostgreSQL مجانية (Neon أو Supabase أو Render) في متغير DATABASE_URL لحفظ دائم 100%.',
+        'الخادم يعمل حالياً على قرص مؤقت بدون DATABASE_URL؛ عند سكون Render ستفقد البيانات وحسابات المساعدين ما لم تُفعّل PostgreSQL مجاناً في DATABASE_URL (أو استخدم النسخة المحلية التلقائية أسفله للاستعادة بنقرة واحدة).',
       lastCloudSyncAt: null,
       cloudError: null
     };

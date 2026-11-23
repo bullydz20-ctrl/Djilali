@@ -411,8 +411,56 @@ function compressImageToDataUrl(file: File, maxDim: number, quality: number): Pr
   });
 }
 
+const HEAD_AUTO_BACKUP_KEY = 'cp4_head_auto_backup';
+
+export interface HeadAutoBackupSummary {
+  backup: Record<string, unknown>;
+  exportedAt: number;
+  tournamentsCount: number;
+  playersCount: number;
+  subAdminsCount: number;
+}
+
+export async function fetchBackupJsonApi(): Promise<Record<string, unknown>> {
+  return apiRequest<Record<string, unknown>>('/api/admin/backup');
+}
+
+export function saveHeadAutoBackup(backup: Record<string, unknown>) {
+  try {
+    if (typeof window === 'undefined' || !backup || typeof backup !== 'object') return;
+    window.localStorage.setItem(HEAD_AUTO_BACKUP_KEY, JSON.stringify(backup));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+export function getHeadAutoBackupSummary(): HeadAutoBackupSummary | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem(HEAD_AUTO_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || !Array.isArray(parsed.tournaments) || !Array.isArray(parsed.players)) {
+      return null;
+    }
+    const adminList = Array.isArray(parsed.adminAccounts)
+      ? (parsed.adminAccounts as Array<Record<string, unknown>>)
+      : [];
+    return {
+      backup: parsed,
+      exportedAt: Number(parsed.exportedAt) || Date.now(),
+      tournamentsCount: parsed.tournaments.length,
+      playersCount: parsed.players.length,
+      subAdminsCount: adminList.filter((a) => a.role === 'SUB_ADMIN').length
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function downloadBackupApi(): Promise<{ ok: boolean; messageAr: string }> {
-  const backup = await apiRequest<Record<string, unknown>>('/api/admin/backup');
+  const backup = await fetchBackupJsonApi();
+  saveHeadAutoBackup(backup);
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -427,8 +475,20 @@ export async function downloadBackupApi(): Promise<{ ok: boolean; messageAr: str
 }
 
 export async function restoreBackupApi(backupData: unknown) {
-  return apiRequest<{ ok: boolean; messageAr: string }>('/api/admin/restore', {
+  const res = await apiRequest<{
+    ok: boolean;
+    token?: string;
+    admin?: AdminAccount;
+    messageAr: string;
+  }>('/api/admin/restore', {
     method: 'POST',
     body: JSON.stringify(backupData)
   });
+  if (res.token) {
+    setAuthToken(res.token);
+  }
+  if (res.admin?.username) {
+    setLastAdminUsername(res.admin.username);
+  }
+  return res;
 }

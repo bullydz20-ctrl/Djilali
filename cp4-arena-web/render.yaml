@@ -13,7 +13,7 @@ services:
         value: "22"
       - key: HOST
         value: 0.0.0.0
-      # ضع رابط PostgreSQL المجاني (مثل Neon.tech أو Supabase أو Render Postgres) لحفظ البطولات واللاعبين والصور بعد سكون الموقع
+      # ضع رابط PostgreSQL المجاني (مثل Neon.tech أو Supabase أو Render Postgres) لحفظ البطولات واللاعبين وحسابات المساعدين والصور بعد سكون الموقع
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
@@ -23,4 +23,7 @@ services:
       - key: CP4_HEAD_ADMIN_USERNAME
         value: Djilali
       - key: CP4_HEAD_ADMIN_PIN
+        sync: false
+      # اختياري: قائمة JSON لحسابات المساعدين لتُنشأ تلقائياً حتى على قرص مؤقت بدون قاعدة سحابية
+      - key: CP4_SUB_ADMINS_JSON
         sync: false

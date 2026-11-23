@@ -46,7 +46,7 @@ const { app, cloudStore, shutdownResources } = await createArenaAppAsync({
 const diagnostics = getPersistenceDiagnostics({ dbPath: resolvedDbPath, cloudStore });
 console.log(`[CP4 ARENA] Persistence mode: ${diagnostics.mode} (durable=${diagnostics.isDurable})`);
 if (!diagnostics.isDurable) {
-  console.warn('[CP4 ARENA] WARNING: Running on ephemeral filesystem without DATABASE_URL. Data may be wiped when container sleeps!');
+  console.warn('[CP4 ARENA] WARNING: Running on ephemeral filesystem without DATABASE_URL. Set DATABASE_URL to keep data & sub-admins after sleep.');
 }
 
 const server = app.listen(port, host, () => {

@@ -199,7 +199,7 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null 
     }
   });
 
-  // Head Admin portable JSON Backup & Restore
+  // Head Admin portable JSON Backup & Restore (includes tournaments, players, matches, sub-admins & media)
   app.get('/api/admin/backup', (req, res) => {
     const mediaItems = mediaStore.exportAllMedia();
     const out = service.exportBackup(getBearerToken(req), mediaItems);

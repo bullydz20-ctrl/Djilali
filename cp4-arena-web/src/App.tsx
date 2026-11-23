@@ -12,6 +12,7 @@ import {
   deleteTournamentApi,
   downloadBackupApi,
   fetchArenaState,
+  fetchBackupJsonApi,
   generateKnockoutApi,
   getAuthToken,
   getLastAdminUsername,
@@ -20,6 +21,7 @@ import {
   registerPlayerApi,
   restoreBackupApi,
   runDrawApi,
+  saveHeadAutoBackup,
   scheduleReminderApi,
   setAuthToken,
   setLastAdminUsername,
@@ -116,6 +118,16 @@ export default function App() {
       }
       setState(next);
       setLoadError('');
+      if (next.currentAdmin?.role === 'HEAD_ADMIN') {
+        const hasMeaningfulData =
+          next.adminAccounts.some((a) => a.role === 'SUB_ADMIN') ||
+          next.players.length > 0 ||
+          next.allMatches.length > 0 ||
+          next.tournaments.length > 1;
+        if (hasMeaningfulData) {
+          fetchBackupJsonApi().then(saveHeadAutoBackup).catch(() => undefined);
+        }
+      }
       if (next.tournament && next.tournament.id !== tid) {
         setSelectedTournamentId(next.tournament.id);
       } else if (!next.tournament && tid !== null) {

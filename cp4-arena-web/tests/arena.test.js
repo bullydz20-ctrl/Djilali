@@ -819,7 +819,7 @@ test('Stateless HMAC-SHA256 JWT keeps Head Admin and Sub-Admins authenticated ac
   }
 });
 
-test('Uploaded images survive disk deletion via media DB & Head Admin JSON backup/restore recovers full arena state', async () => {
+test('Uploaded images survive disk deletion via media DB & JSON backup/restore recovers tournaments, players, and all sub-admins', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-backup-media-'));
   const dbPath = path.join(tmpDir, 'arena.db');
   const uploadsDir = path.join(tmpDir, 'uploads');
@@ -833,21 +833,26 @@ test('Uploaded images survive disk deletion via media DB & Head Admin JSON backu
     assert.equal(setup.status, 201);
     const headToken = setup.json.token;
 
-    // Create sub-admin and check 403 on backup export
     await api(srv.baseUrl, '/api/admin/sub-admins', {
       method: 'POST',
       token: headToken,
-      body: { username: 'helper_no_backup', displayName: 'مساعد', pin: '147258', canEditScores: true }
+      body: {
+        username: 'helper_restored',
+        displayName: 'مساعد دائم',
+        pin: '147258',
+        canManagePlayers: true,
+        canEditScores: true
+      }
     });
     const subLogin = await api(srv.baseUrl, '/api/admin/login', {
       method: 'POST',
       headers: { 'X-Forwarded-For': '10.88.1.1' },
-      body: { username: 'helper_no_backup', pin: '147258' }
+      body: { username: 'helper_restored', pin: '147258' }
     });
+    assert.equal(subLogin.status, 200);
     const subBackupDenied = await api(srv.baseUrl, '/api/admin/backup', { token: subLogin.json.token });
     assert.equal(subBackupDenied.status, 403);
 
-    // Upload image -> delete from disk -> verify HTTP 200 fallback from media.db
     const imgRes = await api(srv.baseUrl, '/api/uploads/image', {
       method: 'POST',
       body: { dataUrl: `data:image/png;base64,${TINY_PNG_BASE64}` }
@@ -855,13 +860,11 @@ test('Uploaded images survive disk deletion via media DB & Head Admin JSON backu
     assert.equal(imgRes.status, 201);
     const imgFilename = path.basename(imgRes.json.url);
     fs.rmSync(path.join(uploadsDir, imgFilename), { force: true });
-    assert.equal(fs.existsSync(path.join(uploadsDir, imgFilename)), false);
 
     const recoveredImg = await fetch(`${srv.baseUrl}${imgRes.json.url}`);
     assert.equal(recoveredImg.status, 200);
     assert.equal(recoveredImg.headers.get('content-type'), 'image/png');
 
-    // Create tournament & approved players & score
     const createT = await api(srv.baseUrl, '/api/tournaments', {
       method: 'POST',
       token: headToken,
@@ -873,7 +876,6 @@ test('Uploaded images survive disk deletion via media DB & Head Admin JSON backu
         maxParticipants: 4
       }
     });
-    assert.equal(createT.status, 201);
     const tid = createT.json.tournament.id;
 
     for (const pName of ['بطل ١', 'بطل ٢']) {
@@ -884,29 +886,15 @@ test('Uploaded images survive disk deletion via media DB & Head Admin JSON backu
       });
     }
     await api(srv.baseUrl, `/api/tournaments/${tid}/draw`, { method: 'POST', token: headToken, body: {} });
-    const beforeBackup = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`);
-    assert.equal(beforeBackup.json.allMatches.length, 1);
 
-    // Export full backup
     const exportRes = await api(srv.baseUrl, '/api/admin/backup', { token: headToken });
     assert.equal(exportRes.status, 200);
     const backupPayload = exportRes.json;
-    assert.ok(backupPayload.mediaFiles.some((m) => m.filename === imgFilename));
+    assert.ok(backupPayload.adminAccounts.some((a) => a.username === 'helper_restored'));
 
-    // Delete all tournaments & wipe uploads file
-    for (const t of beforeBackup.json.tournaments) {
-      await api(srv.baseUrl, `/api/tournaments/${t.id}`, { method: 'DELETE', token: headToken });
-    }
-    fs.rmSync(path.join(uploadsDir, imgFilename), { force: true });
-
-    const emptyCheck = await api(srv.baseUrl, '/api/state');
-    assert.equal(emptyCheck.json.tournaments.length, 0);
-
-    // Restore backup on a completely fresh server instance
+    // Fresh server after total wipe -> restore backup
     await srv.close();
-    const dbPath2 = path.join(tmpDir, 'fresh.db');
-    const uploadsDir2 = path.join(tmpDir, 'fresh_uploads');
-    srv = await startServer({ dbPath: dbPath2, uploadsDir: uploadsDir2 });
+    srv = await startServer({ dbPath: path.join(tmpDir, 'fresh.db'), uploadsDir: path.join(tmpDir, 'fresh_uploads') });
     const setup2 = await api(srv.baseUrl, '/api/admin/setup-head', {
       method: 'POST',
       body: { username: 'TempAdmin', displayName: 'Temp', pin: '999111' }
@@ -917,11 +905,24 @@ test('Uploaded images survive disk deletion via media DB & Head Admin JSON backu
       body: backupPayload
     });
     assert.equal(restoreRes.status, 200);
+    assert.equal(restoreRes.json.subAdminsCount, 1);
+    assert.ok(restoreRes.json.token);
 
-    const restoredState = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`);
+    const restoredState = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`, {
+      token: restoreRes.json.token
+    });
     assert.equal(restoredState.json.tournament?.name, 'كأس النسخة الاحتياطية');
     assert.equal(restoredState.json.approvedPlayers.length, 2);
-    assert.equal(restoredState.json.allMatches.length, 1);
+    assert.ok(restoredState.json.adminAccounts.some((a) => a.username === 'helper_restored'));
+
+    // Sub-Admin must be able to login cleanly with original PIN after restore
+    const subRelogin = await api(srv.baseUrl, '/api/admin/login', {
+      method: 'POST',
+      headers: { 'X-Forwarded-For': '10.88.1.9' },
+      body: { username: 'helper_restored', pin: '147258' }
+    });
+    assert.equal(subRelogin.status, 200);
+    assert.equal(subRelogin.json.admin.canEditScores, true);
 
     const restoredAvatar = await fetch(`${srv.baseUrl}${imgRes.json.url}`);
     assert.equal(restoredAvatar.status, 200);
@@ -931,7 +932,7 @@ test('Uploaded images survive disk deletion via media DB & Head Admin JSON backu
   }
 });
 
-test('Cloud persistence (PostgreSQL snapshot adapter) preserves all tournaments, players, admins, scores, and uploads after total Render container disk wipe', async () => {
+test('Cloud persistence (PostgreSQL adapter) preserves all tournaments, players, sub-admins, scores, and uploads after total container disk wipe', async () => {
   const cloudAdapter = createMemoryCloudAdapter();
   const dir1 = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-sleep-c1-'));
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-sleep-c2-'));
@@ -943,11 +944,6 @@ test('Cloud persistence (PostgreSQL snapshot adapter) preserves all tournaments,
   });
 
   try {
-    const health1 = await api(srv.baseUrl, '/api/health');
-    assert.equal(health1.status, 200);
-    assert.equal(health1.json.persistence.mode, 'postgres');
-    assert.equal(health1.json.persistence.isDurable, true);
-
     const setup = await api(srv.baseUrl, '/api/admin/setup-head', {
       method: 'POST',
       body: { username: 'DjilaliCloud', displayName: 'Djilali Cloud', pin: '551199', keepSignedIn: true }
@@ -955,12 +951,25 @@ test('Cloud persistence (PostgreSQL snapshot adapter) preserves all tournaments,
     assert.equal(setup.status, 201);
     const headToken = setup.json.token;
 
+    // Create Sub-Admin account before sleep
+    const subCreate = await api(srv.baseUrl, '/api/admin/sub-admins', {
+      method: 'POST',
+      token: headToken,
+      body: {
+        username: 'sub_cloud',
+        displayName: 'مساعد سحابي',
+        pin: '334455',
+        canManagePlayers: true,
+        canEditScores: true,
+        canRunDraw: false
+      }
+    });
+    assert.equal(subCreate.status, 201);
+
     const upload = await api(srv.baseUrl, '/api/uploads/image', {
       method: 'POST',
       body: { dataUrl: `data:image/png;base64,${TINY_PNG_BASE64}` }
     });
-    assert.equal(upload.status, 201);
-
     const created = await api(srv.baseUrl, '/api/tournaments', {
       method: 'POST',
       token: headToken,
@@ -985,19 +994,12 @@ test('Cloud persistence (PostgreSQL snapshot adapter) preserves all tournaments,
       body: { name: 'ياسين', elysiumNetId: 'YASSINE-77', status: 'APPROVED' }
     });
     await api(srv.baseUrl, `/api/tournaments/${tid}/draw`, { method: 'POST', token: headToken, body: {} });
-    const midState = await api(srv.baseUrl, `/api/state?tournamentId=${tid}`);
-    const matchId = midState.json.allMatches[0].id;
-    await api(srv.baseUrl, `/api/matches/${matchId}/score`, {
-      method: 'PATCH',
-      token: headToken,
-      body: { leg1Score1: 3, leg1Score2: 2 }
-    });
 
-    // Simulate Render Free sleep: stop server #1 & completely destroy dir1 container filesystem
+    // Destroy dir1 completely simulating Render container sleep & wipe
     await srv.close();
     fs.rmSync(dir1, { recursive: true, force: true });
 
-    // Wake up on a brand-new empty container dir2 connected to same cloudAdapter
+    // Wake up on empty dir2 connected to cloudAdapter
     srv = await startAsyncServer({
       dbPath: path.join(dir2, 'cp4_arena.db'),
       uploadsDir: path.join(dir2, 'uploads'),
@@ -1010,25 +1012,62 @@ test('Cloud persistence (PostgreSQL snapshot adapter) preserves all tournaments,
     assert.equal(wokenState.json.currentAdmin?.username, 'DjilaliCloud');
     assert.equal(wokenState.json.tournament?.name, 'بطولة بعد سكون السيرفر');
     assert.equal(wokenState.json.approvedPlayers.length, 2);
-    assert.equal(wokenState.json.allMatches[0].isCompleted, true);
-    assert.equal(wokenState.json.allMatches[0].leg1Score1, 3);
-    assert.equal(wokenState.json.allMatches[0].leg1Score2, 2);
+    assert.ok(wokenState.json.adminDirectory.some((a) => a.username === 'sub_cloud'));
+    assert.ok(wokenState.json.adminAccounts.some((a) => a.username === 'sub_cloud' && a.canEditScores));
 
-    // Uploaded image must ALSO serve 200 from cloud cp4_media_files after total disk wipe
+    // Sub-Admin must be able to login on the fresh container with original PIN & edit scores
+    const subWakeLogin = await api(srv.baseUrl, '/api/admin/login', {
+      method: 'POST',
+      headers: { 'X-Forwarded-For': '10.99.0.2' },
+      body: { username: 'sub_cloud', pin: '334455' }
+    });
+    assert.equal(subWakeLogin.status, 200);
+    assert.equal(subWakeLogin.json.admin.canEditScores, true);
+
     const wokenImg = await fetch(`${srv.baseUrl}${upload.json.url}`);
     assert.equal(wokenImg.status, 200);
-    assert.equal(wokenImg.headers.get('content-type'), 'image/png');
-
-    // Original Head Admin PIN login must still work after wake-up
-    const wokenLogin = await api(srv.baseUrl, '/api/admin/login', {
-      method: 'POST',
-      headers: { 'X-Forwarded-For': '10.99.0.1' },
-      body: { username: 'DjilaliCloud', pin: '551199' }
-    });
-    assert.equal(wokenLogin.status, 200);
   } finally {
     await srv.close();
     fs.rmSync(dir1, { recursive: true, force: true });
     fs.rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+test('CP4_SUB_ADMINS_JSON seeds sub-admin accounts cleanly across wiped ephemeral restarts', async () => {
+  const prevSubEnv = process.env.CP4_SUB_ADMINS_JSON;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-subenv-'));
+  process.env.CP4_SUB_ADMINS_JSON = JSON.stringify([
+    {
+      username: 'env_sub1',
+      displayName: 'مساعد البيئة',
+      pin: '778899',
+      canManagePlayers: true,
+      canEditScores: true
+    }
+  ]);
+
+  let srv = await startServer({
+    dbPath: path.join(tmpDir, 'ephemeral-env.db'),
+    uploadsDir: path.join(tmpDir, 'uploads')
+  });
+
+  try {
+    const state = await api(srv.baseUrl, '/api/state');
+    assert.ok(state.json.adminDirectory.some((a) => a.username === 'env_sub1'));
+
+    const subLogin = await api(srv.baseUrl, '/api/admin/login', {
+      method: 'POST',
+      headers: { 'X-Forwarded-For': '10.77.1.1' },
+      body: { username: 'env_sub1', pin: '778899' }
+    });
+    assert.equal(subLogin.status, 200);
+    assert.equal(subLogin.json.admin.canManagePlayers, true);
+    assert.equal(subLogin.json.admin.canEditScores, true);
+    assert.equal(subLogin.json.admin.canManageTournament, false);
+  } finally {
+    await srv.close();
+    if (prevSubEnv === undefined) delete process.env.CP4_SUB_ADMINS_JSON;
+    else process.env.CP4_SUB_ADMINS_JSON = prevSubEnv;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

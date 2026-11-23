@@ -2030,6 +2030,7 @@ export class ArenaService {
     const adminAccounts = Array.isArray(backup.adminAccounts) ? backup.adminAccounts : [];
     const revokedAdmins = Array.isArray(backup.revokedAdmins) ? backup.revokedAdmins : [];
     const appMeta = Array.isArray(backup.appMeta) ? backup.appMeta : [];
+    const subAdminsRestoredCount = adminAccounts.filter((a) => a.role === AdminRole.SUB_ADMIN).length;
 
     this.withTx(() => {
       this.db.prepare('DELETE FROM match_reminders').run();
@@ -2190,6 +2191,30 @@ export class ArenaService {
             Number(a.created_at) || Date.now()
           );
         }
+
+        // Issue a fresh session for the restored HEAD_ADMIN so the caller remains authenticated cleanly
+        const restoredHead = this.db
+          .prepare('SELECT * FROM admin_accounts WHERE role = ? ORDER BY id ASC LIMIT 1')
+          .get(AdminRole.HEAD_ADMIN);
+        if (restoredHead) {
+          const mappedHead = mapAdminRaw(restoredHead);
+          const now = Date.now();
+          const refreshedToken = signAdminJwt(mappedHead, {
+            keepSignedIn: Boolean(auth.session.keepSignedIn),
+            ttlMs: SESSION_TTL_PERSISTENT_MS,
+            secretOverride: this.db?.sessionSecret
+          });
+          const refreshedHash = hashSessionToken(refreshedToken, this.db?.sessionSecret);
+          this.db
+            .prepare(
+              'INSERT OR REPLACE INTO admin_sessions (token_hash, admin_id, keep_signed_in, expires_at, created_at) VALUES (?, ?, 1, ?, ?)'
+            )
+            .run(refreshedHash, mappedHead.id, now + SESSION_TTL_PERSISTENT_MS, now);
+          this._lastRestoredSession = {
+            token: refreshedToken,
+            admin: sanitizeAdminPublic(mappedHead)
+          };
+        }
       }
 
       for (const ra of revokedAdmins) {
@@ -2207,7 +2232,6 @@ export class ArenaService {
       }
       this.db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_tournament_seeded', '1')").run();
 
-      // Re-align sqlite_sequence so subsequent inserts get clean incremental IDs
       for (const table of [
         'tournaments',
         'tournament_groups',
@@ -2224,14 +2248,19 @@ export class ArenaService {
       }
     });
 
+    const restoredSession = this._lastRestoredSession || null;
+    this._lastRestoredSession = null;
+
     this.emitChange('backup_restored');
     return {
       ok: true,
       status: 200,
+      ...(restoredSession || {}),
       tournamentsCount: backup.tournaments.length,
       playersCount: backup.players.length,
       matchesCount: backup.matches.length,
-      messageAr: `تمت استعادة النسخة الاحتياطية بنجاح (${backup.tournaments.length} بطولة، ${backup.players.length} لاعب، ${backup.matches.length} مباراة).`
+      subAdminsCount: subAdminsRestoredCount,
+      messageAr: `تمت استعادة البيانات وحسابات المساعدين بنجاح (${backup.tournaments.length} بطولة، ${backup.players.length} لاعب، ${subAdminsRestoredCount} مساعد).`
     };
   }
 }

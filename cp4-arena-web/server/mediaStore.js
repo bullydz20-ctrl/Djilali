@@ -80,7 +80,7 @@ export function createMediaStore({ dbPath, uploadsDir, cloudStore = null } = {})
       };
     }
 
-    // 2. Local SQLite media_files fallback (restores missing uploads folder files)
+    // 2. Local SQLite media_files fallback
     const row = mediaDb
       .prepare('SELECT mime_type, data FROM media_files WHERE filename = ?')
       .get(filename);

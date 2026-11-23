@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MatchReminderEntity::class,
         AppMetaEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

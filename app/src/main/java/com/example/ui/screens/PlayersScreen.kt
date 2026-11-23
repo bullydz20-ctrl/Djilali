@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.example.data.local.PlayerEntity
 import com.example.data.model.PlayerLevel
 import com.example.ui.components.EmptyStatePanel
 import com.example.ui.components.FifaPlayerCard
@@ -68,6 +69,7 @@ import com.example.ui.viewmodel.TournamentUiState
 fun PlayersScreen(
     uiState: TournamentUiState,
     onOpenRegister: () -> Unit,
+    onPlayerClick: (PlayerEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -158,7 +160,7 @@ fun PlayersScreen(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("ابحث بالاسم أو معرف ElysiumNet...") },
+            placeholder = { Text("ابحث بالاسم أو معرف ElysiumNet/ XeMoNat...") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = CyberSky) },
             singleLine = true,
             shape = RoundedCornerShape(14.dp),
@@ -182,7 +184,7 @@ fun PlayersScreen(
                     subtitle = if (uiState.approvedPlayers.isEmpty()) {
                         "يمكن للاعبين إرسال طلبات التسجيل، وستظهر بطاقاتهم الاحترافية هنا فور اعتمادها من المشرف."
                     } else {
-                        "جرّب البحث باسم آخر أو بمعرف ElysiumNet."
+                        "جرّب البحث باسم آخر أو بمعرف ElysiumNet/ XeMoNat."
                     },
                     actionLabel = if (uiState.isRegistrationOpenNow && uiState.approvedPlayers.isEmpty()) "تسجيل أول لاعب" else null,
                     onAction = if (uiState.isRegistrationOpenNow && uiState.approvedPlayers.isEmpty()) onOpenRegister else null
@@ -201,7 +203,8 @@ fun PlayersScreen(
                         player = player,
                         stats = statsById[player.id],
                         scoreUnitLabel = scoreUnit,
-                        isChampion = uiState.championPlayer?.id == player.id
+                        isChampion = uiState.championPlayer?.id == player.id,
+                        onClick = { onPlayerClick(player) }
                     )
                 }
             }
@@ -296,7 +299,7 @@ fun RegisterPlayerDialog(
                 OutlinedTextField(
                     value = elysiumId,
                     onValueChange = { elysiumId = it },
-                    label = { Text("معرف اللاعب في ElysiumNet *") },
+                    label = { Text("معرف اللاعب في ElysiumNet/ XeMoNat *") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()

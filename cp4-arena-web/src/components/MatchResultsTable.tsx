@@ -1,5 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Bell, BellRing, Check, Edit3, Minus, Plus, Trophy, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  Bell,
+  BellRing,
+  Check,
+  CheckCircle2,
+  Edit3,
+  Flag,
+  Minus,
+  Plus,
+  Trophy,
+  X
+} from 'lucide-react';
 import { STAGE_LABELS } from '../types';
 import type { Match, MatchReminder, Player } from '../types';
 import { PlayerAvatar } from './PlayerAvatar';
@@ -15,6 +27,9 @@ interface MatchResultsTableProps {
   onQuickUpdateGoals: (match: Match, p1Goals: number, p2Goals: number) => void;
   onOpenDetailedEditor: (match: Match) => void;
   onOpenReminder?: (match: Match) => void;
+  onToggleCheckIn?: (match: Match, playerSlot: 1 | 2) => void;
+  onVotePrediction?: (match: Match, pickedSlot: 1 | 2) => void;
+  onOpenDispute?: (match: Match) => void;
   title?: string;
   showFilters?: boolean;
   maxVisibleRows?: number;
@@ -29,6 +44,9 @@ export function MatchResultsTable({
   onQuickUpdateGoals,
   onOpenDetailedEditor,
   onOpenReminder,
+  onToggleCheckIn,
+  onVotePrediction,
+  onOpenDispute,
   title = 'جدول نتائج المباريات الحالية',
   showFilters = true,
   maxVisibleRows
@@ -117,6 +135,9 @@ export function MatchResultsTable({
               onQuickUpdateGoals={onQuickUpdateGoals}
               onOpenDetailedEditor={onOpenDetailedEditor}
               onOpenReminder={onOpenReminder}
+              onToggleCheckIn={onToggleCheckIn}
+              onVotePrediction={onVotePrediction}
+              onOpenDispute={onOpenDispute}
             />
           ))}
         </div>
@@ -133,7 +154,10 @@ function MatchRow({
   reminder,
   onQuickUpdateGoals,
   onOpenDetailedEditor,
-  onOpenReminder
+  onOpenReminder,
+  onToggleCheckIn,
+  onVotePrediction,
+  onOpenDispute
 }: {
   match: Match;
   player1: Player | null;
@@ -143,6 +167,9 @@ function MatchRow({
   onQuickUpdateGoals: (match: Match, g1: number, g2: number) => void;
   onOpenDetailedEditor: (match: Match) => void;
   onOpenReminder?: (match: Match) => void;
+  onToggleCheckIn?: (match: Match, playerSlot: 1 | 2) => void;
+  onVotePrediction?: (match: Match, pickedSlot: 1 | 2) => void;
+  onOpenDispute?: (match: Match) => void;
 }) {
   const [draftP1, setDraftP1] = useState<number | null>(match.leg1Score1);
   const [draftP2, setDraftP2] = useState<number | null>(match.leg1Score2);
@@ -225,6 +252,40 @@ function MatchRow({
             </span>
           )}
 
+          {match.isWalkover && (
+            <span
+              style={{
+                padding: '2px 7px',
+                borderRadius: 6,
+                background: 'rgba(245, 184, 46, 0.18)',
+                color: 'var(--championship-gold)',
+                fontSize: '0.7rem',
+                fontWeight: 700
+              }}
+            >
+              انسحاب 3-0
+            </span>
+          )}
+
+          {match.disputeStatus !== 'NONE' && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 7px',
+                borderRadius: 6,
+                background: match.disputeStatus === 'OPEN' ? 'rgba(239,68,68,0.18)' : 'rgba(16,185,129,0.18)',
+                color: match.disputeStatus === 'OPEN' ? 'var(--crimson-loss)' : 'var(--emerald-win)',
+                fontSize: '0.7rem',
+                fontWeight: 700
+              }}
+            >
+              <AlertTriangle size={12} />
+              <span>{match.disputeStatus === 'OPEN' ? 'طعن مفتوح' : 'تم الحسم'}</span>
+            </span>
+          )}
+
           <span
             style={{
               padding: '2px 8px',
@@ -237,6 +298,23 @@ function MatchRow({
           >
             {statusText}
           </span>
+
+          {onOpenDispute && bothReady && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => onOpenDispute(match)}
+              title="إثبات النتيجة أو رفع طعن"
+              style={{
+                minWidth: 34,
+                minHeight: 34,
+                padding: 5,
+                color: match.disputeStatus === 'OPEN' ? 'var(--crimson-loss)' : 'var(--text-secondary)'
+              }}
+            >
+              <Flag size={14} />
+            </button>
+          )}
 
           {onOpenReminder && !match.isCompleted && bothReady && (
             <button
@@ -378,6 +456,78 @@ function MatchRow({
           />
         </div>
       )}
+
+      {bothReady && !match.isCompleted && onToggleCheckIn && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className={`chip ${match.p1CheckedIn ? 'selected' : ''}`}
+            style={{ minHeight: 30, padding: '3px 10px', fontSize: '0.73rem' }}
+            onClick={() => onToggleCheckIn(match, 1)}
+          >
+            <CheckCircle2 size={13} />
+            <span>{match.p1CheckedIn ? `${player1?.name}: جاهز ✓` : `تأكيد جاهزية ${player1?.name}`}</span>
+          </button>
+          <button
+            type="button"
+            className={`chip ${match.p2CheckedIn ? 'selected' : ''}`}
+            style={{ minHeight: 30, padding: '3px 10px', fontSize: '0.73rem' }}
+            onClick={() => onToggleCheckIn(match, 2)}
+          >
+            <CheckCircle2 size={13} />
+            <span>{match.p2CheckedIn ? `${player2?.name}: جاهز ✓` : `تأكيد جاهزية ${player2?.name}`}</span>
+          </button>
+        </div>
+      )}
+
+      {bothReady && (onVotePrediction || match.votesP1 + match.votesP2 > 0) && (() => {
+        const totalVotes = (match.votesP1 || 0) + (match.votesP2 || 0);
+        const pct1 = totalVotes > 0 ? Math.round(((match.votesP1 || 0) / totalVotes) * 100) : 50;
+        const pct2 = totalVotes > 0 ? 100 - pct1 : 50;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, fontSize: '0.72rem' }}>
+              <button
+                type="button"
+                disabled={!onVotePrediction || match.isCompleted}
+                onClick={() => onVotePrediction?.(match, 1)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  padding: '2px 4px',
+                  color: 'var(--cyber-sky)',
+                  fontWeight: 700,
+                  cursor: !onVotePrediction || match.isCompleted ? 'default' : 'pointer'
+                }}
+              >
+                توقع {player1?.name} ({pct1}%)
+              </button>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                تصويت الجمهور ({totalVotes})
+              </span>
+              <button
+                type="button"
+                disabled={!onVotePrediction || match.isCompleted}
+                onClick={() => onVotePrediction?.(match, 2)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  padding: '2px 4px',
+                  color: 'var(--championship-gold)',
+                  fontWeight: 700,
+                  cursor: !onVotePrediction || match.isCompleted ? 'default' : 'pointer'
+                }}
+              >
+                توقع {player2?.name} ({pct2}%)
+              </button>
+            </div>
+            <div style={{ height: 5, borderRadius: 999, background: 'var(--elevated-navy)', overflow: 'hidden', display: 'flex' }}>
+              <div style={{ width: `${pct1}%`, background: 'var(--electric-cobalt)', transition: 'width 0.25s ease' }} />
+              <div style={{ width: `${pct2}%`, background: 'var(--championship-gold)', transition: 'width 0.25s ease' }} />
+            </div>
+          </div>
+        );
+      })()}
 
       {canEdit && hasDraftChanges && (
         <div style={{ display: 'flex', gap: 8 }}>

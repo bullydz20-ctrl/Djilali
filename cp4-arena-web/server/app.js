@@ -299,6 +299,53 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
     res.status(out.status).json(out);
   });
 
+  // Match Check-in, Predictions & Dispute / Proof
+  app.post('/api/matches/:id/checkin', (req, res) => {
+    const out = service.toggleMatchCheckIn(Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/predict', (req, res) => {
+    const out = service.voteMatchPrediction(Number(req.params.id), {
+      ...(req.body || {}),
+      voterKey: req.body?.voterKey || getClientKey(req)
+    });
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/dispute', (req, res) => {
+    const out = service.submitMatchDispute(Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/dispute/resolve', (req, res) => {
+    const out = service.resolveMatchDispute(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/matches/:id/walkover', (req, res) => {
+    const out = service.adminWalkoverMatch(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
+  // Bulk Player Import & One-Tap Auto-Scheduler
+  app.post('/api/tournaments/:id/players/bulk', (req, res) => {
+    const out = service.bulkImportPlayers(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/tournaments/:id/schedule-matches', (req, res) => {
+    const out = service.autoScheduleMatches(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.status(out.status).json(out);
+  });
+
   // Production SPA static serving
   const resolvedDistDir = path.resolve(distDir || path.resolve(process.cwd(), 'dist'));
   if (fs.existsSync(resolvedDistDir)) {

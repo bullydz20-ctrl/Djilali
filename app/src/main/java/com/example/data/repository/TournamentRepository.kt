@@ -310,10 +310,10 @@ class TournamentRepository(
         val cleanName = name.trim()
         val cleanElysium = elysiumNetId.trim()
         if (cleanName.isEmpty() || cleanElysium.isEmpty()) {
-            return RepoResult.Error("يرجى إدخال اسم اللاعب ومعرف ElysiumNet.")
+            return RepoResult.Error("يرجى إدخال اسم اللاعب ومعرف ElysiumNet/ XeMoNat.")
         }
         if (playerDao.countByElysiumId(tournamentId, cleanElysium) > 0) {
-            return RepoResult.Error("معرف ElysiumNet مسجل مسبقاً في هذه البطولة.")
+            return RepoResult.Error("معرف ElysiumNet/ XeMoNat مسجل مسبقاً في هذه البطولة.")
         }
 
         playerDao.insertPlayer(
@@ -357,7 +357,7 @@ class TournamentRepository(
 
     suspend fun updatePlayerDetails(player: PlayerEntity): RepoResult<Unit> {
         if (player.name.isBlank() || player.elysiumNetId.isBlank()) {
-            return RepoResult.Error("الاسم ومعرف ElysiumNet مطلوبان.")
+            return RepoResult.Error("الاسم ومعرف ElysiumNet/ XeMoNat مطلوبان.")
         }
         playerDao.updatePlayer(player)
         return RepoResult.Success(Unit, "تم تحديث بيانات اللاعب.")

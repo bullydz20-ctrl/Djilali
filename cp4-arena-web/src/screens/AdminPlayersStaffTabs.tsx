@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Edit3, ImagePlus, Plus, Trash2, Trophy, UserPlus, X } from 'lucide-react';
+import { CalendarClock, Check, Edit3, FileSpreadsheet, History, ImagePlus, Plus, Trash2, Trophy, UserPlus, X } from 'lucide-react';
 import { uploadImageFileApi } from '../api';
 import { MatchResultsTable } from '../components/MatchResultsTable';
 import { PlayerAvatar } from '../components/PlayerAvatar';
@@ -14,6 +14,7 @@ import type { AdminAccount, ArenaState, Match, Player, PlayerLevel, PlayerStatus
 export function AdminPlayersTab({
   state,
   onAdminAddPlayer,
+  onBulkImport,
   onStatusChange,
   onUpdateDetails,
   onDeletePlayer
@@ -28,29 +29,42 @@ export function AdminPlayersTab({
     clubName: string;
     status: PlayerStatus;
   }) => Promise<void>;
+  onBulkImport: (linesText: string, status: 'APPROVED' | 'PENDING') => Promise<void>;
   onStatusChange: (id: number, status: PlayerStatus) => Promise<void>;
   onUpdateDetails: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onDeletePlayer: (id: number) => Promise<void>;
 }) {
   const [editing, setEditing] = useState<Player | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showBulkModal, setShowBulkModal] = useState(false);
 
   return (
     <div className="stack-col">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ fontWeight: 800, color: 'var(--championship-gold)' }}>
           طلبات التسجيل الجديدة ({state.pendingPlayers.length})
         </div>
         {state.tournament && (
-          <button
-            type="button"
-            className="btn btn-primary"
-            style={{ padding: '7px 12px', fontSize: '0.82rem' }}
-            onClick={() => setShowAddModal(true)}
-          >
-            <UserPlus size={16} />
-            <span>إضافة لاعب مباشرة</span>
-          </button>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ padding: '7px 11px', fontSize: '0.8rem' }}
+              onClick={() => setShowBulkModal(true)}
+            >
+              <FileSpreadsheet size={15} />
+              <span>استيراد دفعة</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ padding: '7px 12px', fontSize: '0.82rem' }}
+              onClick={() => setShowAddModal(true)}
+            >
+              <UserPlus size={16} />
+              <span>إضافة لاعب مباشرة</span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -111,6 +125,16 @@ export function AdminPlayersTab({
         />
       )}
 
+      {showBulkModal && (
+        <BulkImportPlayersModal
+          onClose={() => setShowBulkModal(false)}
+          onImport={async (linesText, status) => {
+            await onBulkImport(linesText, status);
+            setShowBulkModal(false);
+          }}
+        />
+      )}
+
       {editing && (
         <EditPlayerModal
           player={editing}
@@ -121,6 +145,69 @@ export function AdminPlayersTab({
           }}
         />
       )}
+    </div>
+  );
+}
+
+function BulkImportPlayersModal({
+  onClose,
+  onImport
+}: {
+  onClose: () => void;
+  onImport: (linesText: string, status: 'APPROVED' | 'PENDING') => Promise<void>;
+}) {
+  const [linesText, setLinesText] = useState('');
+  const [autoApprove, setAutoApprove] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>استيراد قائمة لاعبين دفعة واحدة</h3>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          اكتب كل لاعب في سطر منفصل بالصيغة:
+          <br />
+          <strong style={{ color: 'var(--cyber-sky)' }}>الاسم | معرف ElysiumNet/ XeMoNat | النادي (اختياري)</strong>
+        </div>
+        <textarea
+          className="input"
+          style={{ minHeight: 150, direction: 'ltr', textAlign: 'left' }}
+          value={linesText}
+          onChange={(e) => setLinesText(e.target.value)}
+          placeholder={'أحمد | ahmed_x1 | Real Madrid\nسالم | salem_pro | Barcelona'}
+        />
+        <div className="arena-subcard" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.84rem', fontWeight: 700 }}>اعتماد اللاعبين تلقائياً فور الاستيراد</span>
+          <button type="button" className={`switch-pill ${autoApprove ? 'on' : ''}`} onClick={() => setAutoApprove((v) => !v)}>
+            <span className="switch-knob" />
+          </button>
+        </div>
+        <div className="grid-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={saving || !linesText.trim()}
+            onClick={async () => {
+              setSaving(true);
+              try {
+                await onImport(linesText, autoApprove ? 'APPROVED' : 'PENDING');
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? 'جاري الاستيراد...' : 'تنفيذ الاستيراد'}
+          </button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            إلغاء
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -237,7 +324,7 @@ function AdminAddPlayerModal({
         </div>
 
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="اسم اللاعب *" />
-        <input className="input" value={elysiumId} onChange={(e) => setElysiumId(e.target.value)} placeholder="معرف ElysiumNet *" />
+        <input className="input" value={elysiumId} onChange={(e) => setElysiumId(e.target.value)} placeholder="معرف اللاعب في ElysiumNet/ XeMoNat *" />
         <input className="input" value={clubName} onChange={(e) => setClubName(e.target.value)} placeholder="النادي / الشخصية المفضلة" />
         <input className="input" type="number" min={60} max={99} value={ovrRating} onChange={(e) => setOvrRating(e.target.value)} placeholder="التقييم (60-99)" />
 
@@ -355,7 +442,7 @@ function EditPlayerModal({
           )}
         </div>
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="الاسم" />
-        <input className="input" value={elysiumId} onChange={(e) => setElysiumId(e.target.value)} placeholder="معرف ElysiumNet" />
+        <input className="input" value={elysiumId} onChange={(e) => setElysiumId(e.target.value)} placeholder="معرف اللاعب في ElysiumNet/ XeMoNat" />
         <input className="input" value={clubName} onChange={(e) => setClubName(e.target.value)} placeholder="النادي / الفريق" />
         <input className="input" type="number" min={60} max={99} value={ovrRating} onChange={(e) => setOvrRating(e.target.value)} placeholder="التقييم (60-99)" />
         <div className="chip-row">
@@ -395,23 +482,85 @@ function EditPlayerModal({
 export function AdminMatchesTab({
   state,
   onEditMatch,
-  onQuickUpdateGoals
+  onQuickUpdateGoals,
+  onAutoSchedule,
+  onToggleCheckIn,
+  onOpenDispute
 }: {
   state: ArenaState;
   onEditMatch: (m: Match) => void;
   onQuickUpdateGoals: (m: Match, g1: number, g2: number) => void;
+  onAutoSchedule: (payload: { startAtMillis?: number; intervalMinutes?: number; onlyUnscheduled?: boolean }) => Promise<void>;
+  onToggleCheckIn: (m: Match, slot: 1 | 2) => void;
+  onOpenDispute: (m: Match) => void;
 }) {
+  const [intervalMinutes, setIntervalMinutes] = useState(30);
+  const [busySchedule, setBusySchedule] = useState(false);
   const playersById = new Map(state.players.map((p) => [p.id, p]));
+  const openDisputesCount = state.allMatches.filter((m) => m.disputeStatus === 'OPEN').length;
+
   return (
-    <MatchResultsTable
-      title="جدول إدارة نتائج المباريات"
-      matches={state.allMatches}
-      playersById={playersById}
-      canEdit={true}
-      scoreUnitLabel={state.tournament?.scoreUnitLabel || 'نقطة'}
-      onQuickUpdateGoals={onQuickUpdateGoals}
-      onOpenDetailedEditor={onEditMatch}
-    />
+    <div className="stack-col">
+      {state.tournament && state.allMatches.length > 0 && (
+        <div className="arena-card stack-col" style={{ gap: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--championship-gold)', fontWeight: 800 }}>
+              <CalendarClock size={18} />
+              <span>تحديد مواعيد المباريات بضغطة واحدة</span>
+            </div>
+            {openDisputesCount > 0 && (
+              <span style={{ color: 'var(--crimson-loss)', fontSize: '0.78rem', fontWeight: 800 }}>
+                يوجد {openDisputesCount} طعن بانتظار الحسم
+              </span>
+            )}
+          </div>
+          <div className="chip-row">
+            {[15, 20, 30, 45, 60].map((mins) => (
+              <button
+                key={mins}
+                type="button"
+                className={`chip ${intervalMinutes === mins ? 'selected' : ''}`}
+                onClick={() => setIntervalMinutes(mins)}
+              >
+                كل {mins} دقيقة
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busySchedule}
+            onClick={async () => {
+              setBusySchedule(true);
+              try {
+                await onAutoSchedule({
+                  startAtMillis: Date.now() + 15 * 60 * 1000,
+                  intervalMinutes,
+                  onlyUnscheduled: false
+                });
+              } finally {
+                setBusySchedule(false);
+              }
+            }}
+          >
+            <CalendarClock size={17} />
+            <span>{busySchedule ? 'جاري الجدولة...' : `توزيع مواعيد المباريات تلقائياً (كل ${intervalMinutes} د)`}</span>
+          </button>
+        </div>
+      )}
+
+      <MatchResultsTable
+        title="جدول إدارة نتائج المباريات"
+        matches={state.allMatches}
+        playersById={playersById}
+        canEdit={true}
+        scoreUnitLabel={state.tournament?.scoreUnitLabel || 'نقطة'}
+        onQuickUpdateGoals={onQuickUpdateGoals}
+        onOpenDetailedEditor={onEditMatch}
+        onToggleCheckIn={onToggleCheckIn}
+        onOpenDispute={onOpenDispute}
+      />
+    </div>
   );
 }
 
@@ -894,6 +1043,39 @@ export function AdminChampionTab({
       <button type="button" className="btn btn-primary" onClick={onOpenExportShare}>
         فتح نافذة التصدير والمشاركة
       </button>
+    </div>
+  );
+}
+
+export function AdminAuditLogTab({ state }: { state: ArenaState }) {
+  const logs = state.auditLogs || [];
+  return (
+    <div className="arena-card stack-col" style={{ gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--championship-gold)', fontWeight: 800 }}>
+        <History size={18} />
+        <span>سجل نشاط المشرفين ({logs.length})</span>
+      </div>
+      {logs.length === 0 ? (
+        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          لا توجد عمليات إدارية مسجلة حتى الآن.
+        </div>
+      ) : (
+        <div className="stack-col" style={{ gap: 8 }}>
+          {logs.map((entry) => (
+            <div key={entry.id} className="arena-subcard stack-col" style={{ gap: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: '0.84rem', color: 'var(--cyber-sky)' }}>
+                  {entry.actorDisplayName} (@{entry.actorUsername})
+                </span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  {new Date(entry.createdAt).toLocaleString('ar-EG')}
+                </span>
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)' }}>{entry.summaryAr}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

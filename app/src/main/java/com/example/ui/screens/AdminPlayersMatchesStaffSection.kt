@@ -313,7 +313,7 @@ private fun AdminAddPlayerDialog(
                     }
                 }
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("اسم اللاعب *") }, singleLine = true)
-                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("معرف ElysiumNet *") }, singleLine = true)
+                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("معرف اللاعب في ElysiumNet/ XeMoNat *") }, singleLine = true)
                 OutlinedTextField(value = club, onValueChange = { club = it }, label = { Text("النادي / الشخصية المفضلة") }, singleLine = true)
                 OutlinedTextField(
                     value = ovr,
@@ -416,7 +416,7 @@ private fun EditPlayerDialog(
                     }
                 }
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("الاسم") }, singleLine = true)
-                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("معرف ElysiumNet") }, singleLine = true)
+                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("معرف اللاعب في ElysiumNet/ XeMoNat") }, singleLine = true)
                 OutlinedTextField(value = club, onValueChange = { club = it }, label = { Text("النادي") }, singleLine = true)
                 OutlinedTextField(
                     value = ovr,

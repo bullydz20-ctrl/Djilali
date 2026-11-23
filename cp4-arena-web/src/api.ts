@@ -376,6 +376,94 @@ export async function cancelReminderApi(matchId: number) {
   });
 }
 
+export function getOrCreateVoterKey(): string {
+  const key = 'cp4_voter_id';
+  try {
+    if (typeof window === 'undefined') return 'anon-ssr';
+    let existing = window.localStorage.getItem(key);
+    if (!existing) {
+      existing =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `v_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      window.localStorage.setItem(key, existing);
+    }
+    return existing;
+  } catch {
+    return `v_${Date.now()}`;
+  }
+}
+
+export async function toggleMatchCheckInApi(matchId: number, playerSlot: 1 | 2, checkedIn?: boolean) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/matches/${matchId}/checkin`, {
+    method: 'POST',
+    body: JSON.stringify({ playerSlot, checkedIn })
+  });
+}
+
+export async function voteMatchPredictionApi(matchId: number, pickedSlot: 1 | 2, voterKey?: string) {
+  return apiRequest<{ ok: boolean; votesP1: number; votesP2: number; messageAr: string }>(
+    `/api/matches/${matchId}/predict`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ voterKey: voterKey || getOrCreateVoterKey(), pickedSlot })
+    }
+  );
+}
+
+export async function submitMatchDisputeApi(
+  matchId: number,
+  payload: { submittedBy: string; note: string; screenshotUrl?: string | null }
+) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/matches/${matchId}/dispute`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function resolveMatchDisputeApi(matchId: number, resolutionNote?: string) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/matches/${matchId}/dispute/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ resolutionNote })
+  });
+}
+
+export async function adminWalkoverMatchApi(matchId: number, winnerSlot: 1 | 2, reason?: string) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/matches/${matchId}/walkover`, {
+    method: 'POST',
+    body: JSON.stringify({ winnerSlot, reason })
+  });
+}
+
+export async function bulkImportPlayersApi(
+  tournamentId: number,
+  payload: { linesText: string; status?: 'APPROVED' | 'PENDING' }
+) {
+  return apiRequest<{
+    ok: boolean;
+    addedCount: number;
+    skippedCount: number;
+    skippedReasons: string[];
+    messageAr: string;
+  }>(`/api/tournaments/${tournamentId}/players/bulk`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function autoScheduleMatchesApi(
+  tournamentId: number,
+  payload: { startAtMillis?: number; intervalMinutes?: number; onlyUnscheduled?: boolean }
+) {
+  return apiRequest<{ ok: boolean; scheduledCount: number; messageAr: string }>(
+    `/api/tournaments/${tournamentId}/schedule-matches`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
 export async function uploadImageFileApi(file: File): Promise<string> {
   const dataUrl = await compressImageToDataUrl(file, 900, 0.86);
   const res = await apiRequest<{ url: string }>('/api/uploads/image', {

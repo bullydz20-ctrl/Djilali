@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Dices, KeyRound, LogOut, Settings, Shield, Trophy, UserCog, Users } from 'lucide-react';
+import { Dices, History, KeyRound, LogOut, Settings, Shield, Trophy, UserCog, Users } from 'lucide-react';
 import { EmptyStatePanel } from '../components/PlayerAvatar';
 import { adminHasPermission, evaluatePinStrengthClient } from '../types';
 import type { ArenaState, Match, PlayerLevel, PlayerStatus } from '../types';
 import { AdminAuthGate } from './AdminAuthGate';
-import { AdminChampionTab, AdminMatchesTab, AdminPlayersTab, AdminSubAdminsTab } from './AdminPlayersStaffTabs';
+import {
+  AdminAuditLogTab,
+  AdminChampionTab,
+  AdminMatchesTab,
+  AdminPlayersTab,
+  AdminSubAdminsTab
+} from './AdminPlayersStaffTabs';
 import { AdminDrawTab, AdminTournamentSettingsTab } from './AdminTournamentDrawTabs';
 
-type SectionKey = 'TOURNAMENT' | 'PLAYERS' | 'DRAW' | 'MATCHES' | 'SUB_ADMINS' | 'CHAMPION';
+type SectionKey = 'TOURNAMENT' | 'PLAYERS' | 'DRAW' | 'MATCHES' | 'SUB_ADMINS' | 'AUDIT' | 'CHAMPION';
 
 export function AdminScreen({
   state,
@@ -18,13 +24,17 @@ export function AdminScreen({
   onCreateFreshTournament,
   onDeleteTournament,
   onAdminAddPlayer,
+  onBulkImportPlayers,
   onUpdatePlayerStatus,
   onUpdatePlayerDetails,
   onDeletePlayer,
   onRunDraw,
   onGenerateKnockout,
+  onAutoScheduleMatches,
   onEditMatch,
   onQuickUpdateGoals,
+  onToggleCheckIn,
+  onOpenDispute,
   onUpdateOwnProfile,
   onChangeOwnPin,
   onCreateSubAdmin,
@@ -49,13 +59,17 @@ export function AdminScreen({
     clubName: string;
     status: PlayerStatus;
   }) => Promise<void>;
+  onBulkImportPlayers: (linesText: string, status: 'APPROVED' | 'PENDING') => Promise<void>;
   onUpdatePlayerStatus: (id: number, status: PlayerStatus) => Promise<void>;
   onUpdatePlayerDetails: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onDeletePlayer: (id: number) => Promise<void>;
   onRunDraw: (manualGroups: Record<number, number>, manualOrder: number[]) => Promise<void>;
   onGenerateKnockout: () => Promise<void>;
+  onAutoScheduleMatches: (payload: { startAtMillis?: number; intervalMinutes?: number; onlyUnscheduled?: boolean }) => Promise<void>;
   onEditMatch: (m: Match) => void;
   onQuickUpdateGoals: (m: Match, g1: number, g2: number) => void;
+  onToggleCheckIn: (m: Match, slot: 1 | 2) => void;
+  onOpenDispute: (m: Match) => void;
   onUpdateOwnProfile: (payload: { displayName: string; username?: string }) => Promise<void>;
   onChangeOwnPin: (currentPin: string, newPin: string) => Promise<void>;
   onCreateSubAdmin: (payload: {
@@ -106,6 +120,7 @@ export function AdminScreen({
     if (admin.role === 'HEAD_ADMIN') {
       const subCount = state.adminAccounts.filter((a) => a.role === 'SUB_ADMIN').length;
       allowedSections.push({ key: 'SUB_ADMINS', label: `المشرفون (${subCount}/5)`, icon: <UserCog size={15} /> });
+      allowedSections.push({ key: 'AUDIT', label: 'سجل النشاط', icon: <History size={15} /> });
     }
     if (adminHasPermission(admin, 'CROWN_CHAMPION')) {
       allowedSections.push({ key: 'CHAMPION', label: 'التتويج', icon: <Shield size={15} /> });
@@ -198,6 +213,7 @@ export function AdminScreen({
               <AdminPlayersTab
                 state={state}
                 onAdminAddPlayer={onAdminAddPlayer}
+                onBulkImport={onBulkImportPlayers}
                 onStatusChange={onUpdatePlayerStatus}
                 onUpdateDetails={onUpdatePlayerDetails}
                 onDeletePlayer={onDeletePlayer}
@@ -222,6 +238,9 @@ export function AdminScreen({
                 state={state}
                 onEditMatch={onEditMatch}
                 onQuickUpdateGoals={onQuickUpdateGoals}
+                onAutoSchedule={onAutoScheduleMatches}
+                onToggleCheckIn={onToggleCheckIn}
+                onOpenDispute={onOpenDispute}
               />
             )}
             {selected === 'SUB_ADMINS' && (
@@ -233,6 +252,7 @@ export function AdminScreen({
                 onDeleteSubAdmin={onDeleteSubAdmin}
               />
             )}
+            {selected === 'AUDIT' && <AdminAuditLogTab state={state} />}
             {selected === 'CHAMPION' &&
               (state.tournament ? (
                 <AdminChampionTab

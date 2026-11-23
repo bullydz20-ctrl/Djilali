@@ -2,17 +2,22 @@ import { useState } from 'react';
 import { Lock, Search, Shield, UserPlus, Users } from 'lucide-react';
 import { EmptyStatePanel, PlayerAvatar } from '../components/PlayerAvatar';
 import { LEVEL_LABELS } from '../types';
-import type { ArenaState } from '../types';
+import type { ArenaState, Player } from '../types';
 
 export function PlayersScreen({
   state,
-  onOpenRegister
+  onOpenRegister,
+  onOpenPlayerProfile
 }: {
   state: ArenaState;
   onOpenRegister: () => void;
+  onOpenPlayerProfile: (player: Player) => void;
 }) {
   const [search, setSearch] = useState('');
   const statsById = new Map(state.playerStats.map((s) => [s.player.id, s]));
+  const seasonByElysium = new Map(
+    (state.seasonLeaderboard || []).map((s) => [s.elysiumNetId.trim().toLowerCase(), s])
+  );
   const unit = state.tournament?.scoreUnitLabel || 'نقطة';
 
   const q = search.trim().toLowerCase();
@@ -61,7 +66,7 @@ export function PlayersScreen({
           className="input"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="ابحث بالاسم أو معرف ElysiumNet..."
+          placeholder="ابحث بالاسم أو معرف ElysiumNet/ XeMoNat..."
           style={{ paddingRight: 38 }}
         />
       </div>
@@ -76,8 +81,8 @@ export function PlayersScreen({
           }
           subtitle={
             state.approvedPlayers.length === 0
-              ? 'يمكن للاعبين إرسال طلبات التسجيل بالاسم ومعرف ElysiumNet، وستظهر بطاقاتهم الاحترافية هنا فور اعتمادها.'
-              : 'جرّب البحث باسم آخر أو بمعرف ElysiumNet.'
+              ? 'يمكن للاعبين إرسال طلبات التسجيل بالاسم ومعرف ElysiumNet/ XeMoNat، وستظهر بطاقاتهم الاحترافية هنا فور اعتمادها.'
+              : 'جرّب البحث باسم آخر أو بمعرف ElysiumNet/ XeMoNat.'
           }
           actionLabel={state.isRegistrationOpenNow && state.approvedPlayers.length === 0 ? 'تسجيل أول لاعب' : undefined}
           onAction={state.isRegistrationOpenNow && state.approvedPlayers.length === 0 ? onOpenRegister : undefined}
@@ -96,12 +101,24 @@ export function PlayersScreen({
                 ? 'var(--electric-cobalt)'
                 : 'var(--cyber-sky)';
 
+            const seasonInfo = seasonByElysium.get(player.elysiumNetId.trim().toLowerCase());
+
             return (
               <div
                 key={player.id}
                 className="arena-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpenPlayerProfile(player)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenPlayerProfile(player);
+                  }
+                }}
                 style={{
                   padding: 14,
+                  cursor: 'pointer',
                   borderColor: accent,
                   background: `linear-gradient(155deg, rgba(22,31,59,0.95) 0%, var(--midnight-surface) 60%)`
                 }}
@@ -168,6 +185,19 @@ export function PlayersScreen({
                   <MiniStat label="فوز" value={stats?.wins ?? 0} />
                   <MiniStat label={unit} value={stats?.goalsScored ?? 0} />
                 </div>
+                {seasonInfo && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontSize: '0.7rem',
+                      color: 'var(--championship-gold)',
+                      fontWeight: 700,
+                      textAlign: 'center'
+                    }}
+                  >
+                    تصنيف الموسم #{seasonInfo.rank} • {seasonInfo.seasonPoints} نقطة
+                  </div>
+                )}
               </div>
             );
           })}

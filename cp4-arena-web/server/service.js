@@ -14,8 +14,10 @@ import {
 } from './constants.js';
 import {
   buildExportData,
+  buildHallOfFame,
   buildKnockoutSeedPairsFromGroups,
   buildKnockoutTreeDrafts,
+  computeSeasonLeaderboard,
   computeStandings,
   computeTournamentStats,
   distributePlayersIntoGroups,
@@ -65,6 +67,7 @@ function mapTournament(row) {
     matchDurationMinutes: row.match_duration_minutes,
     targetGoalsRule: row.target_goals_rule,
     isRegistrationClosedManual: Boolean(row.is_registration_closed_manual),
+    isThirdPlaceEnabled: Boolean(row.is_third_place_enabled),
     status: row.status,
     championPlayerId: row.champion_player_id ?? null,
     createdAt: row.created_at
@@ -119,7 +122,30 @@ function mapMatch(row) {
     nextMatchId: row.next_match_id ?? null,
     nextMatchSlot: row.next_match_slot ?? 1,
     scheduledLabel: row.scheduled_label ?? '',
-    scheduledAtMillis: row.scheduled_at_millis ?? null
+    scheduledAtMillis: row.scheduled_at_millis ?? null,
+    p1CheckedIn: Boolean(row.p1_checked_in),
+    p2CheckedIn: Boolean(row.p2_checked_in),
+    isWalkover: Boolean(row.is_walkover),
+    walkoverReason: row.walkover_reason ?? '',
+    disputeNote: row.dispute_note ?? '',
+    disputeScreenshotUrl: row.dispute_screenshot_url ?? null,
+    disputeSubmittedBy: row.dispute_submitted_by ?? '',
+    disputeStatus: row.dispute_status ?? 'NONE',
+    votesP1: Number(row.votes_p1 ?? 0),
+    votesP2: Number(row.votes_p2 ?? 0)
+  };
+}
+
+function mapAuditLog(row) {
+  return {
+    id: row.id,
+    adminId: row.admin_id ?? null,
+    actorUsername: row.admin_username,
+    actorDisplayName: row.admin_display_name,
+    actionType: row.action_type,
+    summaryAr: row.summary_ar,
+    tournamentId: row.tournament_id ?? null,
+    createdAt: row.created_at
   };
 }
 
@@ -183,6 +209,29 @@ export class ArenaService {
 
   emitChange(type = 'state_updated', payload = {}) {
     this.onEvent({ type, ts: Date.now(), ...payload });
+  }
+
+  recordAuditLog(admin, actionType, summaryAr, tournamentId = null) {
+    try {
+      this.db
+        .prepare(`
+          INSERT INTO audit_logs (
+            admin_id, admin_username, admin_display_name,
+            action_type, summary_ar, tournament_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          admin?.id ?? null,
+          String(admin?.username || 'system'),
+          String(admin?.displayName || admin?.username || 'النظام'),
+          String(actionType || 'ACTION'),
+          String(summaryAr || '').slice(0, 240),
+          tournamentId ?? null,
+          Date.now()
+        );
+    } catch {
+      // keep primary mutation resilient
+    }
   }
 
   getLockoutState(clientKey = 'default') {
@@ -706,7 +755,10 @@ export class ArenaService {
       };
     });
 
-    if (res.ok) this.emitChange('admin_updated');
+    if (res.ok) {
+      this.recordAuditLog(res.admin, 'PROFILE_UPDATED', `تحديث بيانات الحساب (${res.admin.username})`);
+      this.emitChange('admin_updated');
+    }
     return res;
   }
 
@@ -798,7 +850,10 @@ export class ArenaService {
       };
     });
 
-    if (res.ok) this.emitChange('admin_updated');
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'SUB_ADMIN_CREATED', `إنشاء مشرف مساعد: ${res.admin.displayName} (@${res.admin.username})`);
+      this.emitChange('admin_updated');
+    }
     return res;
   }
 
@@ -877,6 +932,7 @@ export class ArenaService {
       }
     });
 
+    this.recordAuditLog(auth.session.rawAdmin, 'SUB_ADMIN_UPDATED', `تحديث صلاحيات/حالة المساعد: ${displayName} (@${target.username})`);
     this.emitChange('admin_updated');
     const updated = mapAdminRaw(this.db.prepare('SELECT * FROM admin_accounts WHERE id = ?').get(target.id));
     return {
@@ -905,6 +961,7 @@ export class ArenaService {
       this.db.prepare('DELETE FROM admin_sessions WHERE admin_id = ?').run(target.id);
       this.db.prepare('DELETE FROM admin_accounts WHERE id = ?').run(target.id);
     });
+    this.recordAuditLog(auth.session.rawAdmin, 'SUB_ADMIN_DELETED', `حذف المشرف المساعد: ${target.displayName} (@${target.username})`);
     this.emitChange('admin_updated');
     return { ok: true, status: 200, messageAr: 'تم حذف الحساب المساعد بنجاح.' };
   }
@@ -958,6 +1015,7 @@ export class ArenaService {
         m.stage === MatchStage.ROUND_OF_16 ||
         m.stage === MatchStage.QUARTER_FINAL ||
         m.stage === MatchStage.SEMI_FINAL ||
+        m.stage === MatchStage.THIRD_PLACE ||
         m.stage === MatchStage.FINAL
     );
 
@@ -982,6 +1040,12 @@ export class ArenaService {
         approvedPlayers.length < tournament.maxParticipants
     );
 
+    const seasonLeaderboard = computeSeasonLeaderboard(this.db);
+    const hallOfFame = buildHallOfFame(this.db);
+    const auditLogs = isHeadAdmin
+      ? this.db.prepare('SELECT * FROM audit_logs ORDER BY created_at DESC, id DESC LIMIT 100').all().map(mapAuditLog)
+      : [];
+
     return {
       tournaments,
       tournament,
@@ -998,6 +1062,9 @@ export class ArenaService {
       playerStats,
       overviewStats,
       championPlayer,
+      seasonLeaderboard,
+      hallOfFame,
+      auditLogs,
       isRegistrationOpenNow,
       hasHeadAdmin: this.hasHeadAdmin() || session?.admin?.role === AdminRole.HEAD_ADMIN,
       adminDirectory,
@@ -1045,6 +1112,7 @@ export class ArenaService {
     const matchDurationMinutes = Math.max(3, Math.min(60, Number(payload.matchDurationMinutes) || 12));
     const targetGoalsRule = String(payload.targetGoalsRule || '').trim() || 'المباراة الكاملة';
     const bannerUrl = payload.bannerUrl ? String(payload.bannerUrl).trim() : null;
+    const isThirdPlaceEnabled = Boolean(payload.isThirdPlaceEnabled);
     const now = Date.now();
 
     const info = this.db
@@ -1053,8 +1121,8 @@ export class ArenaService {
           name, game_title, game_category, score_unit_label, description,
           banner_url, start_date_time, max_participants, format, group_count,
           qualifiers_per_group, draw_mode, knockout_tie_rule, match_duration_minutes,
-          target_goals_rule, is_registration_closed_manual, status, champion_player_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?)
+          target_goals_rule, is_registration_closed_manual, is_third_place_enabled, status, champion_player_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?)
       `)
       .run(
         name,
@@ -1072,11 +1140,13 @@ export class ArenaService {
         knockoutTieRule,
         matchDurationMinutes,
         targetGoalsRule,
+        isThirdPlaceEnabled ? 1 : 0,
         TournamentStatus.REGISTRATION_OPEN,
         now
       );
 
     const created = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(info.lastInsertRowid));
+    this.recordAuditLog(auth.session.rawAdmin, 'TOURNAMENT_CREATED', `إنشاء بطولة جديدة: ${created.name} (${created.gameTitle})`, created.id);
     this.emitChange('tournament_created', { tournamentId: created.id });
     return { ok: true, status: 201, tournament: created, messageAr: 'تم إنشاء البطولة الجديدة بنجاح.' };
   }
@@ -1104,6 +1174,10 @@ export class ArenaService {
       payload.isRegistrationClosedManual !== undefined
         ? Boolean(payload.isRegistrationClosedManual)
         : current.isRegistrationClosedManual;
+    const isThirdPlaceEnabled =
+      payload.isThirdPlaceEnabled !== undefined
+        ? Boolean(payload.isThirdPlaceEnabled)
+        : current.isThirdPlaceEnabled;
 
     const approvedCount = this.db
       .prepare('SELECT COUNT(*) AS c FROM players WHERE tournament_id = ? AND status = ?')
@@ -1125,7 +1199,7 @@ export class ArenaService {
           description = ?, banner_url = ?, start_date_time = ?, max_participants = ?,
           format = ?, group_count = ?, qualifiers_per_group = ?, draw_mode = ?,
           knockout_tie_rule = ?, match_duration_minutes = ?, target_goals_rule = ?,
-          is_registration_closed_manual = ?, status = ?
+          is_registration_closed_manual = ?, is_third_place_enabled = ?, status = ?
         WHERE id = ?
       `)
       .run(
@@ -1145,10 +1219,12 @@ export class ArenaService {
         matchDurationMinutes,
         String(payload.targetGoalsRule ?? current.targetGoalsRule).trim() || 'المباراة الكاملة',
         manualClosed ? 1 : 0,
+        isThirdPlaceEnabled ? 1 : 0,
         status,
         current.id
       );
 
+    this.recordAuditLog(auth.session.rawAdmin, 'TOURNAMENT_UPDATED', `تحديث إعدادات البطولة: ${name}`, current.id);
     this.emitChange('tournament_updated', { tournamentId: current.id });
     const updated = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(current.id));
     return { ok: true, status: 200, tournament: updated, messageAr: 'تم حفظ إعدادات البطولة بنجاح.' };
@@ -1159,7 +1235,7 @@ export class ArenaService {
     if (!auth.ok) return auth;
 
     const id = Number(tournamentId);
-    const exists = this.db.prepare('SELECT id FROM tournaments WHERE id = ?').get(id);
+    const exists = this.db.prepare('SELECT id, name FROM tournaments WHERE id = ?').get(id);
     if (!exists) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
 
     this.withTx(() => {
@@ -1167,6 +1243,7 @@ export class ArenaService {
       this.db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_tournament_seeded', '1')").run();
     });
 
+    this.recordAuditLog(auth.session.rawAdmin, 'TOURNAMENT_DELETED', `حذف البطولة: ${exists.name}`, id);
     this.emitChange('tournament_deleted', { deletedId: id });
     return { ok: true, status: 200, messageAr: 'تم حذف البطولة نهائياً بنجاح.' };
   }
@@ -1175,10 +1252,10 @@ export class ArenaService {
     const cleanName = String(name || '').trim();
     const cleanElysium = String(elysiumNetId || '').trim();
     if (!cleanName || !cleanElysium) {
-      return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب ومعرف ElysiumNet.' };
+      return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب ومعرف ElysiumNet/ XeMoNat.' };
     }
     if (cleanName.length > 50 || cleanElysium.length > 50) {
-      return { ok: false, status: 400, error: 'الاسم أو معرف ElysiumNet طويل جداً.' };
+      return { ok: false, status: 400, error: 'الاسم أو معرف ElysiumNet/ XeMoNat طويل جداً.' };
     }
 
     const safeLevel = Object.values(PlayerLevel).includes(level) ? level : PlayerLevel.INTERMEDIATE;
@@ -1204,7 +1281,7 @@ export class ArenaService {
         .prepare('SELECT id FROM players WHERE tournament_id = ? AND LOWER(elysium_net_id) = LOWER(?)')
         .get(tournament.id, cleanElysium);
       if (duplicate) {
-        return { ok: false, status: 409, error: 'معرف ElysiumNet مسجل مسبقاً في هذه البطولة.' };
+        return { ok: false, status: 409, error: 'معرف ElysiumNet/ XeMoNat مسجل مسبقاً في هذه البطولة.' };
       }
 
       const now = Date.now();
@@ -1277,11 +1354,16 @@ export class ArenaService {
       return {
         ok: true,
         status: 200,
+        tournamentId: tournament.id,
+        playerName: player.name,
         messageAr: `تم تحديث حالة اللاعب إلى ${PLAYER_STATUS_META[newStatus].labelAr}.`
       };
     });
 
-    if (res.ok) this.emitChange('player_updated');
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'PLAYER_STATUS', `تحديث حالة اللاعب (${res.playerName}) إلى ${PLAYER_STATUS_META[newStatus].labelAr}`, res.tournamentId);
+      this.emitChange('player_updated');
+    }
     return res;
   }
 
@@ -1292,10 +1374,10 @@ export class ArenaService {
     const cleanName = String(payload.name || '').trim();
     const cleanElysium = String(payload.elysiumNetId || '').trim();
     if (!cleanName || !cleanElysium) {
-      return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب ومعرف ElysiumNet.' };
+      return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب ومعرف ElysiumNet/ XeMoNat.' };
     }
     if (cleanName.length > 50 || cleanElysium.length > 50) {
-      return { ok: false, status: 400, error: 'الاسم أو معرف ElysiumNet طويل جداً.' };
+      return { ok: false, status: 400, error: 'الاسم أو معرف ElysiumNet/ XeMoNat طويل جداً.' };
     }
 
     const safeLevel = Object.values(PlayerLevel).includes(payload.level) ? payload.level : PlayerLevel.INTERMEDIATE;
@@ -1312,7 +1394,7 @@ export class ArenaService {
         .prepare('SELECT id FROM players WHERE tournament_id = ? AND LOWER(elysium_net_id) = LOWER(?)')
         .get(tournament.id, cleanElysium);
       if (duplicate) {
-        return { ok: false, status: 409, error: 'معرف ElysiumNet مسجل مسبقاً في هذه البطولة.' };
+        return { ok: false, status: 409, error: 'معرف ElysiumNet/ XeMoNat مسجل مسبقاً في هذه البطولة.' };
       }
 
       const approvedCount = this.db
@@ -1358,7 +1440,118 @@ export class ArenaService {
       };
     });
 
-    if (res.ok) this.emitChange('player_added');
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'PLAYER_ADDED', `إضافة لاعب يدوياً: ${res.player.name} (${res.player.elysiumNetId})`, Number(tournamentId));
+      this.emitChange('player_added');
+    }
+    return res;
+  }
+
+  bulkImportPlayers(rawToken, tournamentId, payload = {}) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
+    if (!auth.ok) return auth;
+
+    const rawInput = String(payload.linesText ?? payload.rawText ?? '');
+    const lines = rawInput
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#') && !l.startsWith('//'));
+
+    if (!lines.length) {
+      return { ok: false, status: 400, error: 'يرجى إدخال سطر واحد على الأقل بتنسيق: الاسم | معرف ElysiumNet/ XeMoNat | النادي.' };
+    }
+
+    const desiredStatus = payload.status === PlayerStatus.PENDING ? PlayerStatus.PENDING : PlayerStatus.APPROVED;
+
+    const res = this.withTx(() => {
+      const tournament = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(Number(tournamentId)));
+      if (!tournament) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
+
+      const existingIds = new Set(
+        this.db
+          .prepare('SELECT LOWER(elysium_net_id) AS k FROM players WHERE tournament_id = ?')
+          .all(tournament.id)
+          .map((r) => r.k)
+      );
+      let approvedCount = this.db
+        .prepare('SELECT COUNT(*) AS c FROM players WHERE tournament_id = ? AND status = ?')
+        .get(tournament.id, PlayerStatus.APPROVED).c;
+
+      const insertStmt = this.db.prepare(`
+        INSERT INTO players (
+          tournament_id, name, elysium_net_id, avatar_url, level,
+          ovr_rating, club_name, status, group_id, seed_order, registered_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, 0, ?)
+      `);
+
+      const addedPlayers = [];
+      const skippedReasons = [];
+      let now = Date.now();
+
+      for (const line of lines) {
+        const parts = line.split(/[|,;\t]/).map((s) => s.trim());
+        const name = (parts[0] || '').slice(0, 50);
+        const elysiumNetId = (parts[1] || '').slice(0, 50);
+        const clubName = (parts[2] || '').slice(0, 50);
+
+        if (!name || !elysiumNetId) {
+          skippedReasons.push(`تخطي سطر ناقص: "${line.slice(0, 40)}"`);
+          continue;
+        }
+        const normKey = elysiumNetId.toLowerCase();
+        if (existingIds.has(normKey)) {
+          skippedReasons.push(`مكرر: ${elysiumNetId}`);
+          continue;
+        }
+        if (desiredStatus === PlayerStatus.APPROVED && approvedCount >= tournament.maxParticipants) {
+          skippedReasons.push(`اكتمال العدد الأقصى عند: ${name}`);
+          continue;
+        }
+
+        const info = insertStmt.run(
+          tournament.id,
+          name,
+          elysiumNetId,
+          PlayerLevel.INTERMEDIATE,
+          PLAYER_LEVEL_META[PlayerLevel.INTERMEDIATE].defaultOvr,
+          clubName,
+          desiredStatus,
+          now++
+        );
+        existingIds.add(normKey);
+        if (desiredStatus === PlayerStatus.APPROVED) approvedCount += 1;
+        addedPlayers.push(mapPlayer(this.db.prepare('SELECT * FROM players WHERE id = ?').get(info.lastInsertRowid)));
+      }
+
+      if (approvedCount >= tournament.maxParticipants && tournament.status === TournamentStatus.REGISTRATION_OPEN) {
+        this.db
+          .prepare('UPDATE tournaments SET is_registration_closed_manual = 1, status = ? WHERE id = ?')
+          .run(TournamentStatus.REGISTRATION_CLOSED, tournament.id);
+      }
+
+      if (!addedPlayers.length) {
+        return {
+          ok: false,
+          status: 400,
+          error: skippedReasons[0] || 'لم يتم استيراد أي لاعب — تحقق من الصيغة أو عدم التكرار.'
+        };
+      }
+
+      return {
+        ok: true,
+        status: 201,
+        addedCount: addedPlayers.length,
+        skippedCount: skippedReasons.length,
+        addedPlayers,
+        skippedReasons,
+        messageAr: `تم استيراد ${addedPlayers.length} لاعب بنجاح${skippedReasons.length ? ` (وتخطي ${skippedReasons.length})` : ''}.`
+      };
+    });
+
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'BULK_IMPORT', `استيراد جماعي لعدد ${res.addedCount} لاعب`, Number(tournamentId));
+      this.emitChange('player_added');
+    }
     return res;
   }
 
@@ -1372,14 +1565,14 @@ export class ArenaService {
     const name = String(payload.name ?? existing.name).trim();
     const elysiumNetId = String(payload.elysiumNetId ?? existing.elysium_net_id).trim();
     if (!name || !elysiumNetId) {
-      return { ok: false, status: 400, error: 'الاسم ومعرف ElysiumNet مطلوبان.' };
+      return { ok: false, status: 400, error: 'الاسم ومعرف ElysiumNet/ XeMoNat مطلوبان.' };
     }
 
     const duplicate = this.db
       .prepare('SELECT id FROM players WHERE tournament_id = ? AND LOWER(elysium_net_id) = LOWER(?) AND id != ?')
       .get(existing.tournament_id, elysiumNetId, existing.id);
     if (duplicate) {
-      return { ok: false, status: 409, error: 'معرف ElysiumNet مستخدم بالفعل للاعب آخر.' };
+      return { ok: false, status: 409, error: 'معرف ElysiumNet/ XeMoNat مستخدم بالفعل للاعب آخر.' };
     }
 
     const level = Object.values(PlayerLevel).includes(payload.level) ? payload.level : existing.level;
@@ -1394,6 +1587,7 @@ export class ArenaService {
       .prepare('UPDATE players SET name = ?, elysium_net_id = ?, avatar_url = ?, club_name = ?, level = ?, ovr_rating = ? WHERE id = ?')
       .run(name, elysiumNetId, avatarUrl, clubName, level, ovrRating, existing.id);
 
+    this.recordAuditLog(auth.session.rawAdmin, 'PLAYER_UPDATED', `تعديل بيانات اللاعب: ${name} (${elysiumNetId})`, existing.tournament_id);
     this.emitChange('player_updated');
     return { ok: true, status: 200, messageAr: 'تم تحديث بيانات اللاعب بنجاح.' };
   }
@@ -1420,10 +1614,13 @@ export class ArenaService {
           this.db.prepare('UPDATE tournaments SET status = ? WHERE id = ?').run(TournamentStatus.REGISTRATION_OPEN, tournament.id);
         }
       }
-      return { ok: true, status: 200, messageAr: 'تم حذف اللاعب.' };
+      return { ok: true, status: 200, tournamentId: existing.tournament_id, playerName: existing.name, messageAr: 'تم حذف اللاعب.' };
     });
 
-    if (res.ok) this.emitChange('player_deleted');
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'PLAYER_DELETED', `حذف اللاعب: ${res.playerName}`, res.tournamentId);
+      this.emitChange('player_deleted');
+    }
     return res;
   }
 
@@ -1466,7 +1663,8 @@ export class ArenaService {
     const drafts = buildKnockoutTreeDrafts({
       tournamentId: tournament.id,
       seededSlots,
-      tieRule: tournament.knockoutTieRule
+      tieRule: tournament.knockoutTieRule,
+      includeThirdPlace: Boolean(tournament.isThirdPlaceEnabled)
     });
 
     const tempToRealId = new Map();
@@ -1615,7 +1813,10 @@ export class ArenaService {
       return { ok: true, status: 200, messageAr: 'تم إنشاء مخطط الأدوار الإقصائية المباشرة!' };
     });
 
-    if (res.ok) this.emitChange('draw_completed');
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'DRAW_COMPLETED', res.messageAr, Number(tournamentId));
+      this.emitChange('draw_completed');
+    }
     return res;
   }
 
@@ -1671,8 +1872,48 @@ export class ArenaService {
       return { ok: true, status: 200, messageAr: 'تم تأهيل المتصدرين وبناء مخطط الأدوار الإقصائية بنجاح!' };
     });
 
-    if (res.ok) this.emitChange('knockout_generated');
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'KNOCKOUT_GENERATED', 'تأهيل المتصدرين وبناء الأدوار الإقصائية', Number(tournamentId));
+      this.emitChange('knockout_generated');
+    }
     return res;
+  }
+
+  syncThirdPlaceFromSemis(tournamentId) {
+    const thirdRow = this.db
+      .prepare('SELECT * FROM matches WHERE tournament_id = ? AND stage = ? LIMIT 1')
+      .get(tournamentId, MatchStage.THIRD_PLACE);
+    if (!thirdRow) return;
+
+    const third = mapMatch(thirdRow);
+    const semis = this.db
+      .prepare('SELECT * FROM matches WHERE tournament_id = ? AND stage = ? ORDER BY bracket_index ASC, id ASC')
+      .all(tournamentId, MatchStage.SEMI_FINAL)
+      .map(mapMatch);
+
+    const resolveLoser = (semi) => {
+      if (!semi || !semi.isCompleted || semi.winnerId == null) return null;
+      if (semi.player1Id == null || semi.player2Id == null) return null;
+      return semi.winnerId === semi.player1Id ? semi.player2Id : semi.player1Id;
+    };
+
+    const loser1 = resolveLoser(semis[0]);
+    const loser2 = resolveLoser(semis[1]);
+
+    if (third.player1Id !== loser1 || third.player2Id !== loser2) {
+      this.db
+        .prepare(`
+          UPDATE matches SET
+            player1_id = ?, player2_id = ?,
+            leg1_score1 = NULL, leg1_score2 = NULL,
+            leg2_score1 = NULL, leg2_score2 = NULL,
+            penalty_score1 = NULL, penalty_score2 = NULL,
+            is_completed = 0, winner_id = NULL,
+            is_walkover = 0, walkover_reason = ''
+          WHERE id = ?
+        `)
+        .run(loser1 ?? null, loser2 ?? null, third.id);
+    }
   }
 
   propagateWinnerAndResetIfChanged(nextMatchId, slot, oldWinnerId, newWinnerId) {
@@ -1693,10 +1934,15 @@ export class ArenaService {
             leg1_score1 = NULL, leg1_score2 = NULL,
             leg2_score1 = NULL, leg2_score2 = NULL,
             penalty_score1 = NULL, penalty_score2 = NULL,
-            is_completed = 0, winner_id = NULL
+            is_completed = 0, winner_id = NULL,
+            is_walkover = 0, walkover_reason = ''
           WHERE id = ?
         `)
         .run(nextP1 ?? null, nextP2 ?? null, nextMatch.id);
+
+      if (nextMatch.stage === MatchStage.SEMI_FINAL) {
+        this.syncThirdPlaceFromSemis(nextMatch.tournamentId);
+      }
 
       if (nextMatch.stage === MatchStage.FINAL) {
         this.db
@@ -1753,7 +1999,8 @@ export class ArenaService {
             leg1_score1 = ?, leg1_score2 = ?,
             leg2_score1 = ?, leg2_score2 = ?,
             penalty_score1 = ?, penalty_score2 = ?,
-            is_completed = ?, winner_id = ?
+            is_completed = ?, winner_id = ?,
+            is_walkover = 0, walkover_reason = ''
           WHERE id = ?
         `)
         .run(
@@ -1775,6 +2022,9 @@ export class ArenaService {
       if (match.nextMatchId != null) {
         this.propagateWinnerAndResetIfChanged(match.nextMatchId, match.nextMatchSlot, oldWinnerId, resolution.winnerId ?? null);
       }
+      if (match.stage === MatchStage.SEMI_FINAL) {
+        this.syncThirdPlaceFromSemis(match.tournamentId);
+      }
 
       if (match.stage === MatchStage.FINAL) {
         const t = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(match.tournamentId));
@@ -1789,10 +2039,13 @@ export class ArenaService {
         }
       }
 
-      return { ok: true, status: 200, messageAr: 'تم حفظ النتيجة وتحديث المخطط بنجاح.' };
+      return { ok: true, status: 200, tournamentId: match.tournamentId, matchId: match.id, messageAr: 'تم حفظ النتيجة وتحديث المخطط بنجاح.' };
     });
 
-    if (res.ok) this.emitChange('match_updated');
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'MATCH_SCORE', `تحديث نتيجة المباراة #${res.matchId}`, res.tournamentId);
+      this.emitChange('match_updated');
+    }
     return res;
   }
 
@@ -1838,7 +2091,8 @@ export class ArenaService {
             leg1_score1 = ?, leg1_score2 = ?,
             leg2_score1 = ?, leg2_score2 = ?,
             penalty_score1 = ?, penalty_score2 = ?,
-            is_completed = ?, winner_id = ?
+            is_completed = ?, winner_id = ?,
+            is_walkover = ?, walkover_reason = ?
           WHERE id = ?
         `)
         .run(
@@ -1850,11 +2104,16 @@ export class ArenaService {
           keepScores ? match.penaltyScore2 : null,
           chosenWinnerId != null ? 1 : 0,
           chosenWinnerId,
+          keepScores && match.isWalkover ? 1 : 0,
+          keepScores ? match.walkoverReason : '',
           match.id
         );
 
       if (match.nextMatchId != null) {
         this.propagateWinnerAndResetIfChanged(match.nextMatchId, match.nextMatchSlot, oldWinnerId, chosenWinnerId);
+      }
+      if (match.stage === MatchStage.SEMI_FINAL) {
+        this.syncThirdPlaceFromSemis(match.tournamentId);
       }
 
       if (match.stage === MatchStage.FINAL) {
@@ -1875,32 +2134,288 @@ export class ArenaService {
           : match.stage === MatchStage.FINAL
           ? 'تم اعتماد الفائز بالنهائي وتتويجه بطلاً للبطولة!'
           : 'تم تحديث الفائز وتأهيله للدور التالي بنجاح.';
-      return { ok: true, status: 200, messageAr: msg };
+      return { ok: true, status: 200, tournamentId: match.tournamentId, matchId: match.id, messageAr: msg };
     });
 
-    if (res.ok) this.emitChange('match_updated');
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'BRACKET_WINNER', `${res.messageAr} (#${res.matchId})`, res.tournamentId);
+      this.emitChange('match_updated');
+    }
     return res;
+  }
+
+  adminWalkoverMatch(rawToken, matchId, { winnerSlot, reason = '' } = {}) {
+    const auth = this.requirePermission(rawToken, 'EDIT_SCORES');
+    if (!auth.ok) return auth;
+
+    const slot = Number(winnerSlot);
+    if (slot !== 1 && slot !== 2) {
+      return { ok: false, status: 400, error: 'يرجى اختيار الفائز بالانسحاب (الطرف 1 أو 2).' };
+    }
+
+    const cleanReason = String(reason || 'فوز إداري بالانسحاب (3-0)').trim().slice(0, 120);
+
+    const res = this.withTx(() => {
+      const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+      if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+      const match = mapMatch(row);
+      if (match.player1Id == null || match.player2Id == null) {
+        return { ok: false, status: 400, error: 'لا يمكن احتساب انسحاب قبل تحديد طرفي المباراة.' };
+      }
+
+      const oldWinnerId = match.winnerId;
+      const winnerId = slot === 1 ? match.player1Id : match.player2Id;
+      const s1 = slot === 1 ? 3 : 0;
+      const s2 = slot === 2 ? 3 : 0;
+
+      this.db
+        .prepare(`
+          UPDATE matches SET
+            leg1_score1 = ?, leg1_score2 = ?,
+            leg2_score1 = NULL, leg2_score2 = NULL,
+            penalty_score1 = NULL, penalty_score2 = NULL,
+            is_completed = 1, winner_id = ?,
+            is_walkover = 1, walkover_reason = ?
+          WHERE id = ?
+        `)
+        .run(s1, s2, winnerId, cleanReason, match.id);
+
+      this.db.prepare('DELETE FROM match_reminders WHERE match_id = ?').run(match.id);
+
+      if (match.nextMatchId != null) {
+        this.propagateWinnerAndResetIfChanged(match.nextMatchId, match.nextMatchSlot, oldWinnerId, winnerId);
+      }
+      if (match.stage === MatchStage.SEMI_FINAL) {
+        this.syncThirdPlaceFromSemis(match.tournamentId);
+      }
+      if (match.stage === MatchStage.FINAL) {
+        this.db
+          .prepare('UPDATE tournaments SET champion_player_id = ?, status = ? WHERE id = ?')
+          .run(winnerId, TournamentStatus.COMPLETED, match.tournamentId);
+      }
+
+      const updated = mapMatch(this.db.prepare('SELECT * FROM matches WHERE id = ?').get(match.id));
+      return {
+        ok: true,
+        status: 200,
+        match: updated,
+        tournamentId: match.tournamentId,
+        messageAr: `تم احتساب الفوز بالانسحاب (${s1}-${s2}) وتحديث الجدول بنجاح.`
+      };
+    });
+
+    if (res.ok) {
+      this.recordAuditLog(auth.session.rawAdmin, 'MATCH_WALKOVER', `احتساب انسحاب (3-0) للمباراة #${matchId}: ${cleanReason}`, res.tournamentId);
+      this.emitChange('match_updated');
+    }
+    return res;
+  }
+
+  toggleMatchCheckIn(matchId, { playerSlot, checkedIn } = {}) {
+    const slot = Number(playerSlot);
+    if (slot !== 1 && slot !== 2) {
+      return { ok: false, status: 400, error: 'يرجى تحديد اللاعب (1 أو 2).' };
+    }
+
+    const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+    if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+    const match = mapMatch(row);
+    if (match.isCompleted) {
+      return { ok: false, status: 400, error: 'المباراة منتهية بالفعل.' };
+    }
+    if ((slot === 1 && match.player1Id == null) || (slot === 2 && match.player2Id == null)) {
+      return { ok: false, status: 400, error: 'لم يتحدد اللاعب في هذا المركز بعد.' };
+    }
+
+    const currentVal = slot === 1 ? match.p1CheckedIn : match.p2CheckedIn;
+    const nextVal = checkedIn !== undefined ? Boolean(checkedIn) : !currentVal;
+    const col = slot === 1 ? 'p1_checked_in' : 'p2_checked_in';
+    this.db.prepare(`UPDATE matches SET ${col} = ? WHERE id = ?`).run(nextVal ? 1 : 0, match.id);
+
+    const updated = mapMatch(this.db.prepare('SELECT * FROM matches WHERE id = ?').get(match.id));
+    this.emitChange('match_checkin', { matchId: match.id });
+    return {
+      ok: true,
+      status: 200,
+      match: updated,
+      messageAr: nextVal ? 'تم تأكيد جاهزية اللاعب للمباراة!' : 'تم إلغاء تأكيد الجاهزية.'
+    };
+  }
+
+  voteMatchPrediction(matchId, { voterKey = 'anon', pickedSlot } = {}) {
+    const slot = Number(pickedSlot);
+    if (slot !== 1 && slot !== 2) {
+      return { ok: false, status: 400, error: 'يرجى اختيار أحد طرفي المباراة للتوقع.' };
+    }
+    const cleanKey = String(voterKey || 'anon').trim().slice(0, 80) || 'anon';
+
+    const res = this.withTx(() => {
+      const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+      if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+      const match = mapMatch(row);
+      if (match.isCompleted) {
+        return { ok: false, status: 400, error: 'تم إغلاق التصويت بعد حسم المباراة.' };
+      }
+
+      this.db
+        .prepare(`
+          INSERT INTO match_predictions (match_id, voter_key, picked_slot, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(match_id, voter_key) DO UPDATE SET
+            picked_slot = excluded.picked_slot,
+            updated_at = excluded.updated_at
+        `)
+        .run(match.id, cleanKey, slot, Date.now());
+
+      const v1 = this.db
+        .prepare('SELECT COUNT(*) AS c FROM match_predictions WHERE match_id = ? AND picked_slot = 1')
+        .get(match.id).c;
+      const v2 = this.db
+        .prepare('SELECT COUNT(*) AS c FROM match_predictions WHERE match_id = ? AND picked_slot = 2')
+        .get(match.id).c;
+
+      this.db.prepare('UPDATE matches SET votes_p1 = ?, votes_p2 = ? WHERE id = ?').run(v1, v2, match.id);
+      const updated = mapMatch(this.db.prepare('SELECT * FROM matches WHERE id = ?').get(match.id));
+      return {
+        ok: true,
+        status: 200,
+        votesP1: v1,
+        votesP2: v2,
+        match: updated,
+        messageAr: 'تم تسجيل توقعك في تصويت الجمهور!'
+      };
+    });
+
+    if (res.ok) this.emitChange('match_prediction', { matchId: Number(matchId) });
+    return res;
+  }
+
+  submitMatchDispute(matchId, { submittedBy = '', note = '', screenshotUrl = null } = {}) {
+    const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+    if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+
+    const cleanNote = String(note || '').trim().slice(0, 500);
+    if (!cleanNote && !screenshotUrl) {
+      return { ok: false, status: 400, error: 'يرجى كتابة تفاصيل الطعن أو إرفاق لقطة شاشة لإثبات النتيجة.' };
+    }
+    const cleanBy = String(submittedBy || '').trim().slice(0, 60) || 'لاعب مشارك';
+    const cleanImg = screenshotUrl ? String(screenshotUrl).trim() : null;
+
+    this.db
+      .prepare(`
+        UPDATE matches SET
+          dispute_note = ?, dispute_screenshot_url = ?,
+          dispute_submitted_by = ?, dispute_status = 'OPEN'
+        WHERE id = ?
+      `)
+      .run(cleanNote || 'إثبات نتيجة مرفق', cleanImg, cleanBy, Number(matchId));
+
+    const updated = mapMatch(this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId)));
+    this.emitChange('match_dispute', { matchId: Number(matchId) });
+    return {
+      ok: true,
+      status: 200,
+      match: updated,
+      messageAr: 'تم إرسال إثبات النتيجة / الطعن لمراجعة المشرفين.'
+    };
+  }
+
+  resolveMatchDispute(rawToken, matchId, { resolutionNote = '' } = {}) {
+    const auth = this.requirePermission(rawToken, 'EDIT_SCORES');
+    if (!auth.ok) return auth;
+
+    const row = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
+    if (!row) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
+
+    const cleanResNote = String(resolutionNote || '').trim().slice(0, 200);
+    const updatedNote = cleanResNote
+      ? `${row.dispute_note ? `${row.dispute_note} — ` : ''}[قرار المشرف]: ${cleanResNote}`
+      : row.dispute_note;
+
+    this.db
+      .prepare("UPDATE matches SET dispute_status = 'RESOLVED', dispute_note = ? WHERE id = ?")
+      .run(updatedNote, Number(matchId));
+
+    const updated = mapMatch(this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId)));
+    this.recordAuditLog(auth.session.rawAdmin, 'DISPUTE_RESOLVED', `حسم طعن المباراة #${matchId}`, updated.tournamentId);
+    this.emitChange('match_dispute_resolved', { matchId: Number(matchId) });
+    return {
+      ok: true,
+      status: 200,
+      match: updated,
+      messageAr: 'تم حسم وإغلاق طلب الطعن بنجاح.'
+    };
+  }
+
+  autoScheduleMatches(rawToken, tournamentId, { startAtMillis, intervalMinutes = 20, onlyUnscheduled = true } = {}) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_TOURNAMENT');
+    if (!auth.ok) return auth;
+
+    const tRow = this.db.prepare('SELECT id, name FROM tournaments WHERE id = ?').get(Number(tournamentId));
+    if (!tRow) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
+
+    const startMs = Number(startAtMillis);
+    const baseStart = Number.isFinite(startMs) && startMs > 0 ? startMs : Date.now() + 30 * 60_000;
+    const stepMs = Math.max(5, Math.min(240, Number(intervalMinutes) || 20)) * 60_000;
+
+    const allRows = this.db
+      .prepare('SELECT * FROM matches WHERE tournament_id = ? AND is_completed = 0 ORDER BY round_number ASC, bracket_index ASC, id ASC')
+      .all(tRow.id)
+      .map(mapMatch);
+
+    const targets = onlyUnscheduled ? allRows.filter((m) => !m.scheduledAtMillis) : allRows;
+    if (!targets.length) {
+      return { ok: false, status: 400, error: 'لا توجد مباريات غير مكتملة بحاجة للجدولة.' };
+    }
+
+    const updateStmt = this.db.prepare('UPDATE matches SET scheduled_at_millis = ?, scheduled_label = ? WHERE id = ?');
+    this.withTx(() => {
+      targets.forEach((m, idx) => {
+        const slotMs = baseStart + idx * stepMs;
+        const d = new Date(slotMs);
+        const pad = (n) => String(n).padStart(2, '0');
+        const label = `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        updateStmt.run(slotMs, label, m.id);
+      });
+    });
+
+    this.recordAuditLog(auth.session.rawAdmin, 'AUTO_SCHEDULE', `جدولة تلقائية لعدد ${targets.length} مباراة (كل ${Math.round(stepMs / 60_000)} د)`, tRow.id);
+    this.emitChange('schedule_updated', { tournamentId: tRow.id });
+    return {
+      ok: true,
+      status: 200,
+      scheduledCount: targets.length,
+      messageAr: `تمت جدولة مواعيد ${targets.length} مباراة تلقائياً بنجاح!`
+    };
   }
 
   crownChampion(rawToken, tournamentId, playerId) {
     const auth = this.requirePermission(rawToken, 'CROWN_CHAMPION');
     if (!auth.ok) return auth;
 
-    const tRow = this.db.prepare('SELECT id FROM tournaments WHERE id = ?').get(Number(tournamentId));
+    const tRow = this.db.prepare('SELECT id, name FROM tournaments WHERE id = ?').get(Number(tournamentId));
     if (!tRow) return { ok: false, status: 404, error: 'لا توجد بطولة نشطة.' };
 
     const chosenId = playerId == null ? null : Number(playerId);
+    let champName = 'بدون بطل';
     if (chosenId != null) {
       const p = this.db
-        .prepare('SELECT id FROM players WHERE id = ? AND tournament_id = ?')
+        .prepare('SELECT id, name FROM players WHERE id = ? AND tournament_id = ?')
         .get(chosenId, Number(tournamentId));
       if (!p) return { ok: false, status: 404, error: 'اللاعب غير موجود في هذه البطولة.' };
+      champName = p.name;
     }
 
     this.db
       .prepare('UPDATE tournaments SET champion_player_id = ?, status = ? WHERE id = ?')
       .run(chosenId, chosenId != null ? TournamentStatus.COMPLETED : TournamentStatus.KNOCKOUT_STAGE, Number(tournamentId));
 
+    this.recordAuditLog(
+      auth.session.rawAdmin,
+      'CHAMPION_CROWNED',
+      chosenId != null ? `تتويج البطل (${champName}) للبطولة: ${tRow.name}` : `إلغاء تتويج بطل البطولة: ${tRow.name}`,
+      Number(tournamentId)
+    );
     this.emitChange('champion_updated');
     return {
       ok: true,

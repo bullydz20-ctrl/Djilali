@@ -240,7 +240,7 @@ export function buildKnockoutSeedPairsFromGroups(groupStandings, qualifiersPerGr
   return padded;
 }
 
-export function buildKnockoutTreeDrafts({ tournamentId, seededSlots, tieRule }) {
+export function buildKnockoutTreeDrafts({ tournamentId, seededSlots, tieRule, includeThirdPlace = false }) {
   const bracketSize = Math.max(2, Math.min(16, nextPowerOfTwo(Math.max(2, seededSlots.length))));
   const padded = Array.from({ length: bracketSize }, (_, i) => seededSlots[i] ?? null);
 
@@ -298,6 +298,31 @@ export function buildKnockoutTreeDrafts({ tournamentId, seededSlots, tieRule }) 
       });
     }
   });
+
+  if (includeThirdPlace && bracketSize >= 4) {
+    const stageMeta = MATCH_STAGE_META[MatchStage.THIRD_PLACE];
+    drafts.push({
+      tempIndex: drafts.length,
+      parentTempIndex: null,
+      slotInParent: 1,
+      entity: {
+        tournamentId,
+        stage: MatchStage.THIRD_PLACE,
+        groupId: null,
+        roundNumber: stageMeta.order,
+        bracketIndex: 0,
+        player1Id: null,
+        player2Id: null,
+        isTwoLegged: false,
+        isCompleted: false,
+        winnerId: null,
+        nextMatchId: null,
+        nextMatchSlot: 1,
+        scheduledLabel: stageMeta.labelAr,
+        scheduledAtMillis: null
+      }
+    });
+  }
 
   return drafts;
 }
@@ -490,6 +515,7 @@ export function buildExportData(state) {
   const unit = t?.scoreUnitLabel || 'نقطة';
   const gameTitle = t?.gameTitle || 'CP4 ARENA';
   const finalMatch = state.knockoutMatches.find((m) => m.stage === MatchStage.FINAL);
+  const thirdPlaceMatch = state.knockoutMatches.find((m) => m.stage === MatchStage.THIRD_PLACE);
   const resolvedChampion =
     state.championPlayer ?? (finalMatch?.winnerId ? playersById.get(finalMatch.winnerId) : null);
 
@@ -512,6 +538,15 @@ export function buildExportData(state) {
   if (resolvedChampion) {
     lines.push(`🥇 بطل البطولة: ${resolvedChampion.name} (${resolvedChampion.elysiumNetId})`);
     if (resolvedChampion.clubName) lines.push(`   الفريق / النادي: ${resolvedChampion.clubName}`);
+    if (finalMatch?.isCompleted && finalMatch.winnerId) {
+      const runnerUpId = finalMatch.winnerId === finalMatch.player1Id ? finalMatch.player2Id : finalMatch.player1Id;
+      const runnerUp = runnerUpId ? playersById.get(runnerUpId) : null;
+      if (runnerUp) lines.push(`🥈 الوصيف: ${runnerUp.name} (${runnerUp.elysiumNetId})`);
+    }
+    if (thirdPlaceMatch?.isCompleted && thirdPlaceMatch.winnerId) {
+      const thirdPlayer = playersById.get(thirdPlaceMatch.winnerId);
+      if (thirdPlayer) lines.push(`🥉 المركز الثالث: ${thirdPlayer.name} (${thirdPlayer.elysiumNetId})`);
+    }
     lines.push('');
   }
 
@@ -582,6 +617,9 @@ export function buildExportData(state) {
   if (finalMatch && (finalMatch.isCompleted || finalMatch.leg1Score1 != null)) {
     social.push(`🔥 النهائي: ${formatMatchLine(finalMatch, playersById)}`);
   }
+  if (thirdPlaceMatch && thirdPlaceMatch.isCompleted) {
+    social.push(`🥉 المركز الثالث: ${formatMatchLine(thirdPlaceMatch, playersById)}`);
+  }
   const semis = state.knockoutMatches.filter((m) => m.stage === MatchStage.SEMI_FINAL && m.isCompleted).sort((a, b) => a.bracketIndex - b.bracketIndex);
   if (semis.length > 0) {
     social.push('⚡ نصف النهائي:');
@@ -603,4 +641,242 @@ export function buildExportData(state) {
     fullText: lines.join('\n'),
     socialText: social.join('\n')
   };
+}
+
+function summarizePlayerSlim(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    elysiumNetId: row.elysium_net_id,
+    avatarUrl: row.avatar_url ?? null,
+    clubName: row.club_name ?? '',
+    level: row.level,
+    ovrRating: row.ovr_rating
+  };
+}
+
+export function computeSeasonLeaderboard(db) {
+  const tournaments = db.prepare('SELECT id, status, champion_player_id FROM tournaments').all();
+  const approvedPlayers = db
+    .prepare("SELECT * FROM players WHERE status = 'APPROVED' ORDER BY registered_at ASC, id ASC")
+    .all();
+  const completedMatches = db.prepare('SELECT * FROM matches WHERE is_completed = 1').all();
+
+  if (!approvedPlayers.length) return [];
+
+  const playerById = new Map();
+  const keyByPlayerId = new Map();
+  const aggByKey = new Map();
+
+  for (const p of approvedPlayers) {
+    playerById.set(p.id, p);
+    const normKey = String(p.elysium_net_id || '').trim().toLowerCase();
+    if (!normKey) continue;
+    keyByPlayerId.set(p.id, normKey);
+
+    let entry = aggByKey.get(normKey);
+    if (!entry) {
+      entry = {
+        elysiumKey: normKey,
+        name: p.name,
+        elysiumNetId: p.elysium_net_id,
+        avatarUrl: p.avatar_url ?? null,
+        clubName: p.club_name ?? '',
+        level: p.level,
+        ovrRating: p.ovr_rating,
+        tournamentIds: new Set(),
+        titles: 0,
+        runnerUps: 0,
+        thirdPlaces: 0,
+        matchesPlayed: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        goalsScored: 0,
+        goalsConceded: 0,
+        cleanSheets: 0
+      };
+      aggByKey.set(normKey, entry);
+    } else {
+      // Keep freshest identity metadata
+      entry.name = p.name;
+      entry.elysiumNetId = p.elysium_net_id;
+      if (p.avatar_url) entry.avatarUrl = p.avatar_url;
+      if (p.club_name) entry.clubName = p.club_name;
+      entry.level = p.level;
+      entry.ovrRating = Math.max(entry.ovrRating, p.ovr_rating || 81);
+    }
+    entry.tournamentIds.add(p.tournament_id);
+  }
+
+  // Track tournament podium placements
+  const finalsByTournament = new Map();
+  const thirdsByTournament = new Map();
+  for (const m of completedMatches) {
+    if (m.stage === MatchStage.FINAL) finalsByTournament.set(m.tournament_id, m);
+    if (m.stage === MatchStage.THIRD_PLACE) thirdsByTournament.set(m.tournament_id, m);
+
+    const p1 = m.player1_id;
+    const p2 = m.player2_id;
+    if (p1 == null || p2 == null) continue;
+    const key1 = keyByPlayerId.get(p1);
+    const key2 = keyByPlayerId.get(p2);
+    const e1 = key1 ? aggByKey.get(key1) : null;
+    const e2 = key2 ? aggByKey.get(key2) : null;
+
+    const s1 = m.leg1_score1;
+    const s2 = m.leg1_score2;
+    const l2s1 = m.is_two_legged ? (m.leg2_score1 ?? 0) : 0;
+    const l2s2 = m.is_two_legged ? (m.leg2_score2 ?? 0) : 0;
+    const hasScores = s1 != null && s2 != null;
+    const tot1 = hasScores ? s1 + l2s1 : 0;
+    const tot2 = hasScores ? s2 + l2s2 : 0;
+
+    if (e1) {
+      e1.matchesPlayed += 1;
+      e1.goalsScored += tot1;
+      e1.goalsConceded += tot2;
+      if (hasScores && s2 === 0 && (!m.is_two_legged || l2s2 === 0)) e1.cleanSheets += 1;
+      if (m.winner_id === p1) e1.wins += 1;
+      else if (m.winner_id === p2) e1.losses += 1;
+      else if (hasScores && tot1 > tot2) e1.wins += 1;
+      else if (hasScores && tot1 < tot2) e1.losses += 1;
+      else e1.draws += 1;
+    }
+    if (e2) {
+      e2.matchesPlayed += 1;
+      e2.goalsScored += tot2;
+      e2.goalsConceded += tot1;
+      if (hasScores && s1 === 0 && (!m.is_two_legged || l2s1 === 0)) e2.cleanSheets += 1;
+      if (m.winner_id === p2) e2.wins += 1;
+      else if (m.winner_id === p1) e2.losses += 1;
+      else if (hasScores && tot2 > tot1) e2.wins += 1;
+      else if (hasScores && tot2 < tot1) e2.losses += 1;
+      else e2.draws += 1;
+    }
+  }
+
+  for (const t of tournaments) {
+    const finalM = finalsByTournament.get(t.id);
+    const champId = t.champion_player_id ?? finalM?.winner_id ?? null;
+    if (champId != null) {
+      const k = keyByPlayerId.get(champId);
+      if (k && aggByKey.has(k)) aggByKey.get(k).titles += 1;
+    }
+    if (finalM?.winner_id != null) {
+      const runnerUpId = finalM.winner_id === finalM.player1_id ? finalM.player2_id : finalM.player1_id;
+      if (runnerUpId != null) {
+        const k = keyByPlayerId.get(runnerUpId);
+        if (k && aggByKey.has(k)) aggByKey.get(k).runnerUps += 1;
+      }
+    }
+    const thirdM = thirdsByTournament.get(t.id);
+    if (thirdM?.winner_id != null) {
+      const k = keyByPlayerId.get(thirdM.winner_id);
+      if (k && aggByKey.has(k)) aggByKey.get(k).thirdPlaces += 1;
+    }
+  }
+
+  const list = [...aggByKey.values()].map((e) => {
+    const seasonPoints =
+      e.titles * 25 +
+      e.runnerUps * 12 +
+      e.thirdPlaces * 7 +
+      e.wins * 3 +
+      e.draws * 1 +
+      e.cleanSheets * 1;
+    const winRatePercent = e.matchesPlayed > 0 ? Math.floor((e.wins * 100) / e.matchesPlayed) : 0;
+    return {
+      rank: 0,
+      elysiumKey: e.elysiumKey,
+      displayName: e.name,
+      elysiumNetId: e.elysiumNetId,
+      avatarUrl: e.avatarUrl,
+      clubName: e.clubName,
+      level: e.level,
+      ovrRating: e.ovrRating,
+      tournamentsCount: e.tournamentIds.size,
+      titles: e.titles,
+      runnerUps: e.runnerUps,
+      thirdPlaces: e.thirdPlaces,
+      matchesPlayed: e.matchesPlayed,
+      wins: e.wins,
+      draws: e.draws,
+      losses: e.losses,
+      goalsScored: e.goalsScored,
+      goalsConceded: e.goalsConceded,
+      cleanSheets: e.cleanSheets,
+      winRatePercent,
+      seasonPoints
+    };
+  });
+
+  list.sort((a, b) => {
+    if (b.seasonPoints !== a.seasonPoints) return b.seasonPoints - a.seasonPoints;
+    if (b.titles !== a.titles) return b.titles - a.titles;
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    const gdB = b.goalsScored - b.goalsConceded;
+    const gdA = a.goalsScored - a.goalsConceded;
+    if (gdB !== gdA) return gdB - gdA;
+    return b.goalsScored - a.goalsScored;
+  });
+
+  return list.map((item, idx) => ({ ...item, rank: idx + 1 }));
+}
+
+export function buildHallOfFame(db) {
+  const tournaments = db
+    .prepare("SELECT * FROM tournaments WHERE status = 'COMPLETED' OR champion_player_id IS NOT NULL ORDER BY created_at DESC, id DESC")
+    .all();
+
+  if (!tournaments.length) return [];
+
+  const getPlayerStmt = db.prepare('SELECT * FROM players WHERE id = ?');
+  const getMatchesStmt = db.prepare('SELECT * FROM matches WHERE tournament_id = ?');
+
+  return tournaments
+    .map((t) => {
+      const matches = getMatchesStmt.all(t.id);
+      const finalM = matches.find((m) => m.stage === MatchStage.FINAL && m.is_completed);
+      const thirdM = matches.find((m) => m.stage === MatchStage.THIRD_PLACE && m.is_completed);
+      const champId = t.champion_player_id ?? finalM?.winner_id ?? null;
+      const champion = champId != null ? summarizePlayerSlim(getPlayerStmt.get(champId)) : null;
+      if (!champion) return null;
+
+      let runnerUp = null;
+      if (finalM?.winner_id != null) {
+        const runnerId = finalM.winner_id === finalM.player1_id ? finalM.player2_id : finalM.player1_id;
+        if (runnerId != null) runnerUp = summarizePlayerSlim(getPlayerStmt.get(runnerId));
+      }
+      const thirdPlace = thirdM?.winner_id != null ? summarizePlayerSlim(getPlayerStmt.get(thirdM.winner_id)) : null;
+
+      let totalGoals = 0;
+      let completedMatches = 0;
+      for (const m of matches) {
+        if (m.is_completed) completedMatches += 1;
+        if (m.leg1_score1 != null && m.leg1_score2 != null) {
+          totalGoals += m.leg1_score1 + m.leg1_score2 + (m.is_two_legged ? (m.leg2_score1 ?? 0) + (m.leg2_score2 ?? 0) : 0);
+        }
+      }
+
+      return {
+        tournamentId: t.id,
+        tournamentName: t.name,
+        gameTitle: t.game_title,
+        gameCategory: t.game_category,
+        scoreUnitLabel: t.score_unit_label,
+        startDateTime: t.start_date_time,
+        createdAt: t.created_at,
+        completedMatches,
+        totalMatches: matches.length,
+        totalGoals,
+        championName: champion.name,
+        championElysiumNetId: champion.elysiumNetId,
+        championAvatarUrl: champion.avatarUrl,
+        runnerUpName: runnerUp?.name ?? null,
+        thirdPlaceName: thirdPlace?.name ?? null
+      };
+    })
+    .filter(Boolean);
 }

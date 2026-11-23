@@ -5,7 +5,10 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.api.ApiService
+import com.example.api.AuditLogEntry
+import com.example.api.HallOfFameEntry
 import com.example.api.RemoteArenaState
+import com.example.api.SeasonLeaderboardEntry
 import com.example.data.local.AdminAccountEntity
 import com.example.data.local.AdminSessionState
 import com.example.data.local.LockoutState
@@ -54,6 +57,9 @@ data class TournamentUiState(
     val playerStats: List<PlayerStats> = emptyList(),
     val overviewStats: TournamentOverviewStats = TournamentOverviewStats(0, 0, 0, null, null, null),
     val championPlayer: PlayerEntity? = null,
+    val seasonLeaderboard: List<SeasonLeaderboardEntry> = emptyList(),
+    val hallOfFame: List<HallOfFameEntry> = emptyList(),
+    val auditLogs: List<AuditLogEntry> = emptyList(),
     val admins: List<AdminAccountEntity> = emptyList(),
     val hasHeadAdmin: Boolean = false,
     val currentAdmin: AdminAccountEntity? = null,
@@ -153,6 +159,9 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
                 playerStats = remote.playerStats,
                 overviewStats = remote.overviewStats,
                 championPlayer = remote.championPlayer,
+                seasonLeaderboard = remote.seasonLeaderboard,
+                hallOfFame = remote.hallOfFame,
+                auditLogs = remote.auditLogs,
                 admins = adminList,
                 hasHeadAdmin = remote.hasHeadAdmin,
                 currentAdmin = remote.currentAdmin,
@@ -474,5 +483,83 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
 
     fun notifyNotificationPermissionDenied() {
         _messages.tryEmit("يرجى السماح بإذن الإشعارات لتفعيل تنبيهات المباريات القادمة.")
+    }
+
+    fun toggleMatchCheckIn(matchId: Long, playerSlot: Int, checkedIn: Boolean? = null) {
+        viewModelScope.launch {
+            handleResult(repository.toggleMatchCheckIn(matchId, playerSlot, checkedIn))
+        }
+    }
+
+    fun voteMatchPrediction(matchId: Long, pickedSlot: Int) {
+        viewModelScope.launch {
+            handleResult(repository.voteMatchPrediction(matchId, pickedSlot))
+        }
+    }
+
+    fun submitMatchDispute(
+        matchId: Long,
+        submittedBy: String,
+        note: String,
+        screenshotUrl: String?,
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val res = repository.submitMatchDispute(matchId, submittedBy, note, screenshotUrl)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun resolveMatchDispute(
+        matchId: Long,
+        resolutionNote: String? = null,
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val res = repository.resolveMatchDispute(matchId, resolutionNote)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun adminWalkoverMatch(
+        matchId: Long,
+        winnerSlot: Int,
+        reason: String? = null,
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val res = repository.adminWalkoverMatch(matchId, winnerSlot, reason)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun bulkImportPlayers(
+        linesText: String,
+        status: PlayerStatus = PlayerStatus.APPROVED,
+        onSuccess: () -> Unit = {}
+    ) {
+        val tId = uiState.value.tournament?.id ?: return
+        viewModelScope.launch {
+            val res = repository.bulkImportPlayers(tId, linesText, status)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun autoScheduleMatches(
+        startAtMillis: Long,
+        intervalMinutes: Int,
+        onlyUnscheduled: Boolean = true,
+        onSuccess: () -> Unit = {}
+    ) {
+        val tId = uiState.value.tournament?.id ?: return
+        viewModelScope.launch {
+            val res = repository.autoScheduleMatches(tId, startAtMillis, intervalMinutes, onlyUnscheduled)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
     }
 }

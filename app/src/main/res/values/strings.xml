@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">CP4 ARENA</string>
+    <string name="community_name">CP4 ARENA</string>
+    <string name="community_subtitle">البطولات الرسمية لجميع الألعاب • ElysiumNet</string>
+    <string name="nav_home">الرئيسية</string>
+    <string name="nav_players">المشاركون</string>
+    <string name="nav_groups">المجموعات</string>
+    <string name="nav_bracket">الإقصائيات</string>
+    <string name="nav_admin">الإدارة</string>
+    <string name="action_register_player">تسجيل في البطولة</string>
+    <string name="action_admin_login">دخول المشرفين</string>
+    <string name="action_logout">تسجيل الخروج</string>
+    <string name="action_open_web">صفحة الويب</string>
+    <string name="official_web_url">https://cp4-arena-web.onrender.com</string>
+    <string name="cd_community_logo">شعار مجتمع COMMUNITY PS4 JAILBREAK ONLINE</string>
+    <string name="cd_tournament_banner">صورة غلاف البطولة</string>
+    <string name="cd_player_avatar">صورة اللاعب</string>
+    <string name="cd_champion_trophy">كأس بطل البطولة</string>
+    <string name="cd_back">رجوع</string>
+</resources>

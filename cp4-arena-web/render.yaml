@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: cp4-arena-web
+    env: node
+    plan: starter
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: cp4-arena-data
+      mountPath: /var/data
+      sizeGB: 2
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: HOST
+        value: 0.0.0.0
+      - key: CP4_DB_PATH
+        value: /var/data/cp4_arena.db
+      - key: CP4_UPLOADS_DIR
+        value: /var/data/uploads
+      - key: CP4_SESSION_SECRET
+        generateValue: true
+      - key: CP4_HEAD_ADMIN_USERNAME
+        value: Djilali
+      - key: CP4_HEAD_ADMIN_PIN
+        sync: false

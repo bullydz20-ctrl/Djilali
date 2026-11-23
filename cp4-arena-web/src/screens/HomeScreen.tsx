@@ -1,0 +1,472 @@
+import {
+  Award,
+  Bell,
+  Clock,
+  Gamepad2,
+  Lock,
+  Share2,
+  Shield,
+  Star,
+  Trash2,
+  TrendingUp,
+  Trophy,
+  UserPlus,
+  Users
+} from 'lucide-react';
+import { EmptyStatePanel, PlayerAvatar, StatusPill } from '../components/PlayerAvatar';
+import { MatchResultsTable } from '../components/MatchResultsTable';
+import {
+  FORMAT_LABELS,
+  STATUS_LABELS,
+  TIE_RULE_LABELS,
+  adminHasPermission
+} from '../types';
+import type { ArenaState, Match, Player } from '../types';
+
+export function HomeScreen({
+  state,
+  onOpenRegister,
+  onEditMatch,
+  onQuickUpdateGoals,
+  onOpenExportShare,
+  onOpenReminder,
+  onCancelReminder,
+  onOpenAdmin
+}: {
+  state: ArenaState;
+  onOpenRegister: () => void;
+  onEditMatch: (m: Match) => void;
+  onQuickUpdateGoals: (m: Match, g1: number, g2: number) => void;
+  onOpenExportShare: () => void;
+  onOpenReminder: (m: Match) => void;
+  onCancelReminder: (matchId: number) => void;
+  onOpenAdmin?: () => void;
+}) {
+  const t = state.tournament;
+  const playersById = new Map<number, Player>(state.players.map((p) => [p.id, p]));
+  const remindersByMatchId = new Map(state.matchReminders.map((r) => [r.matchId, r]));
+  const canEditScores = adminHasPermission(state.currentAdmin, 'EDIT_SCORES');
+
+  if (!t) {
+    return (
+      <EmptyStatePanel
+        icon={<Trophy size={28} />}
+        title="لا توجد بطولة نشطة حالياً"
+        subtitle="يمكن للمشرف إنشاء بطولة جديدة لأي لعبة من لوحة الإدارة."
+        actionLabel={onOpenAdmin ? 'إنشاء بطولة من الإدارة' : undefined}
+        onAction={onOpenAdmin}
+      />
+    );
+  }
+
+  const unit = t.scoreUnitLabel || 'نقطة';
+  const statusColor =
+    t.status === 'REGISTRATION_OPEN'
+      ? 'var(--emerald-win)'
+      : t.status === 'GROUP_STAGE' || t.status === 'KNOCKOUT_STAGE'
+      ? 'var(--cyber-sky)'
+      : 'var(--championship-gold)';
+
+  const progressPct =
+    t.maxParticipants > 0
+      ? Math.min(100, Math.round((state.approvedPlayers.length / t.maxParticipants) * 100))
+      : 0;
+
+  const topPlayers = state.playerStats.filter((s) => s.matchesPlayed > 0).slice(0, 5);
+  const orderedMatches = [...state.allMatches].sort((a, b) => {
+    if (a.isCompleted !== b.isCompleted) return a.isCompleted ? 1 : -1;
+    return b.roundNumber - a.roundNumber;
+  });
+
+  return (
+    <div className="stack-col">
+      {/* Hero Banner Card */}
+      <div className="arena-card" style={{ padding: 0, overflow: 'hidden', borderRadius: 22 }}>
+        <div style={{ position: 'relative', height: 205 }}>
+          <img
+            src={t.bannerUrl || '/images/default-banner.jpg'}
+            alt={t.name}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background:
+                'linear-gradient(180deg, rgba(7,9,19,0.22) 0%, rgba(7,9,19,0.74) 60%, var(--midnight-surface) 100%)'
+            }}
+          />
+
+          <div
+            style={{
+              position: 'absolute',
+              top: 14,
+              right: 14,
+              left: 14,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 8,
+              flexWrap: 'wrap'
+            }}
+          >
+            <StatusPill text={STATUS_LABELS[t.status]} color={statusColor} />
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '4px 11px',
+                borderRadius: 999,
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                background: 'rgba(15, 21, 40, 0.88)',
+                border: '1px solid var(--electric-cobalt)',
+                color: 'var(--cyber-sky)'
+              }}
+            >
+              <Gamepad2 size={14} />
+              <span>{t.gameTitle}</span>
+            </span>
+          </div>
+
+          <div style={{ position: 'absolute', bottom: 12, right: 16, left: 16 }}>
+            <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+              {t.name}
+            </h2>
+            <p
+              style={{
+                margin: '4px 0 0',
+                fontSize: '0.82rem',
+                color: 'var(--text-secondary)',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden'
+              }}
+            >
+              {t.description}
+            </p>
+          </div>
+        </div>
+
+        <div style={{ padding: 16 }} className="stack-col">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.86rem', fontWeight: 700 }}>
+              <Users size={17} color="var(--cyber-sky)" />
+              <span>
+                المشاركون المعتمدون: {state.approvedPlayers.length} / {t.maxParticipants}
+              </span>
+            </div>
+            {state.pendingPlayers.length > 0 && (
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--championship-gold)' }}>
+                {state.pendingPlayers.length} قيد المراجعة
+              </span>
+            )}
+          </div>
+
+          <div
+            style={{
+              height: 8,
+              borderRadius: 999,
+              background: 'var(--elevated-navy)',
+              overflow: 'hidden'
+            }}
+          >
+            <div
+              style={{
+                width: `${progressPct}%`,
+                height: '100%',
+                background: progressPct >= 100 ? 'var(--championship-gold)' : 'var(--electric-cobalt)',
+                transition: 'width 0.3s ease'
+              }}
+            />
+          </div>
+
+          <div className="grid-2">
+            <div className="arena-subcard" style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: '0.8rem' }}>
+              <Clock size={15} color="var(--cyber-sky)" />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {t.startDateTime || 'يُحدد لاحقاً'}
+              </span>
+            </div>
+            <div className="arena-subcard" style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: '0.8rem' }}>
+              <Gamepad2 size={15} color="var(--cyber-sky)" />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {FORMAT_LABELS[t.format]}
+              </span>
+            </div>
+          </div>
+
+          {state.isRegistrationOpenNow ? (
+            <button type="button" className="btn btn-primary" onClick={onOpenRegister}>
+              <UserPlus size={18} />
+              <span>سجّل في البطولة الآن</span>
+            </button>
+          ) : (
+            <button type="button" className="btn btn-outline" disabled>
+              <Lock size={16} color="var(--championship-gold)" />
+              <span style={{ color: 'var(--championship-gold)' }}>
+                {state.approvedPlayers.length >= t.maxParticipants
+                  ? 'التسجيل مغلق لاكتمال العدد'
+                  : 'التسجيل مغلق حالياً'}
+              </span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Champion Showcase */}
+      {state.championPlayer && (
+        <div
+          className="arena-card arena-card-gold"
+          style={{
+            background:
+              'linear-gradient(110deg, rgba(245,184,46,0.22), rgba(124,58,237,0.18), rgba(37,99,235,0.18))'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div
+              style={{
+                width: 54,
+                height: 54,
+                borderRadius: '50%',
+                background: 'rgba(245,184,46,0.2)',
+                border: '1.5px solid var(--championship-gold)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}
+            >
+              <Trophy size={28} color="var(--championship-gold)" />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--championship-gold)' }}>
+                بطل البطولة المتوّج
+              </div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>{state.championPlayer.name}</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--cyber-sky)' }}>
+                ElysiumNet: {state.championPlayer.elysiumNetId}
+              </div>
+            </div>
+            <PlayerAvatar
+              avatarUrl={state.championPlayer.avatarUrl}
+              name={state.championPlayer.name}
+              size={56}
+              borderColor="var(--championship-gold)"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Rules Card */}
+      <div className="arena-card stack-col" style={{ gap: 10 }}>
+        <div style={{ fontWeight: 800, color: 'var(--championship-gold)', fontSize: '1rem' }}>
+          قوانين ونظام البطولة ({t.gameTitle})
+        </div>
+        <div className="grid-2">
+          <RuleItem icon={<Clock size={15} />} title="مدة المواجهة" value={`${t.matchDurationMinutes} دقيقة`} />
+          <RuleItem icon={<Award size={15} />} title="نظام الحسم واللعب" value={t.targetGoalsRule} />
+          <RuleItem icon={<Trophy size={15} />} title="الأدوار الإقصائية" value={TIE_RULE_LABELS[t.knockoutTieRule].short} />
+          <RuleItem icon={<Users size={15} />} title="التأهل" value={`${t.qualifiersPerGroup} متأهل`} />
+        </div>
+      </div>
+
+      {/* Overview Statistics */}
+      <div style={{ fontWeight: 800, fontSize: '1.08rem' }}>إحصائيات البطولة وأفضل اللاعبين</div>
+      <div className="grid-2">
+        <StatCard
+          icon={<Trophy size={17} color="var(--cyber-sky)" />}
+          label={`إجمالي (${unit})`}
+          value={String(state.overviewStats.totalGoals)}
+          subtext={`في ${state.overviewStats.completedMatches} / ${state.overviewStats.totalMatches} مباراة`}
+          accent="var(--cyber-sky)"
+        />
+        <StatCard
+          icon={<Star size={17} color="var(--championship-gold)" />}
+          label="الأكثر تسجيلاً"
+          value={state.overviewStats.topScorer?.player.name || '—'}
+          subtext={
+            state.overviewStats.topScorer
+              ? `${state.overviewStats.topScorer.goalsScored} ${unit}`
+              : 'بانتظار المباريات'
+          }
+          accent="var(--championship-gold)"
+        />
+        <StatCard
+          icon={<Shield size={17} color="var(--emerald-win)" />}
+          label="أقوى دفاع"
+          value={state.overviewStats.bestDefense?.player.name || '—'}
+          subtext={
+            state.overviewStats.bestDefense
+              ? `استقبل ${state.overviewStats.bestDefense.goalsConceded} • نظيفة ${state.overviewStats.bestDefense.cleanSheets}`
+              : 'بانتظار المباريات'
+          }
+          accent="var(--emerald-win)"
+        />
+        <StatCard
+          icon={<TrendingUp size={17} color="var(--royal-violet)" />}
+          label="أعلى نسبة فوز"
+          value={state.overviewStats.highestWinRate?.player.name || '—'}
+          subtext={
+            state.overviewStats.highestWinRate
+              ? `${state.overviewStats.highestWinRate.winRatePercent}% (${state.overviewStats.highestWinRate.wins} فوز)`
+              : 'بانتظار المباريات'
+          }
+          accent="var(--royal-violet)"
+        />
+      </div>
+
+      {topPlayers.length > 0 && (
+        <div className="stack-col" style={{ gap: 8 }}>
+          {topPlayers.map((s) => (
+            <div
+              key={s.player.id}
+              className="arena-card"
+              style={{
+                padding: 12,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <PlayerAvatar avatarUrl={s.player.avatarUrl} name={s.player.name} size={40} />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.92rem' }}>{s.player.name}</div>
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                    {s.wins} فوز • {s.draws} تعادل • {s.losses} خسارة
+                  </div>
+                </div>
+              </div>
+              <div style={{ textAlign: 'left' }}>
+                <div className="score-num" style={{ fontSize: '1.35rem', color: 'var(--championship-gold)' }}>
+                  {s.goalsScored}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{unit}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Live Match Results */}
+      <div style={{ fontWeight: 800, fontSize: '1.08rem' }}>جدول المباريات والنتائج المباشرة</div>
+      {state.allMatches.length === 0 ? (
+        <EmptyStatePanel
+          icon={<Gamepad2 size={28} />}
+          title="لم تبدأ القرعة بعد"
+          subtitle="عند اعتماد اللاعبين وإجراء القرعة من لوحة المشرف، ستظهر جميع المباريات والنتائج المباشرة هنا لجميع الأجهزة."
+        />
+      ) : (
+        <MatchResultsTable
+          matches={orderedMatches}
+          playersById={playersById}
+          canEdit={canEditScores}
+          scoreUnitLabel={unit}
+          remindersByMatchId={remindersByMatchId}
+          onQuickUpdateGoals={onQuickUpdateGoals}
+          onOpenDetailedEditor={onEditMatch}
+          onOpenReminder={onOpenReminder}
+          maxVisibleRows={12}
+        />
+      )}
+
+      {/* Scheduled Reminders */}
+      {state.matchReminders.length > 0 && (
+        <div className="arena-card stack-col" style={{ gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--championship-gold)', fontWeight: 800 }}>
+            <Bell size={18} />
+            <span>التنبيهات ومواعيد المباريات المجدولة ({state.matchReminders.length})</span>
+          </div>
+          {state.matchReminders.map((rem) => (
+            <div
+              key={rem.id}
+              className="arena-subcard"
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{rem.matchTitle}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--cyber-sky)' }}>
+                  {rem.matchStageLabel} • {new Date(rem.scheduledAtMillis).toLocaleString('ar-EG')} (تنبيه قبل {rem.leadMinutes} د)
+                </div>
+              </div>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => onCancelReminder(rem.matchId)}
+                aria-label="إلغاء التذكير"
+                style={{ color: 'var(--crimson-loss)' }}
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Export & Share Card */}
+      <div className="arena-card arena-card-gold" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontWeight: 800, color: 'var(--championship-gold)' }}>تصدير ومشاركة نتائج البطولة</div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            نزّل ملف النتائج النصي (.txt) أو شارك ملخص البطولة مباشرة
+          </div>
+        </div>
+        <button type="button" className="btn btn-gold" onClick={onOpenExportShare}>
+          <Share2 size={17} />
+          <span>تصدير / مشاركة</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RuleItem({ icon, title, value }: { icon: React.ReactNode; title: string; value: string }) {
+  return (
+    <div className="arena-subcard">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--cyber-sky)', fontSize: '0.76rem' }}>
+        {icon}
+        <span style={{ color: 'var(--text-secondary)' }}>{title}</span>
+      </div>
+      <div style={{ fontWeight: 700, fontSize: '0.84rem', marginTop: 4 }}>{value}</div>
+    </div>
+  );
+}
+
+function StatCard({
+  icon,
+  label,
+  value,
+  subtext,
+  accent
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  subtext: string;
+  accent: string;
+}) {
+  return (
+    <div className="arena-card" style={{ padding: 12, borderColor: accent }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div
+        style={{
+          fontWeight: 800,
+          fontSize: '1.05rem',
+          marginTop: 6,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }}
+      >
+        {value}
+      </div>
+      <div style={{ fontSize: '0.75rem', color: accent, marginTop: 2 }}>{subtext}</div>
+    </div>
+  );
+}

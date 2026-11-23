@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -190,29 +191,43 @@ function ensureSeedData(db) {
     db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_tournament_seeded', '1')").run();
   }
 
-  // Optional env-configured Head Admin seeding/sync
+  // Persist a deterministic server session secret in SQLite app_meta when CP4_SESSION_SECRET env is absent
+  const envSecret = process.env.CP4_SESSION_SECRET?.trim();
+  if (envSecret && envSecret.length >= 16) {
+    db.sessionSecret = envSecret;
+  } else {
+    const metaSecretRow = db.prepare("SELECT value FROM app_meta WHERE key = 'server_session_secret'").get();
+    if (metaSecretRow?.value && metaSecretRow.value.length >= 16) {
+      db.sessionSecret = metaSecretRow.value;
+    } else {
+      const generatedSecret = crypto.randomBytes(32).toString('hex');
+      db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('server_session_secret', ?)").run(generatedSecret);
+      db.sessionSecret = generatedSecret;
+    }
+  }
+
+  // Optional env-configured Head Admin seeding ONLY when no Head Admin exists yet (never overwrite existing PIN changes)
   const envPin = process.env.CP4_HEAD_ADMIN_PIN?.trim();
   const envUsername = (process.env.CP4_HEAD_ADMIN_USERNAME || 'Djilali').trim();
   if (envPin && isValidPinFormat(envPin)) {
     const existingHead = db
       .prepare('SELECT id, username FROM admin_accounts WHERE role = ? LIMIT 1')
       .get(AdminRole.HEAD_ADMIN);
-    const now = Date.now();
-    const salt = generateSalt();
-    const pHash = hashPin(envPin, salt);
-    const usernameToUse = existingHead ? existingHead.username : envUsername;
-    const permHash = computePermissionsHash({
-      username: usernameToUse,
-      role: AdminRole.HEAD_ADMIN,
-      canManageTournament: true,
-      canManagePlayers: true,
-      canRunDraw: true,
-      canEditScores: true,
-      canCrownChampion: true,
-      pinSalt: salt,
-      pinHash: pHash
-    });
     if (!existingHead) {
+      const now = Date.now();
+      const salt = generateSalt();
+      const pHash = hashPin(envPin, salt);
+      const permHash = computePermissionsHash({
+        username: envUsername,
+        role: AdminRole.HEAD_ADMIN,
+        canManageTournament: true,
+        canManagePlayers: true,
+        canRunDraw: true,
+        canEditScores: true,
+        canCrownChampion: true,
+        pinSalt: salt,
+        pinHash: pHash
+      });
       db.prepare(`
         INSERT INTO admin_accounts (
           username, display_name, role, pin_hash, pin_salt,
@@ -221,12 +236,6 @@ function ensureSeedData(db) {
           pin_updated_at, is_active, last_login_at, created_at
         ) VALUES (?, ?, ?, ?, ?, 1, 1, 1, 1, 1, ?, ?, 1, NULL, ?)
       `).run(envUsername, envUsername, AdminRole.HEAD_ADMIN, pHash, salt, permHash, now, now);
-    } else {
-      db.prepare(`
-        UPDATE admin_accounts
-        SET pin_hash = ?, pin_salt = ?, permissions_hash = ?, pin_updated_at = ?, is_active = 1
-        WHERE id = ?
-      `).run(pHash, salt, permHash, now, existingHead.id);
     }
   }
 }

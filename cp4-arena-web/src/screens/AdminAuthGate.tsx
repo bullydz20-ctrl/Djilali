@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Lock, LockKeyholeOpen, Shield, ShieldCheck, User } from 'lucide-react';
+import { getLastAdminUsername, getStoredKeepSignedIn } from '../api';
 import { evaluatePinStrengthClient } from '../types';
 import type { AdminDirectoryEntry, LockoutState } from '../types';
 
@@ -33,17 +34,25 @@ export function AdminAuthGate({
   const [setupPin, setSetupPin] = useState('');
   const [setupConfirm, setSetupConfirm] = useState('');
 
-  const [loginUser, setLoginUser] = useState(
-    () => adminDirectory.find((a) => a.isActive)?.username || adminDirectory[0]?.username || 'Djilali'
-  );
+  const [loginUser, setLoginUser] = useState(() => {
+    const savedUser = getLastAdminUsername();
+    if (savedUser && adminDirectory.some((a) => a.username.toLowerCase() === savedUser.toLowerCase())) {
+      return savedUser;
+    }
+    return adminDirectory.find((a) => a.isActive)?.username || adminDirectory[0]?.username || savedUser || 'Djilali';
+  });
   const [loginPin, setLoginPin] = useState('');
-  const [keepSignedIn, setKeepSignedIn] = useState(true);
+  const [keepSignedIn, setKeepSignedIn] = useState(() => getStoredKeepSignedIn());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (adminDirectory.length > 0 && !adminDirectory.some((a) => a.username.toLowerCase() === loginUser.toLowerCase())) {
-      setLoginUser(adminDirectory.find((a) => a.isActive)?.username || adminDirectory[0].username);
+      const savedUser = getLastAdminUsername();
+      const matchedSaved = savedUser
+        ? adminDirectory.find((a) => a.username.toLowerCase() === savedUser.toLowerCase())?.username
+        : undefined;
+      setLoginUser(matchedSaved || adminDirectory.find((a) => a.isActive)?.username || adminDirectory[0].username);
     }
   }, [adminDirectory, loginUser]);
 
@@ -155,6 +164,27 @@ export function AdminAuthGate({
               />
             </div>
 
+            <div
+              className="arena-subcard"
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}
+            >
+              <div>
+                <div style={{ fontSize: '0.84rem', fontWeight: 700 }}>حفظ حساب المشرف وتسجيل الدخول تلقائياً</div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                  {keepSignedIn ? 'تبقى الجلسة محفوظة تلقائياً عند إعادة فتح الموقع' : 'جلسة مؤقتة تُغلق عند إغلاق المتصفح'}
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={keepSignedIn}
+                className={`switch-pill ${keepSignedIn ? 'on' : ''}`}
+                onClick={() => setKeepSignedIn((v) => !v)}
+              >
+                <span className="switch-knob" />
+              </button>
+            </div>
+
             {error && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.84rem', fontWeight: 700 }}>{error}</div>}
 
             <button
@@ -259,9 +289,9 @@ export function AdminAuthGate({
               style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}
             >
               <div>
-                <div style={{ fontSize: '0.84rem', fontWeight: 700 }}>تمديد صلاحية الجلسة على الخادم</div>
+                <div style={{ fontSize: '0.84rem', fontWeight: 700 }}>حفظ حساب المشرف وتسجيل الدخول تلقائياً</div>
                 <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
-                  {keepSignedIn ? 'جلسة طويلة الصلاحية في الخادم' : 'جلسة قصيرة المدة للعمل السريع'}
+                  {keepSignedIn ? 'جلسة محفوظة تلقائياً حتى بعد إعادة فتح المتصفح أو الخادم' : 'جلسة مؤقتة تُغلق عند إغلاق المتصفح'}
                 </div>
               </div>
               <button

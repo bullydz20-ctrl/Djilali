@@ -304,7 +304,7 @@ class ApiService(
             .put("displayName", displayName)
             .put("pin", pin)
             .put("keepSignedIn", keepSignedIn)
-        return executeJsonRequest("POST", "/api/admin/setup-head", body) { json ->
+        return executeJsonRequest("POST", "/api/admin/setup-head", body, includeAuth = false) { json ->
             val token = json.optString("token")
             if (token.isNotBlank()) setAuthToken(token)
             AuthPayload(
@@ -324,7 +324,7 @@ class ApiService(
             .put("username", username)
             .put("pin", pin)
             .put("keepSignedIn", keepSignedIn)
-        return executeJsonRequest("POST", "/api/admin/login", body) { json ->
+        return executeJsonRequest("POST", "/api/admin/login", body, includeAuth = false) { json ->
             val token = json.optString("token")
             if (token.isNotBlank()) setAuthToken(token)
             AuthPayload(

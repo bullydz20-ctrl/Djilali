@@ -107,7 +107,11 @@ export function createArenaApp({ dbPath, uploadsDir, distDir } = {}) {
 
   app.get('/api/state', (req, res) => {
     const tournamentId = req.query.tournamentId ? Number(req.query.tournamentId) : null;
-    const state = service.getPublicState(tournamentId, getBearerToken(req), getClientKey(req));
+    const requestedUsername =
+      typeof req.query.username === 'string' && req.query.username.trim()
+        ? req.query.username.trim()
+        : null;
+    const state = service.getPublicState(tournamentId, getBearerToken(req), getClientKey(req), requestedUsername);
     res.json(state);
   });
 

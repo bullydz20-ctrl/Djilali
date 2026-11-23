@@ -150,7 +150,25 @@ class RemoteArenaRepository(
                     sessionPrefs.setSelectedTournamentId(null)
                 }
 
-                if (state.currentAdmin == null && apiService.getAuthToken() == null) {
+                if (state.currentAdmin != null) {
+                    val snapshot = sessionPrefs.getSessionSnapshot()
+                    val currentToken = apiService.getAuthToken()
+                    if (snapshot.loggedInAdminId != state.currentAdmin.id ||
+                        snapshot.loggedInUsername != state.currentAdmin.username ||
+                        snapshot.keepSignedIn != state.keepSignedIn
+                    ) {
+                        sessionPrefs.saveRemoteAuthSession(
+                            token = currentToken,
+                            adminId = state.currentAdmin.id,
+                            username = state.currentAdmin.username,
+                            role = state.currentAdmin.role.name,
+                            keepSignedIn = state.keepSignedIn
+                        )
+                    }
+                } else {
+                    if (apiService.getAuthToken() != null) {
+                        apiService.setAuthToken(null)
+                    }
                     sessionPrefs.clearRemoteAuthSession()
                 }
 

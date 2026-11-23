@@ -307,12 +307,23 @@ test('CP4 ARENA full end-to-end backend, security, multi-game, draw, bracket, an
     });
     assert.equal(fullReg.status, 400);
 
-    // 7. PERSISTENCE CHECK: Restart server against the SAME SQLite file
+    // 7. PERSISTENCE CHECK: Restart server against the SAME SQLite file (without CP4_SESSION_SECRET)
     await srv.close();
     srv = await startServer({ dbPath, uploadsDir });
 
-    const persistedState = await api(srv.baseUrl, `/api/state?tournamentId=${tekkenId}`);
+    // Stored Bearer session token must remain valid across server restart
+    const persistedState = await api(srv.baseUrl, `/api/state?tournamentId=${tekkenId}&username=Djilali`, {
+      token: headToken
+    });
     assert.equal(persistedState.status, 200);
+    assert.equal(persistedState.json.currentAdmin?.username, 'Djilali');
+    assert.equal(persistedState.json.rememberedUsername, 'Djilali');
+
+    // Unsigned username query param alone must return rememberedUsername hint without granting currentAdmin
+    const hintOnlyState = await api(srv.baseUrl, `/api/state?tournamentId=${tekkenId}&username=djilali`);
+    assert.equal(hintOnlyState.status, 200);
+    assert.equal(hintOnlyState.json.currentAdmin, null);
+    assert.equal(hintOnlyState.json.rememberedUsername, 'Djilali');
     assert.equal(persistedState.json.tournament.gameTitle, 'Tekken 8');
     assert.equal(persistedState.json.tournament.scoreUnitLabel, 'جولة');
     assert.equal(persistedState.json.approvedPlayers.length, 4);
@@ -581,11 +592,27 @@ test('CP4 ARENA full end-to-end backend, security, multi-game, draw, bracket, an
     assert.equal(afterDelAll.json.tournament, null);
 
     // Restart server and confirm 0 tournaments stay deleted (not resurrected)
+    // Also confirm CP4_HEAD_ADMIN_PIN env var does NOT overwrite an existing Head Admin's updated PIN
     await srv.close();
-    srv = await startServer({ dbPath, uploadsDir });
-    const afterRestart = await api(srv.baseUrl, '/api/state');
+    const prevEnvPin = process.env.CP4_HEAD_ADMIN_PIN;
+    process.env.CP4_HEAD_ADMIN_PIN = '111222';
+    try {
+      srv = await startServer({ dbPath, uploadsDir });
+    } finally {
+      if (prevEnvPin === undefined) delete process.env.CP4_HEAD_ADMIN_PIN;
+      else process.env.CP4_HEAD_ADMIN_PIN = prevEnvPin;
+    }
+    const afterRestart = await api(srv.baseUrl, '/api/state', { token: freshToken });
     assert.equal(afterRestart.json.tournaments.length, 0);
     assert.equal(afterRestart.json.tournament, null);
+    assert.equal(afterRestart.json.currentAdmin?.username, 'Djilali');
+
+    const preservedPinLogin = await api(srv.baseUrl, '/api/admin/login', {
+      method: 'POST',
+      headers: { 'X-Forwarded-For': '10.10.10.108' },
+      body: { username: 'Djilali', pin: '739152' }
+    });
+    assert.equal(preservedPinLogin.status, 200);
   } finally {
     await srv.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });

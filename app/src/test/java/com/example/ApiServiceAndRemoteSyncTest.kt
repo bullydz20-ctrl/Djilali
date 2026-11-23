@@ -65,6 +65,25 @@ class ApiServiceAndRemoteSyncTest {
                 }
 
                 method == "GET" && path == "/api/state" -> {
+                    val auth = exchange.requestHeaders.getFirst("Authorization")
+                    val currentAdminJson = if (auth == "Bearer signed-jwt-token-xyz") {
+                        """
+                        {
+                          "id": 1,
+                          "username": "djilali",
+                          "displayName": "Djilali",
+                          "role": "HEAD_ADMIN",
+                          "canManageTournament": true,
+                          "canManagePlayers": true,
+                          "canRunDraw": true,
+                          "canEditScores": true,
+                          "canCrownChampion": true,
+                          "isActive": true
+                        }
+                        """.trimIndent()
+                    } else {
+                        "null"
+                    }
                     val stateJson = """
                         {
                           "tournaments": [
@@ -147,7 +166,7 @@ class ApiServiceAndRemoteSyncTest {
                             {"id": 1, "username": "djilali", "displayName": "Djilali", "role": "HEAD_ADMIN", "isActive": true}
                           ],
                           "adminAccounts": [],
-                          "currentAdmin": null,
+                          "currentAdmin": $currentAdminJson,
                           "keepSignedIn": true,
                           "lockoutState": {"failedAttempts": 0, "lockedUntilMillis": 0}
                         }
@@ -183,6 +202,10 @@ class ApiServiceAndRemoteSyncTest {
                         }
                         """.trimIndent()
                     )
+                }
+
+                method == "POST" && path == "/api/admin/logout" -> {
+                    respondJson(exchange, 200, """{"ok":true,"messageAr":"تم تسجيل الخروج من لوحة المشرف."}""")
                 }
 
                 method == "POST" && path == "/api/tournaments" -> {
@@ -531,5 +554,35 @@ class ApiServiceAndRemoteSyncTest {
         } finally {
             errorServer.stop(0)
         }
+    }
+
+    @Test
+    fun remoteRepository_autoRestoresAdminSessionAcrossRelaunchAndPreservesLastUsernameOnLogout() = runBlocking {
+        val prefs = SessionPreferences(context)
+        val localUrl = "http://127.0.0.1:$serverPort"
+        prefs.setServerBaseUrl(localUrl)
+
+        val repo1 = RemoteArenaRepository(context, prefs, ApiService(initialBaseUrl = localUrl))
+        val scope1 = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val loginRes = repo1.loginAdmin("djilali", "123456", keepSignedIn = true)
+        assertTrue(loginRes is RepoResult.Success)
+        assertEquals("djilali", repo1.remoteState.value?.currentAdmin?.username)
+        repo1.stopRealtimeSync()
+        scope1.cancel()
+
+        // Fresh launch must auto-restore admin session from DataStore without asking to re-login
+        val repo2 = RemoteArenaRepository(context, SessionPreferences(context), ApiService())
+        val scope2 = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val initRes = repo2.initialize(scope2)
+        assertTrue(initRes is RepoResult.Success)
+        assertEquals("djilali", repo2.remoteState.value?.currentAdmin?.username)
+        assertEquals("signed-jwt-token-xyz", repo2.apiService.getAuthToken())
+
+        // After logout, active token is cleared, but lastUsername remains saved for quick login
+        repo2.logoutAdmin()
+        assertNull(repo2.remoteState.value?.currentAdmin)
+        assertEquals("djilali", prefs.getSessionSnapshot().lastUsername)
+        repo2.stopRealtimeSync()
+        scope2.cancel()
     }
 }

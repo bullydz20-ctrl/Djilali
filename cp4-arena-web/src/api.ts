@@ -1,10 +1,79 @@
 import type { AdminAccount, ArenaState, LockoutState, PlayerLevel, PlayerStatus } from './types';
 
-// Held strictly in JS memory (never localStorage or sessionStorage)
-let inMemoryToken: string | null = null;
+const STORAGE_TOKEN_KEY = 'cp4_admin_token';
+const STORAGE_KEEP_KEY = 'cp4_keep_signed_in';
+const STORAGE_LAST_USER_KEY = 'cp4_last_admin_username';
 
-export function setAuthToken(token: string | null) {
-  inMemoryToken = token;
+function readInitialToken(): string | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    return (
+      window.localStorage.getItem(STORAGE_TOKEN_KEY) ||
+      window.sessionStorage.getItem(STORAGE_TOKEN_KEY) ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+let inMemoryToken: string | null = readInitialToken();
+
+export function getStoredKeepSignedIn(): boolean {
+  try {
+    if (typeof window === 'undefined') return true;
+    const raw = window.localStorage.getItem(STORAGE_KEEP_KEY);
+    return raw === null ? true : raw === '1';
+  } catch {
+    return true;
+  }
+}
+
+export function getLastAdminUsername(): string {
+  try {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem(STORAGE_LAST_USER_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setLastAdminUsername(username: string | null) {
+  try {
+    if (typeof window === 'undefined') return;
+    const clean = username?.trim();
+    if (clean) {
+      window.localStorage.setItem(STORAGE_LAST_USER_KEY, clean);
+    }
+  } catch {
+    // ignore storage restriction errors
+  }
+}
+
+export function setAuthToken(token: string | null, keepSignedIn?: boolean) {
+  const cleanToken = token?.trim() || null;
+  inMemoryToken = cleanToken;
+  try {
+    if (typeof window === 'undefined') return;
+    if (keepSignedIn !== undefined) {
+      window.localStorage.setItem(STORAGE_KEEP_KEY, keepSignedIn ? '1' : '0');
+    }
+    if (!cleanToken) {
+      window.localStorage.removeItem(STORAGE_TOKEN_KEY);
+      window.sessionStorage.removeItem(STORAGE_TOKEN_KEY);
+      return;
+    }
+    const persistLongTerm = keepSignedIn ?? getStoredKeepSignedIn();
+    if (persistLongTerm) {
+      window.localStorage.setItem(STORAGE_TOKEN_KEY, cleanToken);
+      window.sessionStorage.removeItem(STORAGE_TOKEN_KEY);
+    } else {
+      window.sessionStorage.setItem(STORAGE_TOKEN_KEY, cleanToken);
+      window.localStorage.removeItem(STORAGE_TOKEN_KEY);
+    }
+  } catch {
+    // ignore storage restriction errors
+  }
 }
 
 export function getAuthToken(): string | null {
@@ -16,11 +85,16 @@ async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T>
   if (!headers.has('Content-Type') && options.body != null) {
     headers.set('Content-Type', 'application/json');
   }
-  if (inMemoryToken) {
-    headers.set('Authorization', `Bearer ${inMemoryToken}`);
+  const activeToken = inMemoryToken || readInitialToken();
+  if (activeToken) {
+    inMemoryToken = activeToken;
+    headers.set('Authorization', `Bearer ${activeToken}`);
   }
   const res = await fetch(url, { ...options, headers });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && url !== '/api/admin/login' && url !== '/api/admin/setup-head') {
+    setAuthToken(null);
+  }
   if (!res.ok) {
     const err = new Error(data.error || 'حدث خطأ أثناء الاتصال بالخادم.') as Error & {
       status?: number;
@@ -33,9 +107,20 @@ async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T>
   return data as T;
 }
 
-export async function fetchArenaState(tournamentId?: number | null): Promise<ArenaState> {
-  const qs = tournamentId != null ? `?tournamentId=${encodeURIComponent(String(tournamentId))}` : '';
-  return apiRequest<ArenaState>(`/api/state${qs}`);
+export async function fetchArenaState(
+  tournamentId?: number | null,
+  savedUsername?: string | null
+): Promise<ArenaState> {
+  const params = new URLSearchParams();
+  if (tournamentId != null) {
+    params.set('tournamentId', String(tournamentId));
+  }
+  const cleanUser = savedUsername?.trim() || getLastAdminUsername().trim();
+  if (cleanUser) {
+    params.set('username', cleanUser);
+  }
+  const qs = params.toString();
+  return apiRequest<ArenaState>(`/api/state${qs ? `?${qs}` : ''}`);
 }
 
 export async function registerPlayerApi(payload: {
@@ -62,7 +147,8 @@ export async function setupHeadAdminApi(payload: {
     '/api/admin/setup-head',
     { method: 'POST', body: JSON.stringify(payload) }
   );
-  setAuthToken(res.token);
+  setAuthToken(res.token, payload.keepSignedIn);
+  setLastAdminUsername(res.admin?.username || payload.username);
   return res;
 }
 
@@ -77,7 +163,8 @@ export async function loginAdminApi(payload: { username: string; pin: string; ke
     method: 'POST',
     body: JSON.stringify(payload)
   });
-  setAuthToken(res.token);
+  setAuthToken(res.token, payload.keepSignedIn);
+  setLastAdminUsername(res.admin?.username || payload.username);
   return res;
 }
 
@@ -97,10 +184,14 @@ export async function changeOwnPinApi(currentPin: string, newPin: string) {
 }
 
 export async function updateOwnProfileApi(payload: { displayName: string; username?: string }) {
-  return apiRequest<{ ok: boolean; admin: AdminAccount; messageAr: string }>('/api/admin/profile', {
+  const res = await apiRequest<{ ok: boolean; admin: AdminAccount; messageAr: string }>('/api/admin/profile', {
     method: 'PATCH',
     body: JSON.stringify(payload)
   });
+  if (res.admin?.username) {
+    setLastAdminUsername(res.admin.username);
+  }
+  return res;
 }
 
 export async function createSubAdminApi(payload: {

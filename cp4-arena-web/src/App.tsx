@@ -12,11 +12,15 @@ import {
   deleteTournamentApi,
   fetchArenaState,
   generateKnockoutApi,
+  getAuthToken,
+  getLastAdminUsername,
   loginAdminApi,
   logoutAdminApi,
   registerPlayerApi,
   runDrawApi,
   scheduleReminderApi,
+  setAuthToken,
+  setLastAdminUsername,
   setupHeadAdminApi,
   updateKnockoutWinnerApi,
   updateMatchScoreApi,
@@ -92,7 +96,22 @@ export default function App() {
   const refreshState = useCallback(async (overrideTid?: number | null) => {
     try {
       const tid = overrideTid !== undefined ? overrideTid : activeTidRef.current;
-      const next = await fetchArenaState(tid);
+      let savedUsername = getLastAdminUsername().trim();
+      if (!savedUsername && typeof window !== 'undefined') {
+        try {
+          savedUsername = (window.localStorage.getItem('cp4_last_admin_username') || '').trim();
+        } catch {
+          savedUsername = '';
+        }
+      }
+      const next = await fetchArenaState(tid, savedUsername || null);
+      if (next.currentAdmin) {
+        setLastAdminUsername(next.currentAdmin.username);
+      } else if (getAuthToken()) {
+        setAuthToken(null);
+      } else if (next.rememberedUsername) {
+        setLastAdminUsername(next.rememberedUsername);
+      }
       setState(next);
       setLoadError('');
       if (next.tournament && next.tournament.id !== tid) {

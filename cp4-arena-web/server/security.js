@@ -8,12 +8,15 @@ export const LOCKOUT_DURATION_MS = 30_000;
 export const PBKDF2_ITERATIONS = 65_536;
 export const PBKDF2_KEY_LEN = 32;
 export const SESSION_TTL_EPHEMERAL_MS = 12 * 60 * 60 * 1000;
-export const SESSION_TTL_PERSISTENT_MS = 30 * 24 * 60 * 60 * 1000;
+export const SESSION_TTL_PERSISTENT_MS = 180 * 24 * 60 * 60 * 1000;
 
-const SESSION_SECRET =
-  process.env.CP4_SESSION_SECRET && process.env.CP4_SESSION_SECRET.trim().length >= 16
+const FALLBACK_PROCESS_SECRET = crypto.randomBytes(32).toString('hex');
+
+export function getDefaultSessionSecret() {
+  return process.env.CP4_SESSION_SECRET && process.env.CP4_SESSION_SECRET.trim().length >= 16
     ? process.env.CP4_SESSION_SECRET.trim()
-    : crypto.randomBytes(32).toString('hex');
+    : FALLBACK_PROCESS_SECRET;
+}
 
 export function isValidPinFormat(pin) {
   return typeof pin === 'string' && /^\d{6}$/.test(pin);
@@ -131,8 +134,12 @@ export function generateSessionToken() {
   return crypto.randomBytes(32).toString('base64url');
 }
 
-export function hashSessionToken(token) {
-  return crypto.createHmac('sha256', SESSION_SECRET).update(String(token), 'utf8').digest('hex');
+export function hashSessionToken(token, secretOverride = null) {
+  const secret =
+    typeof secretOverride === 'string' && secretOverride.trim().length >= 16
+      ? secretOverride.trim()
+      : getDefaultSessionSecret();
+  return crypto.createHmac('sha256', secret).update(String(token), 'utf8').digest('hex');
 }
 
 export function sanitizeAdminPublic(admin) {

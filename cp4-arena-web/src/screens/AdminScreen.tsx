@@ -142,7 +142,8 @@ export function AdminScreen({
             لوحة تحكم: {admin.displayName} <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>(@{admin.username})</span>
           </div>
           <div style={{ fontSize: '0.76rem', color: 'var(--cyber-sky)' }}>
-            {admin.role === 'HEAD_ADMIN' ? 'المشرف الرئيسي' : 'مشرف مساعد'} • جلسة آمنة نشطة
+            {admin.role === 'HEAD_ADMIN' ? 'المشرف الرئيسي' : 'مشرف مساعد'} •{' '}
+            {state.keepSignedIn ? 'جلسة محفوظة تلقائياً' : 'جلسة مؤقتة نشطة'}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>

@@ -13,7 +13,9 @@ import com.example.data.local.AdminAccountEntity
 import com.example.data.local.LockoutState
 import com.example.data.model.AdminRole
 import com.example.ui.screens.AdminAuthGate
+import com.example.ui.screens.AdminScreen
 import com.example.ui.theme.FifaTournamentTheme
+import com.example.ui.viewmodel.TournamentUiState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -202,5 +204,45 @@ class AdminLoginUiTest {
         composeRule.onNodeWithTag("login_admin_submit").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertEquals("202226", capturedPin)
+    }
+
+    @Test
+    fun adminScreenDoesNotShowHeadAdminCreationWhileServerUnreachableOrSyncing() {
+        composeRule.setContent {
+            FifaTournamentTheme {
+                AdminScreen(
+                    uiState = TournamentUiState(
+                        isLoaded = true,
+                        hasServerState = false,
+                        hasHeadAdmin = false,
+                        isSyncing = false,
+                        isServerReachable = false,
+                        connectionError = "خادم Render قيد الاستيقاظ"
+                    ),
+                    onSetupHeadAdmin = { _, _, _, _ -> },
+                    onLogin = { _, _, _ -> },
+                    onLogout = {},
+                    onImportBanner = { _, _ -> },
+                    onSaveTournament = {},
+                    onCreateFreshTournament = {},
+                    onDeleteTournament = {},
+                    onUpdatePlayerStatus = { _, _ -> },
+                    onUpdatePlayerDetails = {},
+                    onDeletePlayer = {},
+                    onRunDraw = { _, _ -> },
+                    onGenerateKnockoutFromStandings = {},
+                    onEditMatch = {},
+                    onChangeOwnPin = { _, _ -> },
+                    onCreateSubAdmin = { _, _, _, _, _, _, _, _ -> },
+                    onUpdateSubAdmin = { _, _, _, _, _, _, _, _, _ -> },
+                    onDeleteSubAdmin = {},
+                    onCrownChampion = {}
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("admin_server_error_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("setup_admin_submit").assertDoesNotExist()
     }
 }

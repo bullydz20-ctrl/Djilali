@@ -79,7 +79,9 @@ fun AdminAuthGate(
     lockoutState: LockoutState,
     onSetupHeadAdmin: (username: String, displayName: String, pin: String, keepSignedIn: Boolean) -> Unit,
     onLogin: (username: String, pin: String, keepSignedIn: Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    defaultUsername: String? = null,
+    defaultKeepSignedIn: Boolean = true
 ) {
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val isLocked = lockoutState.lockedUntilMillis > nowMillis
@@ -146,11 +148,11 @@ fun AdminAuthGate(
                 }
 
                 if (!hasHeadAdmin) {
-                    var username by remember { mutableStateOf("admin") }
+                    var username by remember { mutableStateOf(defaultUsername?.takeIf { it.isNotBlank() } ?: "admin") }
                     var displayName by remember { mutableStateOf("المشرف الرئيسي") }
                     var pin by remember { mutableStateOf("") }
                     var confirmPin by remember { mutableStateOf("") }
-                    var keepSignedIn by remember { mutableStateOf(true) }
+                    var keepSignedIn by remember { mutableStateOf(defaultKeepSignedIn) }
                     val strength = PinSecurityManager.evaluateStrength(pin)
 
                     Text(
@@ -254,11 +256,21 @@ fun AdminAuthGate(
                         Text("إنشاء حساب المشرف والدخول")
                     }
                 } else {
-                    var username by remember(admins) {
-                        mutableStateOf(admins.firstOrNull { it.isActive }?.username ?: admins.firstOrNull()?.username ?: "")
+                    var username by remember(admins, defaultUsername) {
+                        val remembered = defaultUsername?.trim()?.takeIf { it.isNotEmpty() }
+                        val matchedRemembered = remembered?.let { saved ->
+                            admins.firstOrNull { it.username.equals(saved, ignoreCase = true) }?.username
+                        }
+                        mutableStateOf(
+                            matchedRemembered
+                                ?: admins.firstOrNull { it.isActive }?.username
+                                ?: admins.firstOrNull()?.username
+                                ?: remembered
+                                ?: ""
+                        )
                     }
                     var pin by remember { mutableStateOf("") }
-                    var keepSignedIn by remember { mutableStateOf(true) }
+                    var keepSignedIn by remember(defaultKeepSignedIn) { mutableStateOf(defaultKeepSignedIn) }
 
                     Text(
                         text = "تسجيل دخول المشرف والمساعدين",
@@ -420,12 +432,12 @@ private fun KeepSignedInRow(
         ) {
             Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                 Text(
-                    text = "تذكر وحفظ الجلسة (DataStore)",
+                    text = "حفظ تسجيل الدخول تلقائياً (DataStore)",
                     style = MaterialTheme.typography.labelLarge,
                     color = TextPrimary
                 )
                 Text(
-                    text = if (checked) "تبقى الجلسة مفتوحة بعد إعادة تشغيل التطبيق" else "جلسة مؤقتة تُغلق عند إعادة تشغيل التطبيق",
+                    text = if (checked) "تبقى الجلسة محفوظة ومفتوحة تلقائياً بعد إعادة تشغيل التطبيق" else "جلسة مؤقتة تُغلق عند إعادة تشغيل التطبيق",
                     style = MaterialTheme.typography.labelSmall,
                     color = TextSecondary
                 )

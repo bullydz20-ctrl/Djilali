@@ -194,6 +194,7 @@ export interface ArenaState {
   adminDirectory: AdminDirectoryEntry[];
   adminAccounts: AdminAccount[];
   currentAdmin: AdminAccount | null;
+  rememberedUsername?: string | null;
   keepSignedIn: boolean;
   lockoutState: LockoutState;
   gameCatalog: GameCatalogItem[];

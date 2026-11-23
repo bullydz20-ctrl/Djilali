@@ -25,7 +25,8 @@ data class AdminSessionState(
     val loggedInUsername: String? = null,
     val loggedInRole: String? = null,
     val sessionStartedAtMillis: Long = 0L,
-    val keepSignedIn: Boolean = true
+    val keepSignedIn: Boolean = true,
+    val lastUsername: String? = null
 ) {
     val isAuthenticated: Boolean get() = loggedInAdminId != null
 }
@@ -37,6 +38,7 @@ class SessionPreferences(private val context: Context) {
         private val KEY_LOGGED_IN_ROLE = stringPreferencesKey("logged_in_role")
         private val KEY_SESSION_STARTED_AT = longPreferencesKey("session_started_at_ms")
         private val KEY_KEEP_SIGNED_IN = booleanPreferencesKey("keep_signed_in")
+        private val KEY_LAST_ADMIN_USERNAME = stringPreferencesKey("last_admin_username")
         private val KEY_FAILED_ATTEMPTS = intPreferencesKey("pin_failed_attempts")
         private val KEY_LOCKED_UNTIL = longPreferencesKey("pin_locked_until_ms")
         private val KEY_SELECTED_TOURNAMENT_ID = longPreferencesKey("selected_tournament_id")
@@ -51,7 +53,9 @@ class SessionPreferences(private val context: Context) {
             loggedInUsername = prefs[KEY_LOGGED_IN_USERNAME],
             loggedInRole = prefs[KEY_LOGGED_IN_ROLE],
             sessionStartedAtMillis = prefs[KEY_SESSION_STARTED_AT] ?: 0L,
-            keepSignedIn = prefs[KEY_KEEP_SIGNED_IN] ?: true
+            keepSignedIn = prefs[KEY_KEEP_SIGNED_IN] ?: true,
+            lastUsername = prefs[KEY_LAST_ADMIN_USERNAME]?.takeIf { it.isNotBlank() }
+                ?: prefs[KEY_LOGGED_IN_USERNAME]?.takeIf { it.isNotBlank() }
         )
     }
 
@@ -166,6 +170,7 @@ class SessionPreferences(private val context: Context) {
         context.sessionDataStore.edit { prefs ->
             prefs[KEY_LOGGED_IN_ADMIN_ID] = adminId
             prefs[KEY_LOGGED_IN_USERNAME] = username
+            prefs[KEY_LAST_ADMIN_USERNAME] = username
             prefs[KEY_LOGGED_IN_ROLE] = role
             prefs[KEY_SESSION_STARTED_AT] = System.currentTimeMillis()
             prefs[KEY_KEEP_SIGNED_IN] = keepSignedIn
@@ -183,7 +188,6 @@ class SessionPreferences(private val context: Context) {
             prefs.remove(KEY_LOGGED_IN_USERNAME)
             prefs.remove(KEY_LOGGED_IN_ROLE)
             prefs.remove(KEY_SESSION_STARTED_AT)
-            prefs.remove(KEY_KEEP_SIGNED_IN)
             prefs.remove(KEY_AUTH_TOKEN)
         }
     }

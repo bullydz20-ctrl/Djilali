@@ -38,6 +38,7 @@ data class GroupWithStandings(
 
 data class TournamentUiState(
     val isLoaded: Boolean = false,
+    val hasServerState: Boolean = false,
     val tournaments: List<TournamentEntity> = emptyList(),
     val tournament: TournamentEntity? = null,
     val players: List<PlayerEntity> = emptyList(),
@@ -120,6 +121,7 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
         if (remote == null) {
             TournamentUiState(
                 isLoaded = !meta.isSyncing && meta.connectionError != null,
+                hasServerState = false,
                 sessionState = session,
                 serverBaseUrl = meta.baseUrl,
                 isSyncing = meta.isSyncing,
@@ -135,6 +137,7 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
             }
             TournamentUiState(
                 isLoaded = true,
+                hasServerState = true,
                 tournaments = remote.tournaments,
                 tournament = remote.tournament,
                 players = remote.players,

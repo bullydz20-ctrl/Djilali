@@ -242,7 +242,7 @@ export class ArenaService {
 
   verifySessionToken(rawToken) {
     if (!rawToken || typeof rawToken !== 'string') return null;
-    const tokenHash = hashSessionToken(rawToken);
+    const tokenHash = hashSessionToken(rawToken, this.db?.sessionSecret);
     const now = Date.now();
     const row = this.db
       .prepare(`
@@ -257,6 +257,11 @@ export class ArenaService {
     if (!admin.isActive || !verifyPermissionsIntegrity(admin)) {
       this.db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(tokenHash);
       return null;
+    }
+    if (Boolean(row.keep_signed_in) && row.expires_at - now < SESSION_TTL_PERSISTENT_MS / 2) {
+      this.db
+        .prepare('UPDATE admin_sessions SET expires_at = ? WHERE token_hash = ?')
+        .run(now + SESSION_TTL_PERSISTENT_MS, tokenHash);
     }
     return {
       admin: sanitizeAdminPublic(admin),
@@ -319,7 +324,7 @@ export class ArenaService {
         .run(cleanUser, cleanDisplay, AdminRole.HEAD_ADMIN, pHash, salt, permHash, now, now, now);
 
       const token = generateSessionToken();
-      const tokenHash = hashSessionToken(token);
+      const tokenHash = hashSessionToken(token, this.db?.sessionSecret);
       const ttl = keepSignedIn ? SESSION_TTL_PERSISTENT_MS : SESSION_TTL_EPHEMERAL_MS;
       this.db
         .prepare('INSERT INTO admin_sessions (token_hash, admin_id, keep_signed_in, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -399,7 +404,7 @@ export class ArenaService {
     }
 
     const token = generateSessionToken();
-    const tokenHash = hashSessionToken(token);
+    const tokenHash = hashSessionToken(token, this.db?.sessionSecret);
     const ttl = keepSignedIn ? SESSION_TTL_PERSISTENT_MS : SESSION_TTL_EPHEMERAL_MS;
 
     this.withTx(() => {
@@ -424,7 +429,7 @@ export class ArenaService {
 
   logoutAdmin(rawToken) {
     if (rawToken) {
-      this.db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(hashSessionToken(rawToken));
+      this.db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(hashSessionToken(rawToken, this.db?.sessionSecret));
     }
     return { ok: true, status: 200, messageAr: 'تم تسجيل الخروج من لوحة المشرف.' };
   }
@@ -456,7 +461,7 @@ export class ArenaService {
       pinHash: pHash
     });
 
-    const currentTokenHash = hashSessionToken(rawToken);
+    const currentTokenHash = hashSessionToken(rawToken, this.db?.sessionSecret);
     this.withTx(() => {
       this.db
         .prepare('UPDATE admin_accounts SET pin_salt = ?, pin_hash = ?, permissions_hash = ?, pin_updated_at = ? WHERE id = ?')
@@ -715,7 +720,7 @@ export class ArenaService {
     return { ok: true, status: 200, messageAr: 'تم حذف الحساب المساعد بنجاح.' };
   }
 
-  getPublicState(requestedTournamentId = null, rawToken = null, clientKey = 'default') {
+  getPublicState(requestedTournamentId = null, rawToken = null, clientKey = 'default', requestedUsername = null) {
     const tournamentRows = this.db.prepare('SELECT * FROM tournaments ORDER BY id DESC').all();
     const tournaments = tournamentRows.map(mapTournament);
     let tournament = null;
@@ -774,6 +779,12 @@ export class ArenaService {
 
     const session = rawToken ? this.verifySessionToken(rawToken) : null;
     const isHeadAdmin = session?.admin?.role === AdminRole.HEAD_ADMIN;
+    const adminDirectory = this.getAdminDirectory();
+    const cleanRequestedUsername =
+      typeof requestedUsername === 'string' && requestedUsername.trim() ? requestedUsername.trim() : null;
+    const matchedDirectoryAdmin = cleanRequestedUsername
+      ? adminDirectory.find((a) => a.username.toLowerCase() === cleanRequestedUsername.toLowerCase()) || null
+      : null;
 
     const isRegistrationOpenNow = Boolean(
       tournament &&
@@ -800,9 +811,10 @@ export class ArenaService {
       championPlayer,
       isRegistrationOpenNow,
       hasHeadAdmin: this.hasHeadAdmin(),
-      adminDirectory: this.getAdminDirectory(),
+      adminDirectory,
       adminAccounts: isHeadAdmin ? this.listFullAdminsForHead() : [],
       currentAdmin: session ? session.admin : null,
+      rememberedUsername: session ? session.admin.username : matchedDirectoryAdmin?.username ?? null,
       keepSignedIn: session ? session.keepSignedIn : true,
       lockoutState: this.getLockoutState(clientKey),
       gameCatalog: GAME_CATALOG

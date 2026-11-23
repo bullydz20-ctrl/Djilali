@@ -463,7 +463,9 @@ fun FifaTournamentApp(
                                     onUpdateSubAdmin = viewModel::updateSubAdmin,
                                     onDeleteSubAdmin = viewModel::deleteSubAdmin,
                                     onCrownChampion = viewModel::crownChampion,
-                                    onOpenExportShare = { showExportShareDialog = true }
+                                    onOpenExportShare = { showExportShareDialog = true },
+                                    onRetryConnection = { viewModel.refreshFromServer() },
+                                    onConfigureServerUrl = { showServerUrlDialog = true }
                                 )
                             }
                         }

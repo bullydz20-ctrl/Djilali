@@ -3,15 +3,18 @@ package com.example.ui.screens
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -21,16 +24,21 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SportsScore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -109,16 +117,32 @@ fun AdminScreen(
     onDeleteSubAdmin: (AdminAccountEntity) -> Unit,
     onCrownChampion: (Long?) -> Unit,
     onOpenExportShare: () -> Unit = {},
+    onRetryConnection: () -> Unit = {},
+    onConfigureServerUrl: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val currentAdmin = uiState.currentAdmin
     if (currentAdmin == null) {
+        if (!uiState.hasServerState) {
+            AdminServerSyncPendingPanel(
+                isSyncing = uiState.isSyncing || !uiState.isLoaded,
+                isServerReachable = uiState.isServerReachable,
+                connectionError = uiState.connectionError,
+                serverBaseUrl = uiState.serverBaseUrl,
+                onRetryConnection = onRetryConnection,
+                onConfigureServerUrl = onConfigureServerUrl,
+                modifier = modifier
+            )
+            return
+        }
         AdminAuthGate(
             hasHeadAdmin = uiState.hasHeadAdmin,
             admins = uiState.admins,
             lockoutState = uiState.lockoutState,
             onSetupHeadAdmin = onSetupHeadAdmin,
             onLogin = onLogin,
+            defaultUsername = uiState.sessionState.lastUsername,
+            defaultKeepSignedIn = uiState.sessionState.keepSignedIn,
             modifier = modifier
         )
         return
@@ -161,7 +185,11 @@ fun AdminScreen(
                         style = MaterialTheme.typography.titleSmall,
                         color = ChampionshipGold
                     )
-                    val sessionBadge = if (uiState.sessionState.keepSignedIn) "جلسة محفوظة (الخادم المركزي)" else "جلسة مؤقتة"
+                    val sessionBadge = if (uiState.sessionState.keepSignedIn) {
+                        "جلسة محفوظة تلقائياً (الخادم المركزي)"
+                    } else {
+                        "جلسة مؤقتة"
+                    }
                     Text(
                         text = "${currentAdmin.role.labelAr} • $sessionBadge",
                         style = MaterialTheme.typography.labelSmall,
@@ -462,3 +490,93 @@ private fun AdminOwnAccountDialog(
         }
     )
 }
+
+@Composable
+private fun AdminServerSyncPendingPanel(
+    isSyncing: Boolean,
+    isServerReachable: Boolean,
+    connectionError: String?,
+    serverBaseUrl: String,
+    onRetryConnection: () -> Unit,
+    onConfigureServerUrl: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 500.dp)
+                .testTag(if (!isServerReachable && !isSyncing) "admin_server_error_card" else "admin_server_loading_card"),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+            border = BorderStroke(1.dp, CardBorder)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (isSyncing && isServerReachable) {
+                    CircularProgressIndicator(color = ChampionshipGold)
+                    Text(
+                        text = "جاري التحقق من الخادم المركزي واستعادة الجلسة المحفوظة...",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "يتم التحقق من حساب المشرف والبطولات من الخادم ($serverBaseUrl) قبل عرض لوحة الإدارة.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.CloudOff,
+                        contentDescription = null,
+                        tint = CrimsonLoss,
+                        modifier = Modifier.size(44.dp)
+                    )
+                    Text(
+                        text = "تعذر التحقق من حساب المشرف على الخادم",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = connectionError ?: "الخادم المركزي غير متاح أو قيد الاستيقاظ الآن ($serverBaseUrl). أعد المحاولة لاستعادة حسابك المحفوظ.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                    Button(
+                        onClick = onRetryConnection,
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("admin_retry_server_button")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("إعادة الاتصال بالخادم")
+                    }
+                    OutlinedButton(
+                        onClick = onConfigureServerUrl,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("admin_change_server_url_button")
+                    ) {
+                        Text("تغيير رابط خادم Render", color = CyberSky)
+                    }
+                }
+            }
+        }
+    }
+}
+

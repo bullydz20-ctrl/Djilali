@@ -345,7 +345,11 @@ class ApiService(
         val body = JSONObject()
             .put("currentPin", currentPin)
             .put("newPin", newPin)
-        return executeJsonRequest("POST", "/api/admin/change-pin", body) { Unit }
+        return executeJsonRequest("POST", "/api/admin/change-pin", body) { json ->
+            val token = json.optString("token")
+            if (token.isNotBlank()) setAuthToken(token)
+            Unit
+        }
     }
 
     suspend fun updateOwnProfile(displayName: String, username: String?): ApiResult<AdminAccountEntity> {
@@ -354,6 +358,8 @@ class ApiService(
             body.put("username", username)
         }
         return executeJsonRequest("PATCH", "/api/admin/profile", body) { json ->
+            val token = json.optString("token")
+            if (token.isNotBlank()) setAuthToken(token)
             parseAdmin(json.getJSONObject("admin"))
         }
     }

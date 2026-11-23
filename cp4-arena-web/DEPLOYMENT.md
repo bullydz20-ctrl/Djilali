@@ -76,7 +76,7 @@ docker run -d \
 - اضبط المتغيرات البيئية التالية:
   - `CP4_DB_PATH=/var/data/cp4_arena.db`
   - `CP4_UPLOADS_DIR=/var/data/uploads`
-  - `CP4_SESSION_SECRET=<مفتاح عشوائي طويل>`
+  - `JWT_SECRET=<مفتاح عشوائي طويل>` (لتوقيع جلسات المشرف الرئيسي والحسابات المساعدة وحفظ الدخول تلقائياً حتى بعد إعادة تشغيل الخادم؛ وإذا لم يُضبط يُستخدم `ADMIN_PASSWORD` أو `CP4_SESSION_SECRET`)
   - `CP4_HEAD_ADMIN_USERNAME=Djilali` (اختياري)
   - `CP4_HEAD_ADMIN_PIN=<رمز PIN من 6 أرقام>` (اختياري؛ إذا تركته فارغاً يمكنك إنشاء المشرف الرئيسي من شاشة الإدارة عند أول دخول)
 

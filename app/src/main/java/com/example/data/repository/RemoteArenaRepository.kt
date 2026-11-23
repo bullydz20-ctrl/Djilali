@@ -153,9 +153,11 @@ class RemoteArenaRepository(
                 if (state.currentAdmin != null) {
                     val snapshot = sessionPrefs.getSessionSnapshot()
                     val currentToken = apiService.getAuthToken()
+                    val savedToken = sessionPrefs.getAuthTokenOnce()
                     if (snapshot.loggedInAdminId != state.currentAdmin.id ||
                         snapshot.loggedInUsername != state.currentAdmin.username ||
-                        snapshot.keepSignedIn != state.keepSignedIn
+                        snapshot.keepSignedIn != state.keepSignedIn ||
+                        (state.keepSignedIn && !currentToken.isNullOrBlank() && savedToken != currentToken)
                     ) {
                         sessionPrefs.saveRemoteAuthSession(
                             token = currentToken,

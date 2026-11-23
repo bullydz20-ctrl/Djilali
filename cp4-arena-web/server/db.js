@@ -9,7 +9,13 @@ import {
   TournamentFormat,
   TournamentStatus
 } from './constants.js';
-import { computePermissionsHash, generateSalt, hashPin, isValidPinFormat } from './security.js';
+import {
+  computePermissionsHash,
+  generateSalt,
+  hashPin,
+  isValidPinFormat,
+  resolveEnvJwtSecret
+} from './security.js';
 
 export function openDatabase(customPath) {
   const resolvedPath =
@@ -137,6 +143,16 @@ export function openDatabase(customPath) {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+      token_hash TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS revoked_admins (
+      username TEXT PRIMARY KEY COLLATE NOCASE,
+      revoked_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS auth_lockout (
       client_key TEXT PRIMARY KEY,
       failed_attempts INTEGER NOT NULL DEFAULT 0,
@@ -191,9 +207,10 @@ function ensureSeedData(db) {
     db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_tournament_seeded', '1')").run();
   }
 
-  // Persist a deterministic server session secret in SQLite app_meta when CP4_SESSION_SECRET env is absent
-  const envSecret = process.env.CP4_SESSION_SECRET?.trim();
-  if (envSecret && envSecret.length >= 16) {
+  // Resolve stateless JWT secret from JWT_SECRET / CP4_SESSION_SECRET / ADMIN_PASSWORD,
+  // or persist a deterministic secret in SQLite app_meta if none is set in env
+  const envSecret = resolveEnvJwtSecret();
+  if (envSecret) {
     db.sessionSecret = envSecret;
   } else {
     const metaSecretRow = db.prepare("SELECT value FROM app_meta WHERE key = 'server_session_secret'").get();
@@ -207,9 +224,15 @@ function ensureSeedData(db) {
   }
 
   // Optional env-configured Head Admin seeding ONLY when no Head Admin exists yet (never overwrite existing PIN changes)
-  const envPin = process.env.CP4_HEAD_ADMIN_PIN?.trim();
+  const rawHeadPin = process.env.CP4_HEAD_ADMIN_PIN?.trim();
+  const rawAdminPassPin = process.env.ADMIN_PASSWORD?.trim();
+  const envPin = isValidPinFormat(rawHeadPin)
+    ? rawHeadPin
+    : isValidPinFormat(rawAdminPassPin)
+      ? rawAdminPassPin
+      : '';
   const envUsername = (process.env.CP4_HEAD_ADMIN_USERNAME || 'Djilali').trim();
-  if (envPin && isValidPinFormat(envPin)) {
+  if (envPin) {
     const existingHead = db
       .prepare('SELECT id, username FROM admin_accounts WHERE role = ? LIMIT 1')
       .get(AdminRole.HEAD_ADMIN);
@@ -234,8 +257,8 @@ function ensureSeedData(db) {
           can_manage_tournament, can_manage_players, can_run_draw,
           can_edit_scores, can_crown_champion, permissions_hash,
           pin_updated_at, is_active, last_login_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, 1, 1, 1, 1, 1, ?, ?, 1, NULL, ?)
-      `).run(envUsername, envUsername, AdminRole.HEAD_ADMIN, pHash, salt, permHash, now, now);
+        ) VALUES (?, ?, ?, ?, ?, 1, 1, 1, 1, 1, ?, 0, 1, NULL, ?)
+      `).run(envUsername, envUsername, AdminRole.HEAD_ADMIN, pHash, salt, permHash, now);
     }
   }
 }

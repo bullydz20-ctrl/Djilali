@@ -12,10 +12,26 @@ export const SESSION_TTL_PERSISTENT_MS = 180 * 24 * 60 * 60 * 1000;
 
 const FALLBACK_PROCESS_SECRET = crypto.randomBytes(32).toString('hex');
 
+export function resolveEnvJwtSecret() {
+  const candidates = [
+    process.env.JWT_SECRET,
+    process.env.CP4_SESSION_SECRET,
+    process.env.ADMIN_PASSWORD
+  ];
+  for (const raw of candidates) {
+    if (typeof raw === 'string' && raw.trim().length > 0) {
+      return raw.trim();
+    }
+  }
+  return null;
+}
+
+export function hasEnvJwtSecret() {
+  return resolveEnvJwtSecret() !== null;
+}
+
 export function getDefaultSessionSecret() {
-  return process.env.CP4_SESSION_SECRET && process.env.CP4_SESSION_SECRET.trim().length >= 16
-    ? process.env.CP4_SESSION_SECRET.trim()
-    : FALLBACK_PROCESS_SECRET;
+  return resolveEnvJwtSecret() || FALLBACK_PROCESS_SECRET;
 }
 
 export function isValidPinFormat(pin) {
@@ -136,10 +152,97 @@ export function generateSessionToken() {
 
 export function hashSessionToken(token, secretOverride = null) {
   const secret =
-    typeof secretOverride === 'string' && secretOverride.trim().length >= 16
+    typeof secretOverride === 'string' && secretOverride.trim().length > 0
       ? secretOverride.trim()
       : getDefaultSessionSecret();
   return crypto.createHmac('sha256', secret).update(String(token), 'utf8').digest('hex');
+}
+
+function encodeBase64UrlJson(obj) {
+  return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
+}
+
+function decodeBase64UrlJson(segment) {
+  try {
+    const json = Buffer.from(segment, 'base64url').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function deriveHmacKey(secretOverride = null) {
+  const secret =
+    typeof secretOverride === 'string' && secretOverride.trim().length > 0
+      ? secretOverride.trim()
+      : getDefaultSessionSecret();
+  return crypto.createHash('sha256').update(`cp4-arena-jwt-v1:${secret}`, 'utf8').digest();
+}
+
+export function signAdminJwt(admin, { keepSignedIn = true, ttlMs, secretOverride = null } = {}) {
+  const nowMs = Date.now();
+  const iatSec = Math.floor(nowMs / 1000);
+  const effectiveTtl = ttlMs ?? (keepSignedIn ? SESSION_TTL_PERSISTENT_MS : SESSION_TTL_EPHEMERAL_MS);
+  const expSec = Math.floor((nowMs + effectiveTtl) / 1000);
+
+  const headerSegment = encodeBase64UrlJson({ alg: 'HS256', typ: 'JWT' });
+  const payloadSegment = encodeBase64UrlJson({
+    sub: Number(admin.id),
+    username: String(admin.username),
+    displayName: String(admin.displayName || admin.username),
+    role: String(admin.role),
+    canManageTournament: Boolean(admin.canManageTournament),
+    canManagePlayers: Boolean(admin.canManagePlayers),
+    canRunDraw: Boolean(admin.canRunDraw),
+    canEditScores: Boolean(admin.canEditScores),
+    canCrownChampion: Boolean(admin.canCrownChampion),
+    pinVer: Number(admin.pinUpdatedAt || 0),
+    createdAt: Number(admin.createdAt || nowMs),
+    keepSignedIn: Boolean(keepSignedIn),
+    jti: crypto.randomUUID(),
+    iat: iatSec,
+    iatMs: nowMs,
+    exp: expSec
+  });
+
+  const signingInput = `${headerSegment}.${payloadSegment}`;
+  const sig = crypto.createHmac('sha256', deriveHmacKey(secretOverride)).update(signingInput, 'utf8').digest('base64url');
+  return `${signingInput}.${sig}`;
+}
+
+export function verifyAdminJwt(token, secretOverride = null) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.trim().split('.');
+  if (parts.length !== 3) return null;
+  const [headerSeg, payloadSeg, sigSeg] = parts;
+  if (!headerSeg || !payloadSeg || !sigSeg) return null;
+
+  const header = decodeBase64UrlJson(headerSeg);
+  if (!header || header.alg !== 'HS256' || header.typ !== 'JWT') return null;
+
+  const signingInput = `${headerSeg}.${payloadSeg}`;
+  const expectedSig = crypto
+    .createHmac('sha256', deriveHmacKey(secretOverride))
+    .update(signingInput, 'utf8')
+    .digest('base64url');
+
+  try {
+    const a = Buffer.from(sigSeg, 'utf8');
+    const b = Buffer.from(expectedSig, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  const payload = decodeBase64UrlJson(payloadSeg);
+  if (!payload || !payload.username || !payload.role) return null;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp !== 'number' || payload.exp <= nowSec) {
+    return null;
+  }
+  return payload;
 }
 
 export function sanitizeAdminPublic(admin) {

@@ -663,3 +663,140 @@ test('Production dist bundle and PWA assets (iPhone Safari + Android Chrome) ser
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Stateless HMAC-SHA256 JWT keeps Head Admin and Sub-Admins authenticated across server restarts & wiped DB (JWT_SECRET & ADMIN_PASSWORD)', async () => {
+  const prevJwtSecret = process.env.JWT_SECRET;
+  const prevAdminPass = process.env.ADMIN_PASSWORD;
+  const prevSessionSecret = process.env.CP4_SESSION_SECRET;
+  delete process.env.CP4_SESSION_SECRET;
+  delete process.env.ADMIN_PASSWORD;
+  process.env.JWT_SECRET = 'super-strong-stateless-jwt-secret-for-render-2026';
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-jwt-stateless-'));
+  let dbPath = path.join(tmpDir, 'db1.db');
+  const uploadsDir = path.join(tmpDir, 'uploads');
+
+  let srv = await startServer({ dbPath, uploadsDir });
+  try {
+    // 1. Setup Head Admin and verify 3-part HS256 JWT
+    const headSetup = await api(srv.baseUrl, '/api/admin/setup-head', {
+      method: 'POST',
+      body: { username: 'Djilali', displayName: 'Djilali Head', pin: '482913', keepSignedIn: true }
+    });
+    assert.equal(headSetup.status, 201);
+    const headJwt = headSetup.json.token;
+    assert.equal(headJwt.split('.').length, 3);
+
+    // 2. Create Sub-Admin with limited permissions and login -> 3-part HS256 JWT
+    const createSub = await api(srv.baseUrl, '/api/admin/sub-admins', {
+      method: 'POST',
+      token: headJwt,
+      body: {
+        username: 'assistant1',
+        displayName: 'مساعد أول',
+        pin: '319284',
+        canManageTournament: false,
+        canManagePlayers: true,
+        canRunDraw: false,
+        canEditScores: true,
+        canCrownChampion: false
+      }
+    });
+    assert.equal(createSub.status, 201);
+
+    const subLogin = await api(srv.baseUrl, '/api/admin/login', {
+      method: 'POST',
+      headers: { 'X-Forwarded-For': '10.20.30.1' },
+      body: { username: 'assistant1', pin: '319284', keepSignedIn: true }
+    });
+    assert.equal(subLogin.status, 200);
+    const subJwt = subLogin.json.token;
+    assert.equal(subJwt.split('.').length, 3);
+
+    // 3. Tampered JWT must fail
+    const parts = subJwt.split('.');
+    const tamperedJwt = `${parts[0]}.${parts[1]}.tampered_sig_invalid`;
+    const tamperedState = await api(srv.baseUrl, '/api/state', { token: tamperedJwt });
+    assert.equal(tamperedState.json.currentAdmin, null);
+    const tamperedCreate = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token: tamperedJwt,
+      body: { name: 'اختبار مزور' }
+    });
+    assert.equal(tamperedCreate.status, 401);
+
+    // 4. Simulate Render server restart WITH ephemeral DB completely wiped (new DB path)
+    await srv.close();
+    fs.rmSync(dbPath, { force: true });
+    dbPath = path.join(tmpDir, 'db2-ephemeral.db');
+    srv = await startServer({ dbPath, uploadsDir });
+
+    // Both HEAD_ADMIN and SUB_ADMIN JWTs MUST remain valid automatically via JWT_SECRET signature
+    const headRestored = await api(srv.baseUrl, '/api/state', { token: headJwt });
+    assert.equal(headRestored.status, 200);
+    assert.equal(headRestored.json.currentAdmin?.username, 'Djilali');
+    assert.equal(headRestored.json.currentAdmin?.role, 'HEAD_ADMIN');
+    assert.equal(headRestored.json.hasHeadAdmin, true);
+
+    const subRestored = await api(srv.baseUrl, '/api/state', { token: subJwt });
+    assert.equal(subRestored.status, 200);
+    assert.equal(subRestored.json.currentAdmin?.username, 'assistant1');
+    assert.equal(subRestored.json.currentAdmin?.role, 'SUB_ADMIN');
+    assert.equal(subRestored.json.currentAdmin?.canManagePlayers, true);
+    assert.equal(subRestored.json.currentAdmin?.canEditScores, true);
+    assert.equal(subRestored.json.currentAdmin?.canManageTournament, false);
+
+    // Granular permission enforcement still applies to restored Sub-Admin
+    const subForbidden = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token: subJwt,
+      body: { name: 'غير مسموح للمساعد' }
+    });
+    assert.equal(subForbidden.status, 403);
+
+    // Restored Head Admin can still create tournaments without re-login
+    const headCreate = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token: headJwt,
+      body: { name: 'بطولة بعد إعادة التشغيل', gameTitle: 'FIFA 22' }
+    });
+    assert.equal(headCreate.status, 201);
+
+    // Explicit logout revokes JWT cleanly even on stateless verification
+    const logoutSub = await api(srv.baseUrl, '/api/admin/logout', { method: 'POST', token: subJwt });
+    assert.equal(logoutSub.status, 200);
+    const afterLogoutSub = await api(srv.baseUrl, '/api/state', { token: subJwt });
+    assert.equal(afterLogoutSub.json.currentAdmin, null);
+
+    // 5. Repeat with ADMIN_PASSWORD fallback (no JWT_SECRET set)
+    await srv.close();
+    delete process.env.JWT_SECRET;
+    process.env.ADMIN_PASSWORD = '654321-fallback-secret';
+    const dbPath3 = path.join(tmpDir, 'db3.db');
+    srv = await startServer({ dbPath: dbPath3, uploadsDir });
+
+    const headPassSetup = await api(srv.baseUrl, '/api/admin/setup-head', {
+      method: 'POST',
+      body: { username: 'AdminFallback', displayName: 'Admin Fallback', pin: '654321', keepSignedIn: true }
+    });
+    assert.equal(headPassSetup.status, 201);
+    const headPassJwt = headPassSetup.json.token;
+
+    await srv.close();
+    fs.rmSync(dbPath3, { force: true });
+    const dbPath4 = path.join(tmpDir, 'db4-ephemeral.db');
+    srv = await startServer({ dbPath: dbPath4, uploadsDir });
+
+    const restoredByAdminPass = await api(srv.baseUrl, '/api/state', { token: headPassJwt });
+    assert.equal(restoredByAdminPass.json.currentAdmin?.username, 'AdminFallback');
+    assert.equal(restoredByAdminPass.json.currentAdmin?.role, 'HEAD_ADMIN');
+  } finally {
+    await srv.close();
+    if (prevJwtSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = prevJwtSecret;
+    if (prevAdminPass === undefined) delete process.env.ADMIN_PASSWORD;
+    else process.env.ADMIN_PASSWORD = prevAdminPass;
+    if (prevSessionSecret !== undefined) process.env.CP4_SESSION_SECRET = prevSessionSecret;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

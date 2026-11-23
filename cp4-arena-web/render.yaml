@@ -21,6 +21,8 @@ services:
         value: /var/data/cp4_arena.db
       - key: CP4_UPLOADS_DIR
         value: /var/data/uploads
+      - key: JWT_SECRET
+        generateValue: true
       - key: CP4_SESSION_SECRET
         generateValue: true
       - key: CP4_HEAD_ADMIN_USERNAME

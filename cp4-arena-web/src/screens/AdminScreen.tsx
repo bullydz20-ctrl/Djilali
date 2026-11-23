@@ -143,7 +143,7 @@ export function AdminScreen({
           </div>
           <div style={{ fontSize: '0.76rem', color: 'var(--cyber-sky)' }}>
             {admin.role === 'HEAD_ADMIN' ? 'المشرف الرئيسي' : 'مشرف مساعد'} •{' '}
-            {state.keepSignedIn ? 'جلسة محفوظة تلقائياً' : 'جلسة مؤقتة نشطة'}
+            {state.keepSignedIn ? 'جلسة JWT محفوظة تلقائياً' : 'جلسة مؤقتة نشطة'}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>

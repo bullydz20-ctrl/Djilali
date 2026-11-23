@@ -177,17 +177,27 @@ export async function logoutAdminApi() {
 }
 
 export async function changeOwnPinApi(currentPin: string, newPin: string) {
-  return apiRequest<{ ok: boolean; messageAr: string }>('/api/admin/change-pin', {
+  const res = await apiRequest<{ ok: boolean; token?: string; messageAr: string }>('/api/admin/change-pin', {
     method: 'POST',
     body: JSON.stringify({ currentPin, newPin })
   });
+  if (res.token) {
+    setAuthToken(res.token);
+  }
+  return res;
 }
 
 export async function updateOwnProfileApi(payload: { displayName: string; username?: string }) {
-  const res = await apiRequest<{ ok: boolean; admin: AdminAccount; messageAr: string }>('/api/admin/profile', {
-    method: 'PATCH',
-    body: JSON.stringify(payload)
-  });
+  const res = await apiRequest<{ ok: boolean; token?: string; admin: AdminAccount; messageAr: string }>(
+    '/api/admin/profile',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }
+  );
+  if (res.token) {
+    setAuthToken(res.token);
+  }
   if (res.admin?.username) {
     setLastAdminUsername(res.admin.username);
   }

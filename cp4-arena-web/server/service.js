@@ -33,12 +33,14 @@ import {
   SESSION_TTL_PERSISTENT_MS,
   computePermissionsHash,
   generateSalt,
-  generateSessionToken,
+  hasEnvJwtSecret,
   hashPin,
   hashSessionToken,
   hasPermission,
   isValidPinFormat,
   sanitizeAdminPublic,
+  signAdminJwt,
+  verifyAdminJwt,
   verifyPermissionsIntegrity,
   verifyPin
 } from './security.js';
@@ -242,8 +244,122 @@ export class ArenaService {
 
   verifySessionToken(rawToken) {
     if (!rawToken || typeof rawToken !== 'string') return null;
-    const tokenHash = hashSessionToken(rawToken, this.db?.sessionSecret);
+    const secret = this.db?.sessionSecret;
+    const tokenHash = hashSessionToken(rawToken, secret);
     const now = Date.now();
+
+    const isRevokedToken = this.db
+      .prepare('SELECT 1 FROM revoked_tokens WHERE token_hash = ? AND expires_at > ?')
+      .get(tokenHash, now);
+    if (isRevokedToken) return null;
+
+    const jwtPayload = verifyAdminJwt(rawToken, secret);
+    if (jwtPayload) {
+      const jwtIatMs = Number(jwtPayload.iatMs || Number(jwtPayload.iat || 0) * 1000);
+      const revokedAdmin = this.db
+        .prepare('SELECT revoked_at FROM revoked_admins WHERE username = ? COLLATE NOCASE')
+        .get(String(jwtPayload.username));
+      if (revokedAdmin && Number(revokedAdmin.revoked_at) >= jwtIatMs) {
+        return null;
+      }
+
+      let row = null;
+      if (jwtPayload.sub != null) {
+        const byId = this.db.prepare('SELECT * FROM admin_accounts WHERE id = ?').get(Number(jwtPayload.sub));
+        if (byId) {
+          const sameUser = byId.username.toLowerCase() === String(jwtPayload.username).toLowerCase();
+          const sameAccountRenamed =
+            Number(byId.created_at) === Number(jwtPayload.createdAt) &&
+            byId.role === jwtPayload.role &&
+            Boolean(
+              this.db
+                .prepare('SELECT 1 FROM admin_sessions WHERE token_hash = ? AND admin_id = ? AND expires_at > ?')
+                .get(tokenHash, byId.id, now)
+            );
+          if (sameUser || sameAccountRenamed) {
+            row = byId;
+          }
+        }
+      }
+      if (!row) {
+        row = this.db
+          .prepare('SELECT * FROM admin_accounts WHERE username = ? COLLATE NOCASE')
+          .get(String(jwtPayload.username));
+      }
+
+      if (row) {
+        const admin = mapAdminRaw(row);
+        if (!admin.isActive || !verifyPermissionsIntegrity(admin)) {
+          this.db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(tokenHash);
+          return null;
+        }
+        if (Number(admin.pinUpdatedAt || 0) > Number(jwtPayload.pinVer || 0)) {
+          const whitelisted = this.db
+            .prepare('SELECT 1 FROM admin_sessions WHERE token_hash = ? AND expires_at > ?')
+            .get(tokenHash, now);
+          if (!whitelisted) return null;
+        }
+        return {
+          admin: sanitizeAdminPublic(admin),
+          rawAdmin: admin,
+          keepSignedIn: Boolean(jwtPayload.keepSignedIn),
+          isStatelessJwt: false
+        };
+      }
+
+      // Stateless JWT fallback when DB was reset (e.g. Render ephemeral storage after server restart)
+      // Requires an explicit persistent secret env var (JWT_SECRET / ADMIN_PASSWORD / CP4_SESSION_SECRET / CP4_HEAD_ADMIN_PIN).
+      if (!hasEnvJwtSecret()) {
+        return null;
+      }
+
+      const isHead = jwtPayload.role === AdminRole.HEAD_ADMIN;
+      const role = isHead ? AdminRole.HEAD_ADMIN : AdminRole.SUB_ADMIN;
+      const canManageTournament = isHead || Boolean(jwtPayload.canManageTournament);
+      const canManagePlayers = isHead || Boolean(jwtPayload.canManagePlayers);
+      const canRunDraw = isHead || Boolean(jwtPayload.canRunDraw);
+      const canEditScores = isHead || Boolean(jwtPayload.canEditScores);
+      const canCrownChampion = isHead || Boolean(jwtPayload.canCrownChampion);
+      const salt = 'stateless_jwt_v1';
+      const pHash = 'stateless_jwt_pin';
+      const permHash = computePermissionsHash({
+        username: jwtPayload.username,
+        role,
+        canManageTournament,
+        canManagePlayers,
+        canRunDraw,
+        canEditScores,
+        canCrownChampion,
+        pinSalt: salt,
+        pinHash: pHash
+      });
+      const syntheticAdmin = {
+        id: Number(jwtPayload.sub) || (isHead ? 1 : 2),
+        username: String(jwtPayload.username),
+        displayName: String(jwtPayload.displayName || jwtPayload.username),
+        role,
+        pinHash: pHash,
+        pinSalt: salt,
+        canManageTournament,
+        canManagePlayers,
+        canRunDraw,
+        canEditScores,
+        canCrownChampion,
+        permissionsHash: permHash,
+        pinUpdatedAt: Number(jwtPayload.pinVer || 0),
+        isActive: true,
+        lastLoginAt: jwtIatMs || now,
+        createdAt: Number(jwtPayload.createdAt || now)
+      };
+      return {
+        admin: sanitizeAdminPublic(syntheticAdmin),
+        rawAdmin: syntheticAdmin,
+        keepSignedIn: Boolean(jwtPayload.keepSignedIn),
+        isStatelessJwt: true
+      };
+    }
+
+    // Legacy opaque DB session fallback
     const row = this.db
       .prepare(`
         SELECT s.token_hash, s.keep_signed_in, s.expires_at, a.*
@@ -266,7 +382,8 @@ export class ArenaService {
     return {
       admin: sanitizeAdminPublic(admin),
       rawAdmin: admin,
-      keepSignedIn: Boolean(row.keep_signed_in)
+      keepSignedIn: Boolean(row.keep_signed_in),
+      isStatelessJwt: false
     };
   }
 
@@ -323,15 +440,19 @@ export class ArenaService {
         `)
         .run(cleanUser, cleanDisplay, AdminRole.HEAD_ADMIN, pHash, salt, permHash, now, now, now);
 
-      const token = generateSessionToken();
-      const tokenHash = hashSessionToken(token, this.db?.sessionSecret);
+      const created = mapAdminRaw(this.db.prepare('SELECT * FROM admin_accounts WHERE id = ?').get(info.lastInsertRowid));
       const ttl = keepSignedIn ? SESSION_TTL_PERSISTENT_MS : SESSION_TTL_EPHEMERAL_MS;
+      const token = signAdminJwt(created, {
+        keepSignedIn,
+        ttlMs: ttl,
+        secretOverride: this.db?.sessionSecret
+      });
+      const tokenHash = hashSessionToken(token, this.db?.sessionSecret);
       this.db
         .prepare('INSERT INTO admin_sessions (token_hash, admin_id, keep_signed_in, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(tokenHash, Number(info.lastInsertRowid), keepSignedIn ? 1 : 0, now + ttl, now);
+        .run(tokenHash, created.id, keepSignedIn ? 1 : 0, now + ttl, now);
 
       this.resetLockout(clientKey);
-      const created = mapAdminRaw(this.db.prepare('SELECT * FROM admin_accounts WHERE id = ?').get(info.lastInsertRowid));
       return {
         ok: true,
         status: 201,
@@ -403,13 +524,18 @@ export class ArenaService {
       };
     }
 
-    const token = generateSessionToken();
-    const tokenHash = hashSessionToken(token, this.db?.sessionSecret);
     const ttl = keepSignedIn ? SESSION_TTL_PERSISTENT_MS : SESSION_TTL_EPHEMERAL_MS;
+    const token = signAdminJwt(admin, {
+      keepSignedIn,
+      ttlMs: ttl,
+      secretOverride: this.db?.sessionSecret
+    });
+    const tokenHash = hashSessionToken(token, this.db?.sessionSecret);
 
     this.withTx(() => {
       this.resetLockout(clientKey);
       this.db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').run(now);
+      this.db.prepare('DELETE FROM revoked_tokens WHERE expires_at <= ?').run(now);
       this.db.prepare('UPDATE admin_accounts SET last_login_at = ? WHERE id = ?').run(now, admin.id);
       this.db
         .prepare('INSERT INTO admin_sessions (token_hash, admin_id, keep_signed_in, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -429,7 +555,16 @@ export class ArenaService {
 
   logoutAdmin(rawToken) {
     if (rawToken) {
-      this.db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(hashSessionToken(rawToken, this.db?.sessionSecret));
+      const secret = this.db?.sessionSecret;
+      const tokenHash = hashSessionToken(rawToken, secret);
+      const now = Date.now();
+      this.db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(tokenHash);
+      const jwtPayload = verifyAdminJwt(rawToken, secret);
+      if (jwtPayload) {
+        const expMs = Math.max(now + 60_000, Number(jwtPayload.exp || 0) * 1000);
+        this.db.prepare('INSERT OR REPLACE INTO revoked_tokens (token_hash, expires_at) VALUES (?, ?)').run(tokenHash, expMs);
+      }
+      this.db.prepare('DELETE FROM revoked_tokens WHERE expires_at <= ?').run(now);
     }
     return { ok: true, status: 200, messageAr: 'تم تسجيل الخروج من لوحة المشرف.' };
   }
@@ -437,6 +572,9 @@ export class ArenaService {
   changeOwnPin(rawToken, { currentPin, newPin }) {
     const auth = this.requirePermission(rawToken, null);
     if (!auth.ok) return auth;
+    if (auth.session.isStatelessJwt) {
+      return { ok: false, status: 400, error: 'الحساب غير مسجل في قاعدة البيانات الحالية لتغيير رمز PIN.' };
+    }
     const account = auth.session.rawAdmin;
 
     if (!verifyPin(String(currentPin || ''), account.pinSalt, account.pinHash)) {
@@ -449,6 +587,7 @@ export class ArenaService {
     const salt = generateSalt();
     const pHash = hashPin(newPin, salt);
     const now = Date.now();
+    const nextPinUpdatedAt = Math.max(now, Number(account.pinUpdatedAt || 0) + 1);
     const permHash = computePermissionsHash({
       username: account.username,
       role: account.role,
@@ -462,23 +601,46 @@ export class ArenaService {
     });
 
     const currentTokenHash = hashSessionToken(rawToken, this.db?.sessionSecret);
+    const keepSignedIn = Boolean(auth.session.keepSignedIn);
+    const ttl = keepSignedIn ? SESSION_TTL_PERSISTENT_MS : SESSION_TTL_EPHEMERAL_MS;
+    let refreshedToken = null;
+
     this.withTx(() => {
       this.db
         .prepare('UPDATE admin_accounts SET pin_salt = ?, pin_hash = ?, permissions_hash = ?, pin_updated_at = ? WHERE id = ?')
-        .run(salt, pHash, permHash, now, account.id);
+        .run(salt, pHash, permHash, nextPinUpdatedAt, account.id);
       // Revoke other active sessions for this account while preserving current session
       this.db
         .prepare('DELETE FROM admin_sessions WHERE admin_id = ? AND token_hash != ?')
         .run(account.id, currentTokenHash);
+      // Issue refreshed JWT carrying the updated pinVer for seamless stateless persistence
+      const updated = mapAdminRaw(this.db.prepare('SELECT * FROM admin_accounts WHERE id = ?').get(account.id));
+      refreshedToken = signAdminJwt(updated, {
+        keepSignedIn,
+        ttlMs: ttl,
+        secretOverride: this.db?.sessionSecret
+      });
+      const refreshedHash = hashSessionToken(refreshedToken, this.db?.sessionSecret);
+      this.db
+        .prepare('INSERT OR REPLACE INTO admin_sessions (token_hash, admin_id, keep_signed_in, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(refreshedHash, account.id, keepSignedIn ? 1 : 0, now + ttl, now);
     });
 
     this.emitChange('admin_updated');
-    return { ok: true, status: 200, messageAr: 'تم تحديث وتشفير رمز PIN بنجاح.' };
+    return {
+      ok: true,
+      status: 200,
+      token: refreshedToken,
+      messageAr: 'تم تحديث وتشفير رمز PIN بنجاح.'
+    };
   }
 
   updateOwnProfile(rawToken, { displayName, username } = {}) {
     const auth = this.requirePermission(rawToken, null);
     if (!auth.ok) return auth;
+    if (auth.session.isStatelessJwt) {
+      return { ok: false, status: 400, error: 'الحساب غير مسجل في قاعدة البيانات الحالية لتعديل الملف الشخصي.' };
+    }
     const account = auth.session.rawAdmin;
 
     const cleanDisplay = displayName !== undefined ? String(displayName).trim() : account.displayName;
@@ -492,6 +654,10 @@ export class ArenaService {
     if (cleanUser.length < 3 || cleanUser.length > 32) {
       return { ok: false, status: 400, error: 'اسم المستخدم يجب أن يكون بين 3 و 32 حرفاً.' };
     }
+
+    const now = Date.now();
+    const keepSignedIn = Boolean(auth.session.keepSignedIn);
+    const ttl = keepSignedIn ? SESSION_TTL_PERSISTENT_MS : SESSION_TTL_EPHEMERAL_MS;
 
     const res = this.withTx(() => {
       if (cleanUser.toLowerCase() !== account.username.toLowerCase()) {
@@ -518,11 +684,23 @@ export class ArenaService {
       this.db
         .prepare('UPDATE admin_accounts SET username = ?, display_name = ?, permissions_hash = ? WHERE id = ?')
         .run(cleanUser, cleanDisplay, permHash, account.id);
+      this.db.prepare('DELETE FROM revoked_admins WHERE username = ? COLLATE NOCASE').run(cleanUser);
 
       const updated = mapAdminRaw(this.db.prepare('SELECT * FROM admin_accounts WHERE id = ?').get(account.id));
+      const refreshedToken = signAdminJwt(updated, {
+        keepSignedIn,
+        ttlMs: ttl,
+        secretOverride: this.db?.sessionSecret
+      });
+      const refreshedHash = hashSessionToken(refreshedToken, this.db?.sessionSecret);
+      this.db
+        .prepare('INSERT OR REPLACE INTO admin_sessions (token_hash, admin_id, keep_signed_in, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(refreshedHash, account.id, keepSignedIn ? 1 : 0, now + ttl, now);
+
       return {
         ok: true,
         status: 200,
+        token: refreshedToken,
         admin: sanitizeAdminPublic(updated),
         messageAr: 'تم تحديث بيانات حساب المشرف بنجاح.'
       };
@@ -568,6 +746,12 @@ export class ArenaService {
       const salt = generateSalt();
       const pHash = hashPin(pin, salt);
       const now = Date.now();
+      const revokedRow = this.db
+        .prepare('SELECT revoked_at FROM revoked_admins WHERE username = ? COLLATE NOCASE')
+        .get(cleanUser);
+      const pinUpdatedAt = Math.max(now, Number(revokedRow?.revoked_at || 0) + 1);
+      this.db.prepare('DELETE FROM revoked_admins WHERE username = ? COLLATE NOCASE').run(cleanUser);
+
       const permHash = computePermissionsHash({
         username: cleanUser,
         role: AdminRole.SUB_ADMIN,
@@ -601,7 +785,7 @@ export class ArenaService {
           p4 ? 1 : 0,
           p5 ? 1 : 0,
           permHash,
-          now,
+          pinUpdatedAt,
           now
         );
 
@@ -635,13 +819,14 @@ export class ArenaService {
     let pinSalt = target.pinSalt;
     let pinHash = target.pinHash;
     let pinUpdatedAt = target.pinUpdatedAt;
-    if (payload.newPin != null && String(payload.newPin).trim() !== '') {
+    const pinChanged = payload.newPin != null && String(payload.newPin).trim() !== '';
+    if (pinChanged) {
       if (!isValidPinFormat(String(payload.newPin))) {
         return { ok: false, status: 400, error: 'رمز PIN الجديد يجب أن يتكون من 6 أرقام.' };
       }
       pinSalt = generateSalt();
       pinHash = hashPin(String(payload.newPin), pinSalt);
-      pinUpdatedAt = Date.now();
+      pinUpdatedAt = Math.max(Date.now(), Number(target.pinUpdatedAt || 0) + 1);
     }
 
     const displayName = String(payload.displayName || '').trim() || target.displayName;
@@ -687,7 +872,7 @@ export class ArenaService {
           permHash,
           target.id
         );
-      if (!isActive) {
+      if (!isActive || pinChanged) {
         this.db.prepare('DELETE FROM admin_sessions WHERE admin_id = ?').run(target.id);
       }
     });
@@ -715,7 +900,11 @@ export class ArenaService {
       return { ok: false, status: 400, error: 'غير مصرح بحذف هذا الحساب.' };
     }
 
-    this.db.prepare('DELETE FROM admin_accounts WHERE id = ?').run(target.id);
+    this.withTx(() => {
+      this.db.prepare('INSERT OR REPLACE INTO revoked_admins (username, revoked_at) VALUES (?, ?)').run(target.username, Date.now());
+      this.db.prepare('DELETE FROM admin_sessions WHERE admin_id = ?').run(target.id);
+      this.db.prepare('DELETE FROM admin_accounts WHERE id = ?').run(target.id);
+    });
     this.emitChange('admin_updated');
     return { ok: true, status: 200, messageAr: 'تم حذف الحساب المساعد بنجاح.' };
   }
@@ -810,7 +999,7 @@ export class ArenaService {
       overviewStats,
       championPlayer,
       isRegistrationOpenNow,
-      hasHeadAdmin: this.hasHeadAdmin(),
+      hasHeadAdmin: this.hasHeadAdmin() || session?.admin?.role === AdminRole.HEAD_ADMIN,
       adminDirectory,
       adminAccounts: isHeadAdmin ? this.listFullAdminsForHead() : [],
       currentAdmin: session ? session.admin : null,

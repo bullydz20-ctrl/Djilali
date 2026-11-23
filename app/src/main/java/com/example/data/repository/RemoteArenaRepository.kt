@@ -7,8 +7,6 @@ import android.net.Uri
 import android.util.Base64
 import com.example.api.ApiResult
 import com.example.api.ApiService
-import com.example.api.AutoScheduleResult
-import com.example.api.BulkImportResult
 import com.example.api.RemoteArenaState
 import com.example.data.local.AdminAccountEntity
 import com.example.data.local.AdminSessionState
@@ -507,60 +505,6 @@ class RemoteArenaRepository(
 
     suspend fun crownChampion(tournamentId: Long, playerId: Long?): RepoResult<Unit> =
         executeAndRefresh { apiService.crownChampion(tournamentId, playerId) }
-
-    suspend fun toggleMatchCheckIn(
-        matchId: Long,
-        playerSlot: Int,
-        checkedIn: Boolean? = null
-    ): RepoResult<Unit> = executeAndRefresh {
-        apiService.toggleMatchCheckIn(matchId, playerSlot, checkedIn)
-    }
-
-    suspend fun voteMatchPrediction(matchId: Long, pickedSlot: Int): RepoResult<Unit> {
-        val voterKey = sessionPrefs.getOrCreateVoterId()
-        return executeAndRefresh { apiService.voteMatchPrediction(matchId, voterKey, pickedSlot) }
-    }
-
-    suspend fun submitMatchDispute(
-        matchId: Long,
-        submittedBy: String,
-        note: String,
-        screenshotUrl: String?
-    ): RepoResult<Unit> = executeAndRefresh {
-        apiService.submitMatchDispute(matchId, submittedBy, note, screenshotUrl)
-    }
-
-    suspend fun resolveMatchDispute(
-        matchId: Long,
-        resolutionNote: String? = null
-    ): RepoResult<Unit> = executeAndRefresh {
-        apiService.resolveMatchDispute(matchId, resolutionNote)
-    }
-
-    suspend fun adminWalkoverMatch(
-        matchId: Long,
-        winnerSlot: Int,
-        reason: String? = null
-    ): RepoResult<Unit> = executeAndRefresh {
-        apiService.adminWalkoverMatch(matchId, winnerSlot, reason)
-    }
-
-    suspend fun bulkImportPlayers(
-        tournamentId: Long,
-        linesText: String,
-        status: PlayerStatus = PlayerStatus.APPROVED
-    ): RepoResult<BulkImportResult> = executeAndRefresh {
-        apiService.bulkImportPlayers(tournamentId, linesText, status)
-    }
-
-    suspend fun autoScheduleMatches(
-        tournamentId: Long,
-        startAtMillis: Long,
-        intervalMinutes: Int,
-        onlyUnscheduled: Boolean = true
-    ): RepoResult<AutoScheduleResult> = executeAndRefresh {
-        apiService.autoScheduleMatches(tournamentId, startAtMillis, intervalMinutes, onlyUnscheduled)
-    }
 
     suspend fun scheduleMatchReminder(
         match: MatchEntity,

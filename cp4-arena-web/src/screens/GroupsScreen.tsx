@@ -8,18 +8,12 @@ export function GroupsScreen({
   state,
   onEditMatch,
   onQuickUpdateGoals,
-  onOpenReminder,
-  onToggleCheckIn,
-  onVotePrediction,
-  onOpenDispute
+  onOpenReminder
 }: {
   state: ArenaState;
   onEditMatch: (m: Match) => void;
   onQuickUpdateGoals: (m: Match, g1: number, g2: number) => void;
   onOpenReminder: (m: Match) => void;
-  onToggleCheckIn: (m: Match, slot: 1 | 2) => void;
-  onVotePrediction: (m: Match, slot: 1 | 2) => void;
-  onOpenDispute: (m: Match) => void;
 }) {
   const t = state.tournament;
   const playersById = new Map<number, Player>(state.players.map((p) => [p.id, p]));
@@ -65,9 +59,6 @@ export function GroupsScreen({
               onQuickUpdateGoals={onQuickUpdateGoals}
               onOpenDetailedEditor={onEditMatch}
               onOpenReminder={onOpenReminder}
-              onToggleCheckIn={onToggleCheckIn}
-              onVotePrediction={onVotePrediction}
-              onOpenDispute={onOpenDispute}
               showFilters={false}
             />
           )}
@@ -88,9 +79,6 @@ export function GroupsScreen({
               onQuickUpdateGoals={onQuickUpdateGoals}
               onOpenDetailedEditor={onEditMatch}
               onOpenReminder={onOpenReminder}
-              onToggleCheckIn={onToggleCheckIn}
-              onVotePrediction={onVotePrediction}
-              onOpenDispute={onOpenDispute}
             />
           )}
         </div>

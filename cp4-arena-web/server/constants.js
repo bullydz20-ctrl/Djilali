@@ -77,7 +77,6 @@ export const MatchStage = {
   ROUND_OF_16: 'ROUND_OF_16',
   QUARTER_FINAL: 'QUARTER_FINAL',
   SEMI_FINAL: 'SEMI_FINAL',
-  THIRD_PLACE: 'THIRD_PLACE',
   FINAL: 'FINAL'
 };
 
@@ -87,8 +86,7 @@ export const MATCH_STAGE_META = {
   ROUND_OF_16: { labelAr: 'دور الـ 16', order: 2 },
   QUARTER_FINAL: { labelAr: 'ربع النهائي', order: 3 },
   SEMI_FINAL: { labelAr: 'نصف النهائي', order: 4 },
-  THIRD_PLACE: { labelAr: 'المركز الثالث والرابع', order: 5 },
-  FINAL: { labelAr: 'المباراة النهائية', order: 6 }
+  FINAL: { labelAr: 'المباراة النهائية', order: 5 }
 };
 
 export const AdminRole = {

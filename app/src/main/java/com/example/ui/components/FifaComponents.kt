@@ -29,11 +29,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AdminPanelSettings
-import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
-import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material.icons.filled.Language
@@ -92,10 +90,8 @@ import com.example.data.local.TournamentEntity
 import com.example.data.model.PlayerLevel
 import com.example.data.model.TournamentStatus
 import com.example.domain.PlayerStats
-import com.example.ui.theme.AmberDraw
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
-import com.example.ui.theme.CrimsonLoss
 import com.example.ui.theme.CyberSky
 import com.example.ui.theme.ElectricCobalt
 import com.example.ui.theme.ElevatedNavy
@@ -738,16 +734,10 @@ private fun MiniStat(label: String, value: Int) {
 @Composable
 fun ChampionShowcaseCard(
     champion: PlayerEntity,
-    onCelebrate: (() -> Unit)? = null,
-    onPlayerClick: ((PlayerEntity) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(
-                if (onPlayerClick != null) Modifier.clickable { onPlayerClick(champion) } else Modifier
-            ),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
         border = BorderStroke(1.5.dp, ChampionshipGold),
         colors = CardDefaults.cardColors(containerColor = MidnightSurface)
@@ -798,24 +788,10 @@ fun ChampionShowcaseCard(
                         color = TextPrimary
                     )
                     Text(
-                        text = "ElysiumNet/ XeMoNat: ${champion.elysiumNetId}",
+                        text = "ElysiumNet: ${champion.elysiumNetId}",
                         style = MaterialTheme.typography.bodySmall,
                         color = CyberSky
                     )
-                }
-                if (onCelebrate != null) {
-                    IconButton(
-                        onClick = onCelebrate,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("champion_celebrate_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Celebration,
-                            contentDescription = "احتفال بتتويج البطل",
-                            tint = ChampionshipGold
-                        )
-                    }
                 }
                 PlayerAvatar(
                     avatarUri = champion.avatarUri,
@@ -835,13 +811,8 @@ fun MatchScoreCard(
     player2: PlayerEntity?,
     canEdit: Boolean,
     onEditClick: () -> Unit,
-    onToggleCheckIn: ((Int) -> Unit)? = null,
-    onVotePrediction: ((Int) -> Unit)? = null,
-    onOpenDispute: (() -> Unit)? = null,
-    onPlayerClick: ((PlayerEntity) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val bothPlayersReady = player1 != null && player2 != null
     val isP1Winner = match.isCompleted && match.winnerId != null && match.winnerId == player1?.id
     val isP2Winner = match.isCompleted && match.winnerId != null && match.winnerId == player2?.id
 
@@ -849,7 +820,7 @@ fun MatchScoreCard(
         modifier = modifier
             .fillMaxWidth()
             .then(
-                if (canEdit && bothPlayersReady) {
+                if (canEdit && player1 != null && player2 != null) {
                     Modifier.clickable(onClick = onEditClick)
                 } else Modifier
             ),
@@ -860,63 +831,29 @@ fun MatchScoreCard(
             if (match.isCompleted) ElectricCobalt.copy(alpha = 0.5f) else CardBorder
         )
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (match.scheduledLabel.isNotBlank()) "${match.stage.labelAr} • ${match.scheduledLabel}" else match.stage.labelAr,
+                    text = "${match.stage.labelAr} • ${match.scheduledLabel}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = CyberSky,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    color = CyberSky
                 )
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (match.disputeStatus != "NONE") {
-                        val isOpen = match.disputeStatus == "OPEN"
-                        Surface(
-                            color = (if (isOpen) CrimsonLoss else EmeraldWin).copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = if (isOpen) "بلاغ مفتوح" else "تم الحل",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (isOpen) CrimsonLoss else EmeraldWin,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = when {
-                            match.isWalkover -> "انسحاب 3-0"
                             match.isCompleted -> "مكتملة"
                             match.leg1Score1 != null -> "بانتظار الإياب"
                             else -> "لم تُلعب بعد"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = when {
-                            match.isWalkover -> AmberDraw
-                            match.isCompleted -> EmeraldWin
-                            else -> TextSecondary
-                        }
+                        color = if (match.isCompleted) EmeraldWin else TextSecondary
                     )
-                    if (onOpenDispute != null && bothPlayersReady) {
-                        IconButton(
-                            onClick = onOpenDispute,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Flag,
-                                contentDescription = "بلاغ / إثبات نتيجة",
-                                tint = if (match.disputeStatus == "OPEN") CrimsonLoss else AmberDraw,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                    if (canEdit && bothPlayersReady) {
+                    if (canEdit && player1 != null && player2 != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
                         Icon(
                             imageVector = Icons.Default.Edit,
                             contentDescription = "تعديل النتيجة",
@@ -927,6 +864,8 @@ fun MatchScoreCard(
                 }
             }
 
+            Spacer(modifier = Modifier.height(10.dp))
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -934,13 +873,7 @@ fun MatchScoreCard(
             ) {
                 // Player 1
                 Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .then(
-                            if (player1 != null && onPlayerClick != null) {
-                                Modifier.clip(RoundedCornerShape(8.dp)).clickable { onPlayerClick(player1) }
-                            } else Modifier
-                        ),
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     PlayerAvatar(
@@ -1015,13 +948,7 @@ fun MatchScoreCard(
 
                 // Player 2
                 Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .then(
-                            if (player2 != null && onPlayerClick != null) {
-                                Modifier.clip(RoundedCornerShape(8.dp)).clickable { onPlayerClick(player2) }
-                            } else Modifier
-                        ),
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.End
                 ) {
@@ -1053,39 +980,6 @@ fun MatchScoreCard(
                         borderColor = if (isP2Winner) ChampionshipGold else CardBorder
                     )
                 }
-            }
-
-            if (bothPlayersReady && !match.isCompleted && onToggleCheckIn != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    MatchCheckInPill(
-                        label = if (match.p1CheckedIn) "${player1.name}: جاهز ✓" else "جاهزية ${player1.name}",
-                        checked = match.p1CheckedIn,
-                        onClick = { onToggleCheckIn(1) },
-                        modifier = Modifier.weight(1f)
-                    )
-                    MatchCheckInPill(
-                        label = if (match.p2CheckedIn) "${player2.name}: جاهز ✓" else "جاهزية ${player2.name}",
-                        checked = match.p2CheckedIn,
-                        onClick = { onToggleCheckIn(2) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            if (bothPlayersReady && onVotePrediction != null) {
-                MatchPredictionBar(
-                    matchId = match.id,
-                    player1Name = player1.name,
-                    player2Name = player2.name,
-                    votesP1 = match.votesP1,
-                    votesP2 = match.votesP2,
-                    isCompleted = match.isCompleted,
-                    onVoteP1 = { onVotePrediction(1) },
-                    onVoteP2 = { onVotePrediction(2) }
-                )
             }
         }
     }

@@ -3,16 +3,7 @@ export type DrawMode = 'RANDOM' | 'MANUAL';
 export type KnockoutTieRule = 'SINGLE_MATCH_PENALTIES' | 'TWO_LEGS_FINAL_SINGLE';
 export type PlayerStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type PlayerLevel = 'BEGINNER' | 'INTERMEDIATE' | 'PRO' | 'LEGEND';
-export type MatchStage =
-  | 'GROUP'
-  | 'LEAGUE'
-  | 'ROUND_OF_16'
-  | 'QUARTER_FINAL'
-  | 'SEMI_FINAL'
-  | 'THIRD_PLACE'
-  | 'FINAL';
-export type DisputeStatus = 'NONE' | 'OPEN' | 'RESOLVED';
-export type GameThemeKey = 'football' | 'fighting' | 'arcade';
+export type MatchStage = 'GROUP' | 'LEAGUE' | 'ROUND_OF_16' | 'QUARTER_FINAL' | 'SEMI_FINAL' | 'FINAL';
 export type AdminRole = 'HEAD_ADMIN' | 'SUB_ADMIN';
 export type TournamentStatus =
   | 'REGISTRATION_OPEN'
@@ -46,7 +37,6 @@ export interface Tournament {
   matchDurationMinutes: number;
   targetGoalsRule: string;
   isRegistrationClosedManual: boolean;
-  isThirdPlaceEnabled: boolean;
   status: TournamentStatus;
   championPlayerId: number | null;
   createdAt: number;
@@ -96,16 +86,6 @@ export interface Match {
   nextMatchSlot: number;
   scheduledLabel: string;
   scheduledAtMillis: number | null;
-  p1CheckedIn: boolean;
-  p2CheckedIn: boolean;
-  isWalkover: boolean;
-  walkoverReason: string;
-  disputeNote: string;
-  disputeScreenshotUrl: string | null;
-  disputeSubmittedBy: string;
-  disputeStatus: DisputeStatus;
-  votesP1: number;
-  votesP2: number;
 }
 
 export interface MatchReminder {
@@ -161,52 +141,6 @@ export interface TournamentOverviewStats {
   highestWinRate: PlayerStats | null;
 }
 
-export interface SeasonLeaderboardEntry {
-  rank: number;
-  elysiumNetId: string;
-  displayName: string;
-  avatarUrl: string | null;
-  clubName: string;
-  tournamentsCount: number;
-  titles: number;
-  runnerUps: number;
-  thirdPlaces: number;
-  matchesPlayed: number;
-  wins: number;
-  draws: number;
-  losses: number;
-  goalsScored: number;
-  goalsConceded: number;
-  cleanSheets: number;
-  winRatePercent: number;
-  seasonPoints: number;
-}
-
-export interface HallOfFameEntry {
-  tournamentId: number;
-  tournamentName: string;
-  gameTitle: string;
-  startDateTime: string;
-  championName: string;
-  championElysiumNetId: string;
-  championAvatarUrl: string | null;
-  runnerUpName: string | null;
-  thirdPlaceName: string | null;
-  totalGoals: number;
-  completedMatches: number;
-  createdAt: number;
-}
-
-export interface AuditLogEntry {
-  id: number;
-  tournamentId: number | null;
-  actorUsername: string;
-  actorDisplayName: string;
-  actionType: string;
-  summaryAr: string;
-  createdAt: number;
-}
-
 export interface AdminDirectoryEntry {
   id: number;
   username: string;
@@ -256,9 +190,6 @@ export interface ArenaState {
   overviewStats: TournamentOverviewStats;
   championPlayer: Player | null;
   isRegistrationOpenNow: boolean;
-  seasonLeaderboard: SeasonLeaderboardEntry[];
-  hallOfFame: HallOfFameEntry[];
-  auditLogs: AuditLogEntry[];
   hasHeadAdmin: boolean;
   adminDirectory: AdminDirectoryEntry[];
   adminAccounts: AdminAccount[];
@@ -312,20 +243,8 @@ export const STAGE_LABELS: Record<MatchStage, { label: string; order: number }> 
   ROUND_OF_16: { label: 'دور الـ 16', order: 2 },
   QUARTER_FINAL: { label: 'ربع النهائي', order: 3 },
   SEMI_FINAL: { label: 'نصف النهائي', order: 4 },
-  THIRD_PLACE: { label: 'تحديد المركز الثالث', order: 5 },
-  FINAL: { label: 'المباراة النهائية', order: 6 }
+  FINAL: { label: 'المباراة النهائية', order: 5 }
 };
-
-export function getGameThemeKey(gameTitle?: string | null): GameThemeKey {
-  const g = (gameTitle || '').toLowerCase();
-  if (g.includes('fifa') || g.includes('fc ') || g.includes('ea fc') || g.includes('pes') || g.includes('efootball')) {
-    return 'football';
-  }
-  if (g.includes('tekken') || g.includes('mortal') || g.includes('street fighter') || g.includes('kombat')) {
-    return 'fighting';
-  }
-  return 'arcade';
-}
 
 export const ADMIN_PERMISSIONS_META: Array<{
   key: AdminPermission;

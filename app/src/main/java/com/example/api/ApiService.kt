@@ -66,71 +66,12 @@ data class RemoteArenaState(
     val overviewStats: TournamentOverviewStats,
     val championPlayer: PlayerEntity?,
     val isRegistrationOpenNow: Boolean,
-    val seasonLeaderboard: List<SeasonLeaderboardEntry> = emptyList(),
-    val hallOfFame: List<HallOfFameEntry> = emptyList(),
-    val auditLogs: List<AuditLogEntry> = emptyList(),
     val hasHeadAdmin: Boolean,
     val adminDirectory: List<AdminAccountEntity>,
     val adminAccounts: List<AdminAccountEntity>,
     val currentAdmin: AdminAccountEntity?,
     val keepSignedIn: Boolean,
     val lockoutState: LockoutState
-)
-
-data class SeasonLeaderboardEntry(
-    val rank: Int,
-    val elysiumNetId: String,
-    val displayName: String,
-    val avatarUrl: String?,
-    val clubName: String,
-    val tournamentsCount: Int,
-    val titles: Int,
-    val runnerUps: Int,
-    val thirdPlaces: Int,
-    val matchesPlayed: Int,
-    val wins: Int,
-    val draws: Int,
-    val losses: Int,
-    val goalsScored: Int,
-    val goalsConceded: Int,
-    val cleanSheets: Int,
-    val winRatePercent: Int,
-    val seasonPoints: Int
-)
-
-data class HallOfFameEntry(
-    val tournamentId: Long,
-    val tournamentName: String,
-    val gameTitle: String,
-    val startDateTime: String,
-    val championName: String,
-    val championElysiumNetId: String,
-    val championAvatarUrl: String?,
-    val runnerUpName: String?,
-    val thirdPlaceName: String?,
-    val totalGoals: Int,
-    val completedMatches: Int,
-    val createdAt: Long
-)
-
-data class AuditLogEntry(
-    val id: Long,
-    val adminId: Long?,
-    val tournamentId: Long?,
-    val actorUsername: String,
-    val actorDisplayName: String,
-    val actionType: String,
-    val summaryAr: String,
-    val createdAt: Long
-)
-
-data class BulkImportResult(
-    val addedCount: Int,
-    val skippedCount: Int
-)
-
-data class AutoScheduleResult(
-    val scheduledCount: Int
 )
 
 data class AuthPayload(
@@ -581,93 +522,6 @@ class ApiService(
         return executeJsonRequest("POST", "/api/tournaments/$tournamentId/champion", body) { Unit }
     }
 
-    suspend fun toggleMatchCheckIn(
-        matchId: Long,
-        playerSlot: Int,
-        checkedIn: Boolean? = null
-    ): ApiResult<Unit> {
-        val body = JSONObject().put("playerSlot", playerSlot)
-        if (checkedIn != null) body.put("checkedIn", checkedIn)
-        return executeJsonRequest("POST", "/api/matches/$matchId/checkin", body, includeAuth = false) { Unit }
-    }
-
-    suspend fun voteMatchPrediction(
-        matchId: Long,
-        voterKey: String,
-        pickedSlot: Int
-    ): ApiResult<Unit> {
-        val body = JSONObject()
-            .put("voterKey", voterKey)
-            .put("pickedSlot", pickedSlot)
-        return executeJsonRequest("POST", "/api/matches/$matchId/predict", body, includeAuth = false) { Unit }
-    }
-
-    suspend fun submitMatchDispute(
-        matchId: Long,
-        submittedBy: String,
-        note: String,
-        screenshotUrl: String?
-    ): ApiResult<Unit> {
-        val body = JSONObject()
-            .put("submittedBy", submittedBy)
-            .put("note", note)
-            .put("screenshotUrl", toServerMediaPath(screenshotUrl) ?: JSONObject.NULL)
-        return executeJsonRequest("POST", "/api/matches/$matchId/dispute", body, includeAuth = false) { Unit }
-    }
-
-    suspend fun resolveMatchDispute(
-        matchId: Long,
-        resolutionNote: String? = null
-    ): ApiResult<Unit> {
-        val body = JSONObject()
-        if (!resolutionNote.isNullOrBlank()) body.put("resolutionNote", resolutionNote)
-        return executeJsonRequest("POST", "/api/matches/$matchId/dispute/resolve", body) { Unit }
-    }
-
-    suspend fun adminWalkoverMatch(
-        matchId: Long,
-        winnerSlot: Int,
-        reason: String? = null
-    ): ApiResult<Unit> {
-        val body = JSONObject()
-            .put("winnerSlot", winnerSlot)
-            .put("reason", reason?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
-        return executeJsonRequest("POST", "/api/matches/$matchId/walkover", body) { Unit }
-    }
-
-    suspend fun bulkImportPlayers(
-        tournamentId: Long,
-        linesText: String,
-        status: PlayerStatus = PlayerStatus.APPROVED
-    ): ApiResult<BulkImportResult> {
-        val body = JSONObject()
-            .put("linesText", linesText)
-            .put("status", status.name)
-        return executeJsonRequest("POST", "/api/tournaments/$tournamentId/players/bulk", body) { json ->
-            BulkImportResult(
-                addedCount = json.optInt("addedCount", 0),
-                skippedCount = json.optInt("skippedCount", 0)
-            )
-        }
-    }
-
-    suspend fun autoScheduleMatches(
-        tournamentId: Long,
-        startAtMillis: Long,
-        intervalMinutes: Int,
-        onlyUnscheduled: Boolean = true
-    ): ApiResult<AutoScheduleResult> {
-        val body = JSONObject()
-            .put("startAtMillis", startAtMillis)
-            .put("intervalMinutes", intervalMinutes)
-            .put("onlyUnscheduled", onlyUnscheduled)
-        return executeJsonRequest("POST", "/api/tournaments/$tournamentId/schedule-matches", body) { json ->
-            AutoScheduleResult(
-                scheduledCount = json.optInt("scheduledCount", 0)
-            )
-        }
-    }
-
     suspend fun scheduleReminder(
         matchId: Long,
         matchTitle: String,
@@ -767,7 +621,6 @@ class ApiService(
         .put("matchDurationMinutes", t.matchDurationMinutes)
         .put("targetGoalsRule", t.targetGoalsRule)
         .put("isRegistrationClosedManual", t.isRegistrationClosedManual)
-        .put("isThirdPlaceEnabled", t.isThirdPlaceEnabled)
 
     private suspend fun <T> executeJsonRequest(
         method: String,
@@ -896,9 +749,6 @@ class ApiService(
         val playerStats = parseArray(json.optJSONArray("playerStats"), ::parsePlayerStats)
         val overviewStats = parseOverviewStats(json.optJSONObject("overviewStats"))
         val championPlayer = json.optJSONObject("championPlayer")?.let(::parsePlayer)
-        val seasonLeaderboard = parseArray(json.optJSONArray("seasonLeaderboard"), ::parseSeasonLeaderboardEntry)
-        val hallOfFame = parseArray(json.optJSONArray("hallOfFame"), ::parseHallOfFameEntry)
-        val auditLogs = parseArray(json.optJSONArray("auditLogs"), ::parseAuditLogEntry)
         val adminDirectory = parseArray(json.optJSONArray("adminDirectory"), ::parseAdmin)
         val adminAccounts = parseArray(json.optJSONArray("adminAccounts"), ::parseAdmin)
         val currentAdmin = json.optJSONObject("currentAdmin")?.let(::parseAdmin)
@@ -921,9 +771,6 @@ class ApiService(
             overviewStats = overviewStats,
             championPlayer = championPlayer,
             isRegistrationOpenNow = json.optBoolean("isRegistrationOpenNow", false),
-            seasonLeaderboard = seasonLeaderboard,
-            hallOfFame = hallOfFame,
-            auditLogs = auditLogs,
             hasHeadAdmin = json.optBoolean("hasHeadAdmin", false),
             adminDirectory = adminDirectory,
             adminAccounts = adminAccounts,
@@ -960,7 +807,6 @@ class ApiService(
         matchDurationMinutes = obj.optInt("matchDurationMinutes", 12),
         targetGoalsRule = obj.optString("targetGoalsRule", ""),
         isRegistrationClosedManual = obj.optBoolean("isRegistrationClosedManual", false),
-        isThirdPlaceEnabled = obj.optBoolean("isThirdPlaceEnabled", false),
         status = enumOrDefault(obj.optString("status"), TournamentStatus.REGISTRATION_OPEN),
         championPlayerId = obj.optNullableLong("championPlayerId"),
         createdAt = obj.optLong("createdAt", 0L)
@@ -1029,17 +875,7 @@ class ApiService(
         nextMatchId = obj.optNullableLong("nextMatchId"),
         nextMatchSlot = obj.optInt("nextMatchSlot", 1),
         scheduledLabel = obj.optString("scheduledLabel", ""),
-        scheduledAtMillis = obj.optNullableLong("scheduledAtMillis"),
-        p1CheckedIn = obj.optBoolean("p1CheckedIn", false),
-        p2CheckedIn = obj.optBoolean("p2CheckedIn", false),
-        isWalkover = obj.optBoolean("isWalkover", false),
-        walkoverReason = obj.optString("walkoverReason", ""),
-        disputeNote = obj.optString("disputeNote", ""),
-        disputeScreenshotUrl = resolveMediaUrl(obj.optNullableString("disputeScreenshotUrl")),
-        disputeSubmittedBy = obj.optString("disputeSubmittedBy", ""),
-        disputeStatus = obj.optString("disputeStatus", "NONE"),
-        votesP1 = obj.optInt("votesP1", 0),
-        votesP2 = obj.optInt("votesP2", 0)
+        scheduledAtMillis = obj.optNullableLong("scheduledAtMillis")
     )
 
     private fun parseReminder(obj: JSONObject): MatchReminderEntity = MatchReminderEntity(
@@ -1101,53 +937,6 @@ class ApiService(
     private fun parseLockout(obj: JSONObject): LockoutState = LockoutState(
         failedAttempts = obj.optInt("failedAttempts", 0),
         lockedUntilMillis = obj.optLong("lockedUntilMillis", 0L)
-    )
-
-    private fun parseSeasonLeaderboardEntry(obj: JSONObject): SeasonLeaderboardEntry = SeasonLeaderboardEntry(
-        rank = obj.optInt("rank", 0),
-        elysiumNetId = obj.optString("elysiumNetId", ""),
-        displayName = obj.optString("displayName", ""),
-        avatarUrl = resolveMediaUrl(obj.optNullableString("avatarUrl")),
-        clubName = obj.optString("clubName", ""),
-        tournamentsCount = obj.optInt("tournamentsCount", 0),
-        titles = obj.optInt("titles", 0),
-        runnerUps = obj.optInt("runnerUps", 0),
-        thirdPlaces = obj.optInt("thirdPlaces", 0),
-        matchesPlayed = obj.optInt("matchesPlayed", 0),
-        wins = obj.optInt("wins", 0),
-        draws = obj.optInt("draws", 0),
-        losses = obj.optInt("losses", 0),
-        goalsScored = obj.optInt("goalsScored", 0),
-        goalsConceded = obj.optInt("goalsConceded", 0),
-        cleanSheets = obj.optInt("cleanSheets", 0),
-        winRatePercent = obj.optInt("winRatePercent", 0),
-        seasonPoints = obj.optInt("seasonPoints", 0)
-    )
-
-    private fun parseHallOfFameEntry(obj: JSONObject): HallOfFameEntry = HallOfFameEntry(
-        tournamentId = obj.optLong("tournamentId", 0L),
-        tournamentName = obj.optString("tournamentName", ""),
-        gameTitle = obj.optString("gameTitle", ""),
-        startDateTime = obj.optString("startDateTime", ""),
-        championName = obj.optString("championName", ""),
-        championElysiumNetId = obj.optString("championElysiumNetId", ""),
-        championAvatarUrl = resolveMediaUrl(obj.optNullableString("championAvatarUrl")),
-        runnerUpName = obj.optNullableString("runnerUpName"),
-        thirdPlaceName = obj.optNullableString("thirdPlaceName"),
-        totalGoals = obj.optInt("totalGoals", 0),
-        completedMatches = obj.optInt("completedMatches", 0),
-        createdAt = obj.optLong("createdAt", 0L)
-    )
-
-    private fun parseAuditLogEntry(obj: JSONObject): AuditLogEntry = AuditLogEntry(
-        id = obj.optLong("id", 0L),
-        adminId = obj.optNullableLong("adminId"),
-        tournamentId = obj.optNullableLong("tournamentId"),
-        actorUsername = obj.optString("actorUsername", ""),
-        actorDisplayName = obj.optString("actorDisplayName", ""),
-        actionType = obj.optString("actionType", ""),
-        summaryAr = obj.optString("summaryAr", ""),
-        createdAt = obj.optLong("createdAt", 0L)
     )
 
     private inline fun <reified T : Enum<T>> enumOrDefault(raw: String?, fallback: T): T {

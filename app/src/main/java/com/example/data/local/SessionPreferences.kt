@@ -12,7 +12,6 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import java.util.UUID
 
 private val Context.sessionDataStore: DataStore<Preferences> by preferencesDataStore(name = "admin_session_prefs")
 
@@ -45,7 +44,6 @@ class SessionPreferences(private val context: Context) {
         private val KEY_SELECTED_TOURNAMENT_ID = longPreferencesKey("selected_tournament_id")
         private val KEY_SERVER_BASE_URL = stringPreferencesKey("server_base_url")
         private val KEY_AUTH_TOKEN = stringPreferencesKey("admin_auth_token")
-        private val KEY_FAN_VOTER_ID = stringPreferencesKey("fan_voter_id")
     }
 
     val sessionState: Flow<AdminSessionState> = context.sessionDataStore.data.map { prefs ->
@@ -192,15 +190,5 @@ class SessionPreferences(private val context: Context) {
             prefs.remove(KEY_SESSION_STARTED_AT)
             prefs.remove(KEY_AUTH_TOKEN)
         }
-    }
-
-    suspend fun getOrCreateVoterId(): String {
-        val existing = context.sessionDataStore.data.first()[KEY_FAN_VOTER_ID]?.takeIf { it.isNotBlank() }
-        if (existing != null) return existing
-        val generated = "android_${UUID.randomUUID()}"
-        context.sessionDataStore.edit { prefs ->
-            prefs[KEY_FAN_VOTER_ID] = generated
-        }
-        return generated
     }
 }

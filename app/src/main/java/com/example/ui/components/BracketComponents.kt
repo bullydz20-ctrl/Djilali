@@ -131,23 +131,6 @@ fun BracketStagePillsBar(
                 modifier = Modifier.testTag("bracket_stage_filter_${stage.name}")
             )
         }
-
-        val thirdPlaceMatches = matchesByStage[MatchStage.THIRD_PLACE].orEmpty()
-        if (thirdPlaceMatches.isNotEmpty()) {
-            item(key = MatchStage.THIRD_PLACE.name) {
-                val completed = thirdPlaceMatches.count { it.isCompleted }
-                FilterChip(
-                    selected = selectedStage == MatchStage.THIRD_PLACE,
-                    onClick = { onSelectStage(MatchStage.THIRD_PLACE) },
-                    label = { Text("${MatchStage.THIRD_PLACE.labelAr} ($completed/${thirdPlaceMatches.size})") },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = ChampionshipGold.copy(alpha = 0.25f),
-                        selectedLabelColor = ChampionshipGold
-                    ),
-                    modifier = Modifier.testTag("bracket_stage_filter_${MatchStage.THIRD_PLACE.name}")
-                )
-            }
-        }
     }
 }
 
@@ -214,13 +197,8 @@ fun BracketMatchNode(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    val stageTitle = when {
-                        isFinal -> "النهائي الكبير"
-                        match.stage == MatchStage.THIRD_PLACE -> "تحديد المركز الثالث 🥉"
-                        else -> "${match.stage.labelAr} #${match.bracketIndex + 1}"
-                    }
                     Text(
-                        text = stageTitle,
+                        text = if (isFinal) "النهائي الكبير" else "${match.stage.labelAr} #${match.bracketIndex + 1}",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (isFinal) ChampionshipGold else TextSecondary,
                         maxLines = 1,
@@ -229,13 +207,6 @@ fun BracketMatchNode(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (match.isWalkover) {
-                        Text(
-                            text = "انسحاب 3-0",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = com.example.ui.theme.AmberDraw
-                        )
-                    }
                     if (match.penaltyScore1 != null && match.penaltyScore2 != null) {
                         Text(
                             text = "ر.ت ${match.penaltyScore1}-${match.penaltyScore2}",

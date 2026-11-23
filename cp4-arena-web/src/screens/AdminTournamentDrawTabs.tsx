@@ -48,7 +48,6 @@ export function AdminTournamentSettingsTab({
     t?.targetGoalsRule ?? defaultGame?.defaultRule ?? 'المباراة الكاملة'
   );
   const [manualClosed, setManualClosed] = useState(t?.isRegistrationClosedManual ?? false);
-  const [isThirdPlaceEnabled, setIsThirdPlaceEnabled] = useState(t?.isThirdPlaceEnabled ?? true);
   const [uploading, setUploading] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -71,7 +70,6 @@ export function AdminTournamentSettingsTab({
       setMatchDuration('12');
       setTargetGoalsRule(defaultGame?.defaultRule ?? 'المباراة الكاملة');
       setManualClosed(false);
-      setIsThirdPlaceEnabled(true);
       return;
     }
     setName(t.name);
@@ -90,7 +88,6 @@ export function AdminTournamentSettingsTab({
     setMatchDuration(String(t.matchDurationMinutes));
     setTargetGoalsRule(t.targetGoalsRule);
     setManualClosed(t.isRegistrationClosedManual);
-    setIsThirdPlaceEnabled(t.isThirdPlaceEnabled ?? true);
   }, [t?.id, t]);
 
   async function handleBannerFile(file: File | null) {
@@ -122,8 +119,7 @@ export function AdminTournamentSettingsTab({
       knockoutTieRule: tieRule,
       matchDurationMinutes: Number(matchDuration) || 12,
       targetGoalsRule,
-      isRegistrationClosedManual: asFresh ? false : manualClosed,
-      isThirdPlaceEnabled
+      isRegistrationClosedManual: asFresh ? false : manualClosed
     };
   }
 
@@ -274,22 +270,6 @@ export function AdminTournamentSettingsTab({
             <label className="field-label">قاعدة اللعب / النقاط</label>
             <input className="input" value={targetGoalsRule} onChange={(e) => setTargetGoalsRule(e.target.value)} />
           </div>
-        </div>
-
-        <div className="arena-subcard" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>مباراة تحديد المركز الثالث والرابع</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>تأهيل خاسري نصف النهائي تلقائياً للعب على البرونزية</div>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={isThirdPlaceEnabled}
-            className={`switch-pill ${isThirdPlaceEnabled ? 'on' : ''}`}
-            onClick={() => setIsThirdPlaceEnabled((v) => !v)}
-          >
-            <span className="switch-knob" />
-          </button>
         </div>
 
         <div className="arena-subcard" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

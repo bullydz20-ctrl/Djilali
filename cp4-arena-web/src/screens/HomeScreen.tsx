@@ -2,13 +2,10 @@ import {
   Award,
   Bell,
   Clock,
-  Crown,
   Gamepad2,
   Lock,
-  Medal,
   Share2,
   Shield,
-  Sparkles,
   Star,
   Trash2,
   TrendingUp,
@@ -34,11 +31,6 @@ export function HomeScreen({
   onOpenExportShare,
   onOpenReminder,
   onCancelReminder,
-  onToggleCheckIn,
-  onVotePrediction,
-  onOpenDispute,
-  onOpenPlayerProfile,
-  onCelebrateChampion,
   onOpenAdmin
 }: {
   state: ArenaState;
@@ -48,11 +40,6 @@ export function HomeScreen({
   onOpenExportShare: () => void;
   onOpenReminder: (m: Match) => void;
   onCancelReminder: (matchId: number) => void;
-  onToggleCheckIn: (m: Match, slot: 1 | 2) => void;
-  onVotePrediction: (m: Match, slot: 1 | 2) => void;
-  onOpenDispute: (m: Match) => void;
-  onOpenPlayerProfile: (player: Player) => void;
-  onCelebrateChampion: () => void;
   onOpenAdmin?: () => void;
 }) {
   const t = state.tournament;
@@ -260,31 +247,15 @@ export function HomeScreen({
               </div>
               <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>{state.championPlayer.name}</div>
               <div style={{ fontSize: '0.8rem', color: 'var(--cyber-sky)' }}>
-                ElysiumNet/ XeMoNat: {state.championPlayer.elysiumNetId}
+                ElysiumNet: {state.championPlayer.elysiumNetId}
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={onCelebrateChampion}
-                title="إطلاق مؤثرات التتويج"
-                style={{ color: 'var(--championship-gold)', borderColor: 'var(--championship-gold)' }}
-              >
-                <Sparkles size={17} />
-              </button>
-              <div
-                style={{ cursor: 'pointer' }}
-                onClick={() => onOpenPlayerProfile(state.championPlayer!)}
-              >
-                <PlayerAvatar
-                  avatarUrl={state.championPlayer.avatarUrl}
-                  name={state.championPlayer.name}
-                  size={56}
-                  borderColor="var(--championship-gold)"
-                />
-              </div>
-            </div>
+            <PlayerAvatar
+              avatarUrl={state.championPlayer.avatarUrl}
+              name={state.championPlayer.name}
+              size={56}
+              borderColor="var(--championship-gold)"
+            />
           </div>
         </div>
       )}
@@ -353,15 +324,11 @@ export function HomeScreen({
             <div
               key={s.player.id}
               className="arena-card"
-              role="button"
-              tabIndex={0}
-              onClick={() => onOpenPlayerProfile(s.player)}
               style={{
                 padding: 12,
                 display: 'flex',
                 justifyContent: 'space-between',
-                alignItems: 'center',
-                cursor: 'pointer'
+                alignItems: 'center'
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -402,105 +369,8 @@ export function HomeScreen({
           onQuickUpdateGoals={onQuickUpdateGoals}
           onOpenDetailedEditor={onEditMatch}
           onOpenReminder={onOpenReminder}
-          onToggleCheckIn={onToggleCheckIn}
-          onVotePrediction={onVotePrediction}
-          onOpenDispute={onOpenDispute}
           maxVisibleRows={12}
         />
-      )}
-
-      {/* Season Leaderboard */}
-      {state.seasonLeaderboard?.length > 0 && (
-        <div className="arena-card stack-col" style={{ gap: 10 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--championship-gold)', fontWeight: 800 }}>
-              <Crown size={18} />
-              <span>الترتيب العام للموسم (جميع البطولات)</span>
-            </div>
-            <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
-              {state.seasonLeaderboard.length} لاعب
-            </span>
-          </div>
-          <div className="stack-col" style={{ gap: 7 }}>
-            {state.seasonLeaderboard.slice(0, 8).map((entry) => (
-              <div
-                key={entry.elysiumNetId}
-                className="arena-subcard"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 10,
-                  borderColor: entry.rank === 1 ? 'rgba(245,184,46,0.55)' : 'var(--card-border)'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                  <span
-                    className="score-num"
-                    style={{
-                      width: 26,
-                      textAlign: 'center',
-                      fontSize: '1rem',
-                      color: entry.rank <= 3 ? 'var(--championship-gold)' : 'var(--text-secondary)'
-                    }}
-                  >
-                    #{entry.rank}
-                  </span>
-                  <PlayerAvatar avatarUrl={entry.avatarUrl} name={entry.displayName} size={34} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {entry.displayName}
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                      {entry.titles > 0 ? `🏆 ${entry.titles} • ` : ''}
-                      {entry.wins} فوز • {entry.tournamentsCount} بطولات
-                    </div>
-                  </div>
-                </div>
-                <div style={{ textAlign: 'left', flexShrink: 0 }}>
-                  <div className="score-num" style={{ fontSize: '1.1rem', color: 'var(--championship-gold)' }}>
-                    {entry.seasonPoints}
-                  </div>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--cyber-sky)' }}>نقطة</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Hall of Fame */}
-      {state.hallOfFame?.length > 0 && (
-        <div className="arena-card arena-card-gold stack-col" style={{ gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--championship-gold)', fontWeight: 800 }}>
-            <Medal size={18} />
-            <span>سجل البطولات الذهبي (Hall of Fame)</span>
-          </div>
-          <div className="stack-col" style={{ gap: 8 }}>
-            {state.hallOfFame.map((item) => (
-              <div key={item.tournamentId} className="arena-subcard stack-col" style={{ gap: 6 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                  <div style={{ fontWeight: 800, fontSize: '0.9rem' }}>{item.tournamentName}</div>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--cyber-sky)', fontWeight: 700 }}>{item.gameTitle}</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.8rem' }}>
-                  <span style={{ color: 'var(--championship-gold)', fontWeight: 800 }}>
-                    🥇 البطل: {item.championName}
-                  </span>
-                  {item.runnerUpName && (
-                    <span style={{ color: 'var(--text-primary)' }}>🥈 الوصيف: {item.runnerUpName}</span>
-                  )}
-                  {item.thirdPlaceName && (
-                    <span style={{ color: 'var(--cyber-sky)' }}>🥉 الثالث: {item.thirdPlaceName}</span>
-                  )}
-                </div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                  {item.completedMatches} مباراة مكتملة • {item.totalGoals} هدف/نقطة
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Scheduled Reminders */}

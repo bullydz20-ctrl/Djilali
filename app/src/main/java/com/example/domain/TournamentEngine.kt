@@ -299,8 +299,7 @@ object TournamentEngine {
     fun buildKnockoutTreeDrafts(
         tournamentId: Long,
         seededSlots: List<Long?>,
-        tieRule: KnockoutTieRule,
-        includeThirdPlace: Boolean = false
+        tieRule: KnockoutTieRule
     ): List<BracketNodeDraft> {
         val bracketSize = nextPowerOfTwo(max(2, seededSlots.size)).coerceIn(2, 16)
         val padded = List(bracketSize) { i -> seededSlots.getOrNull(i) }
@@ -363,25 +362,6 @@ object TournamentEngine {
                 )
                 drafts.add(BracketNodeDraft(tempIndex, parentTempIndex, slotInParent, match))
             }
-        }
-
-        if (includeThirdPlace && bracketSize >= 4) {
-            val thirdMatch = MatchEntity(
-                tournamentId = tournamentId,
-                stage = MatchStage.THIRD_PLACE,
-                groupId = null,
-                roundNumber = MatchStage.THIRD_PLACE.order,
-                bracketIndex = 0,
-                player1Id = null,
-                player2Id = null,
-                isTwoLegged = false,
-                isCompleted = false,
-                winnerId = null,
-                nextMatchId = null,
-                nextMatchSlot = 1,
-                scheduledLabel = MatchStage.THIRD_PLACE.labelAr
-            )
-            drafts.add(BracketNodeDraft(drafts.size, null, 1, thirdMatch))
         }
 
         return drafts

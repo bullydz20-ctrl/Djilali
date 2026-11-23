@@ -2,9 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { GitBranch, Home, LayoutGrid, Shield, Users } from 'lucide-react';
 import {
   adminAddPlayerApi,
-  adminWalkoverMatchApi,
-  autoScheduleMatchesApi,
-  bulkImportPlayersApi,
   cancelReminderApi,
   changeOwnPinApi,
   createSubAdminApi,
@@ -20,30 +17,23 @@ import {
   loginAdminApi,
   logoutAdminApi,
   registerPlayerApi,
-  resolveMatchDisputeApi,
   runDrawApi,
   scheduleReminderApi,
   setAuthToken,
   setLastAdminUsername,
   setupHeadAdminApi,
-  submitMatchDisputeApi,
-  toggleMatchCheckInApi,
   updateKnockoutWinnerApi,
   updateMatchScoreApi,
   updateOwnProfileApi,
   updatePlayerDetailsApi,
   updatePlayerStatusApi,
   updateSubAdminApi,
-  updateTournamentApi,
-  voteMatchPredictionApi
+  updateTournamentApi
 } from './api';
-import { ConfettiOverlay } from './components/ConfettiOverlay';
 import {
-  DisputeMatchModal,
   ExportShareModal,
   InstallPwaModal,
   MatchReminderModal,
-  PlayerProfileModal,
   RegisterPlayerModal,
   ScoreEntryModal
 } from './components/Dialogs';
@@ -53,8 +43,7 @@ import { BracketScreen } from './screens/BracketScreen';
 import { GroupsScreen } from './screens/GroupsScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { PlayersScreen } from './screens/PlayersScreen';
-import { getGameThemeKey } from './types';
-import type { ArenaState, Match, Player, PlayerLevel, PlayerStatus } from './types';
+import type { ArenaState, Match, PlayerLevel, PlayerStatus } from './types';
 
 type TabKey = 'HOME' | 'PLAYERS' | 'GROUPS' | 'BRACKET' | 'ADMIN';
 
@@ -87,13 +76,8 @@ export default function App() {
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [reminderMatch, setReminderMatch] = useState<Match | null>(null);
-  const [disputeMatch, setDisputeMatch] = useState<Match | null>(null);
-  const [profilePlayer, setProfilePlayer] = useState<Player | null>(null);
-  const [showConfetti, setShowConfetti] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
-
-  const prevChampionRef = useRef<{ tid: number | null; cid: number | null }>({ tid: null, cid: null });
 
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState(false);
@@ -128,16 +112,6 @@ export default function App() {
       } else if (next.rememberedUsername) {
         setLastAdminUsername(next.rememberedUsername);
       }
-      const nextTid = next.tournament?.id ?? null;
-      const nextCid = next.championPlayer?.id ?? null;
-      if (
-        prevChampionRef.current.tid === nextTid &&
-        prevChampionRef.current.cid == null &&
-        nextCid != null
-      ) {
-        setShowConfetti(true);
-      }
-      prevChampionRef.current = { tid: nextTid, cid: nextCid };
       setState(next);
       setLoadError('');
       if (next.tournament && next.tournament.id !== tid) {
@@ -234,23 +208,9 @@ export default function App() {
 
   const playersById = new Map((state?.players || []).map((p) => [p.id, p]));
   const remindersByMatchId = new Map((state?.matchReminders || []).map((r) => [r.matchId, r]));
-  const statsByPlayerId = new Map((state?.playerStats || []).map((s) => [s.player.id, s]));
-  const seasonByElysium = new Map(
-    (state?.seasonLeaderboard || []).map((s) => [s.elysiumNetId.trim().toLowerCase(), s])
-  );
-  const gameTheme = getGameThemeKey(state?.tournament?.gameTitle);
-
-  const handleToggleCheckIn = (m: Match, slot: 1 | 2) => {
-    runAction(() => toggleMatchCheckInApi(m.id, slot)).catch(() => undefined);
-  };
-
-  const handleVotePrediction = (m: Match, slot: 1 | 2) => {
-    runAction(() => voteMatchPredictionApi(m.id, slot)).catch(() => undefined);
-  };
 
   return (
-    <div className="app-shell" data-game-theme={gameTheme}>
-      <ConfettiOverlay active={showConfetti} onDone={() => setShowConfetti(false)} />
+    <div className="app-shell">
       <TopHeader
         currentAdmin={state?.currentAdmin ?? null}
         tournaments={state?.tournaments ?? []}
@@ -322,21 +282,12 @@ export default function App() {
                   onCancelReminder={(matchId) => {
                     runAction(() => cancelReminderApi(matchId)).catch(() => undefined);
                   }}
-                  onToggleCheckIn={handleToggleCheckIn}
-                  onVotePrediction={handleVotePrediction}
-                  onOpenDispute={(m) => setDisputeMatch(m)}
-                  onOpenPlayerProfile={(p) => setProfilePlayer(p)}
-                  onCelebrateChampion={() => setShowConfetti(true)}
                   onOpenAdmin={() => setActiveTab('ADMIN')}
                 />
               )}
 
               {activeTab === 'PLAYERS' && (
-                <PlayersScreen
-                  state={state}
-                  onOpenRegister={() => setShowRegisterModal(true)}
-                  onOpenPlayerProfile={(p) => setProfilePlayer(p)}
-                />
+                <PlayersScreen state={state} onOpenRegister={() => setShowRegisterModal(true)} />
               )}
 
               {activeTab === 'GROUPS' && (
@@ -356,9 +307,6 @@ export default function App() {
                     ).catch(() => undefined);
                   }}
                   onOpenReminder={(m) => setReminderMatch(m)}
-                  onToggleCheckIn={handleToggleCheckIn}
-                  onVotePrediction={handleVotePrediction}
-                  onOpenDispute={(m) => setDisputeMatch(m)}
                 />
               )}
 
@@ -413,10 +361,6 @@ export default function App() {
                     if (!state.tournament) return;
                     await runAction(() => adminAddPlayerApi(state.tournament!.id, payload));
                   }}
-                  onBulkImportPlayers={async (linesText, status) => {
-                    if (!state.tournament) return;
-                    await runAction(() => bulkImportPlayersApi(state.tournament!.id, { linesText, status }));
-                  }}
                   onUpdatePlayerStatus={async (id, status: PlayerStatus) => {
                     await runAction(() => updatePlayerStatusApi(id, status));
                   }}
@@ -434,10 +378,6 @@ export default function App() {
                     if (!state.tournament) return;
                     await runAction(() => generateKnockoutApi(state.tournament!.id));
                   }}
-                  onAutoScheduleMatches={async (payload) => {
-                    if (!state.tournament) return;
-                    await runAction(() => autoScheduleMatchesApi(state.tournament!.id, payload));
-                  }}
                   onEditMatch={(m) => setEditingMatch(m)}
                   onQuickUpdateGoals={(m, g1, g2) => {
                     runAction(() =>
@@ -451,8 +391,6 @@ export default function App() {
                       })
                     ).catch(() => undefined);
                   }}
-                  onToggleCheckIn={handleToggleCheckIn}
-                  onOpenDispute={(m) => setDisputeMatch(m)}
                   onUpdateOwnProfile={async (payload) => {
                     await runAction(() => updateOwnProfileApi(payload));
                   }}
@@ -471,7 +409,6 @@ export default function App() {
                   onCrownChampion={async (playerId) => {
                     if (!state.tournament) return;
                     await runAction(() => crownChampionApi(state.tournament!.id, playerId));
-                    if (playerId != null) setShowConfetti(true);
                   }}
                   onOpenExportShare={() => {
                     if (state.tournament) setShowExportModal(true);
@@ -540,41 +477,8 @@ export default function App() {
               await runAction(() => updateMatchScoreApi(editingMatch.id, payload));
               setEditingMatch(null);
             }}
-            onWalkover={async (winnerSlot, reason) => {
-              await runAction(() => adminWalkoverMatchApi(editingMatch.id, winnerSlot, reason));
-              setEditingMatch(null);
-            }}
-            onResolveDispute={async (resolutionNote) => {
-              await runAction(() => resolveMatchDisputeApi(editingMatch.id, resolutionNote));
-              setEditingMatch(null);
-            }}
           />
         )}
-
-      {disputeMatch && (
-        <DisputeMatchModal
-          match={disputeMatch}
-          player1={disputeMatch.player1Id ? playersById.get(disputeMatch.player1Id) ?? null : null}
-          player2={disputeMatch.player2Id ? playersById.get(disputeMatch.player2Id) ?? null : null}
-          onClose={() => setDisputeMatch(null)}
-          onSubmit={async (payload) => {
-            await runAction(() => submitMatchDisputeApi(disputeMatch.id, payload));
-            setDisputeMatch(null);
-          }}
-        />
-      )}
-
-      {profilePlayer && (
-        <PlayerProfileModal
-          player={profilePlayer}
-          stats={statsByPlayerId.get(profilePlayer.id) ?? null}
-          seasonEntry={seasonByElysium.get(profilePlayer.elysiumNetId.trim().toLowerCase()) ?? null}
-          matches={state?.allMatches || []}
-          playersById={playersById}
-          scoreUnitLabel={state?.tournament?.scoreUnitLabel || 'نقطة'}
-          onClose={() => setProfilePlayer(null)}
-        />
-      )}
 
       {reminderMatch && (
         <MatchReminderModal

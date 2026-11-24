@@ -1,19 +1,21 @@
 import { useEffect, useState } from 'react';
-import { Lock, LockKeyholeOpen, Shield, ShieldCheck, User } from 'lucide-react';
-import { getLastAdminUsername, getStoredKeepSignedIn } from '../api';
+import { AlertTriangle, Lock, LockKeyholeOpen, Shield, ShieldCheck, User } from 'lucide-react';
+import { getHeadAutoBackupSummary, getLastAdminUsername, getStoredKeepSignedIn } from '../api';
 import { evaluatePinStrengthClient } from '../types';
-import type { AdminDirectoryEntry, LockoutState } from '../types';
+import type { AdminDirectoryEntry, LockoutState, PersistenceInfo } from '../types';
 
 export function AdminAuthGate({
   hasHeadAdmin,
   adminDirectory,
   lockoutState,
+  persistence,
   onSetupHead,
   onLogin
 }: {
   hasHeadAdmin: boolean;
   adminDirectory: AdminDirectoryEntry[];
   lockoutState: LockoutState;
+  persistence?: PersistenceInfo;
   onSetupHead: (payload: { username: string; displayName: string; pin: string; keepSignedIn: boolean }) => Promise<void>;
   onLogin: (payload: { username: string; pin: string; keepSignedIn: boolean }) => Promise<void>;
 }) {
@@ -57,6 +59,8 @@ export function AdminAuthGate({
   }, [adminDirectory, loginUser]);
 
   const strength = evaluatePinStrengthClient(setupPin);
+  const localAutoBackup = !hasHeadAdmin ? getHeadAutoBackupSummary() : null;
+  const isEphemeralServer = persistence?.mode === 'ephemeral';
 
   async function handleSetupSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -120,6 +124,30 @@ export function AdminAuthGate({
                 أنشئ رمز PIN مكوناً من 6 أرقام لتأمين لوحة إدارة CP4 ARENA على الخادم، وبعدها يمكنك إضافة حتى 5 مشرفين مساعدين.
               </p>
             </div>
+
+            {isEphemeralServer && (
+              <div
+                className="arena-subcard stack-col"
+                style={{
+                  gap: 6,
+                  borderColor: 'rgba(245, 158, 11, 0.7)',
+                  background: 'rgba(245, 158, 11, 0.08)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--championship-gold)', fontWeight: 800, fontSize: '0.82rem' }}>
+                  <AlertTriangle size={16} />
+                  <span>لماذا ظهرت هذه الخانة بعد سكون الموقع؟</span>
+                </div>
+                <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                  الخادم يعمل حالياً على قرص مؤقت بدون <code dir="ltr">DATABASE_URL</code>؛ في باقة Render المجانية تُمسح قاعدة البيانات المحلية عند كل سكون. أضف <code dir="ltr">DATABASE_URL</code> (PostgreSQL مجاني) + <code dir="ltr">JWT_SECRET</code> في Render لمنع ظهور هذه الخانة نهائياً.
+                </div>
+                {localAutoBackup && (
+                  <div style={{ fontSize: '0.76rem', color: 'var(--emerald-win)', fontWeight: 700 }}>
+                    ✓ توجد نسخة محفوظة في متصفحك ({localAutoBackup.tournamentsCount} بطولة • {localAutoBackup.playersCount} لاعب • {localAutoBackup.subAdminsCount} مساعد)؛ سجّل الدخول الآن لاستعادتها بنقرة واحدة.
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="field-group">
               <label className="field-label">اسم المستخدم للدخول *</label>

@@ -64,7 +64,7 @@ export function createPostgresCloudAdapter(connectionString) {
     connectionString,
     max: 4,
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 12_000,
+    connectionTimeoutMillis: 20_000,
     ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false
   });
 
@@ -163,10 +163,29 @@ export function createCloudStore({ databaseUrl = resolveCloudDatabaseUrl(), adap
 
   async function initAndHydrate(dbPath) {
     if (!activeAdapter) return { hydrated: false };
-    await activeAdapter.init();
-    initialized = true;
+    let remote = null;
+    let attemptError = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await activeAdapter.init();
+        initialized = true;
+        remote = await activeAdapter.loadSnapshot();
+        lastError = null;
+        attemptError = null;
+        break;
+      } catch (err) {
+        attemptError = err;
+        lastError = err instanceof Error ? err.message : 'Cloud init failed';
+        console.warn(`[CP4 CloudStore] initAndHydrate attempt ${attempt}/3 failed:`, lastError);
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+        }
+      }
+    }
+    if (attemptError) {
+      throw attemptError;
+    }
 
-    const remote = await activeAdapter.loadSnapshot();
     if (!remote || !remote.stateBlob || remote.stateBlob.length === 0) {
       return { hydrated: false };
     }

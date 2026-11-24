@@ -178,6 +178,7 @@ export function AdminScreen({
         hasHeadAdmin={state.hasHeadAdmin}
         adminDirectory={state.adminDirectory}
         lockoutState={state.lockoutState}
+        persistence={state.persistence}
         onSetupHead={onSetupHead}
         onLogin={onLogin}
       />

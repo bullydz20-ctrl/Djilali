@@ -17,6 +17,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CrimsonLoss
 import com.example.ui.theme.CyberSky

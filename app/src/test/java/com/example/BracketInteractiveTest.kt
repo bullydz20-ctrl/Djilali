@@ -287,4 +287,109 @@ class BracketInteractiveTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("تحديث الفائز — المباراة النهائية").assertDoesNotExist()
     }
+
+    @Test
+    fun symmetricalTwoSidedBracketDisplaysBothWingsCenterFinalAndZoomControls() {
+        val players16 = (1L..16L).map { id ->
+            PlayerEntity(
+                id = id,
+                tournamentId = 1L,
+                name = "مقاتل $id",
+                elysiumNetId = "MK_$id",
+                clubName = "Clan $id",
+                level = PlayerLevel.PRO,
+                ovrRating = 90,
+                status = PlayerStatus.APPROVED
+            )
+        }
+
+        val matches = mutableListOf<MatchEntity>()
+        val finalMatch = MatchEntity(
+            id = 115L, tournamentId = 1L, stage = MatchStage.FINAL,
+            roundNumber = 5, bracketIndex = 0, player1Id = 1L, player2Id = 9L,
+            leg1Score1 = 3, leg1Score2 = 1, isCompleted = true, winnerId = 1L
+        )
+        val sf0 = MatchEntity(
+            id = 113L, tournamentId = 1L, stage = MatchStage.SEMI_FINAL,
+            roundNumber = 4, bracketIndex = 0, player1Id = 1L, player2Id = 5L,
+            leg1Score1 = 3, leg1Score2 = 2, isCompleted = true, winnerId = 1L,
+            nextMatchId = 115L, nextMatchSlot = 1
+        )
+        val sf1 = MatchEntity(
+            id = 114L, tournamentId = 1L, stage = MatchStage.SEMI_FINAL,
+            roundNumber = 4, bracketIndex = 1, player1Id = 9L, player2Id = 13L,
+            leg1Score1 = 3, leg1Score2 = 0, isCompleted = true, winnerId = 9L,
+            nextMatchId = 115L, nextMatchSlot = 2
+        )
+        val qfList = (0 until 4).map { idx ->
+            MatchEntity(
+                id = 109L + idx, tournamentId = 1L, stage = MatchStage.QUARTER_FINAL,
+                roundNumber = 3, bracketIndex = idx,
+                player1Id = (idx * 4 + 1).toLong(),
+                player2Id = (idx * 4 + 3).toLong(),
+                nextMatchId = if (idx < 2) 113L else 114L,
+                nextMatchSlot = (idx % 2) + 1
+            )
+        }
+        val r16List = (0 until 8).map { idx ->
+            MatchEntity(
+                id = 101L + idx, tournamentId = 1L, stage = MatchStage.ROUND_OF_16,
+                roundNumber = 2, bracketIndex = idx,
+                player1Id = (idx * 2 + 1).toLong(),
+                player2Id = (idx * 2 + 2).toLong(),
+                nextMatchId = 109L + (idx / 2),
+                nextMatchSlot = (idx % 2) + 1
+            )
+        }
+        matches += r16List
+        matches += qfList
+        matches += listOf(sf0, sf1, finalMatch)
+
+        val model = com.example.ui.components.buildSymmetricalBracketModel(matches)
+        assertEquals(4, model.rightWingByStage[MatchStage.ROUND_OF_16]?.size)
+        assertEquals(4, model.leftWingByStage[MatchStage.ROUND_OF_16]?.size)
+        assertEquals(2, model.rightWingByStage[MatchStage.QUARTER_FINAL]?.size)
+        assertEquals(2, model.leftWingByStage[MatchStage.QUARTER_FINAL]?.size)
+        assertEquals(1, model.rightWingByStage[MatchStage.SEMI_FINAL]?.size)
+        assertEquals(1, model.leftWingByStage[MatchStage.SEMI_FINAL]?.size)
+        assertEquals(115L, model.finalMatch?.id)
+        assertEquals(15, model.matchNumbersById.size)
+
+        composeRule.setContent {
+            FifaTournamentTheme {
+                BracketScreen(
+                    uiState = TournamentUiState(
+                        isLoaded = true,
+                        players = players16,
+                        approvedPlayers = players16,
+                        knockoutMatches = matches,
+                        allMatches = matches,
+                        championPlayer = players16.first()
+                    ),
+                    onEditMatch = {},
+                    onSelectWinner = { _, _ -> }
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("bracket_full_tree").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_wing_filter_right").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_wing_filter_left").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_zoom_in").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_zoom_out").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_zoom_fit").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_zoom_reset").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_round_header_FINAL").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_champion_pedestal").assertIsDisplayed()
+
+        // Switch to Right Wing focused view, then Left Wing focused view
+        composeRule.onNodeWithTag("bracket_wing_filter_right").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("bracket_wing_focused_RIGHT_WING").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("bracket_wing_filter_left").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("bracket_wing_focused_LEFT_WING").assertIsDisplayed()
+    }
 }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Refresh
@@ -54,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -61,11 +64,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
 import com.example.data.model.MatchStage
+import com.example.ui.theme.AmberDraw
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CrimsonLoss
@@ -86,6 +89,114 @@ val KNOCKOUT_ROADMAP_STAGES = listOf(
     MatchStage.SEMI_FINAL,
     MatchStage.FINAL
 )
+
+enum class BracketWingFilter(val labelAr: String) {
+    ALL("الشجرة الكاملة"),
+    RIGHT_WING("المسار الأيمن"),
+    LEFT_WING("المسار الأيسر")
+}
+
+enum class BracketFlowDirection {
+    LEFT_TO_RIGHT,
+    RIGHT_TO_LEFT
+}
+
+data class SymmetricalBracketModel(
+    val preFinalStages: List<MatchStage>,
+    val rightWingByStage: Map<MatchStage, Map<Int, MatchEntity>>,
+    val leftWingByStage: Map<MatchStage, Map<Int, MatchEntity>>,
+    val finalMatch: MatchEntity?,
+    val thirdPlaceMatches: List<MatchEntity>,
+    val matchNumbersById: Map<Long, Int>,
+    val sideBaseSlots: Int
+)
+
+fun buildSymmetricalBracketModel(knockoutMatches: List<MatchEntity>): SymmetricalBracketModel {
+    val ordered = knockoutMatches.sortedWith(
+        compareBy<MatchEntity> { it.stage.order }.thenBy { it.bracketIndex }.thenBy { it.id }
+    )
+    val matchNumbersById = buildMap {
+        var seq = 1
+        ordered.forEach { put(it.id, seq++) }
+    }
+
+    val byStage = ordered.groupBy { it.stage }
+    val preFinalStages = listOf(
+        MatchStage.ROUND_OF_16,
+        MatchStage.QUARTER_FINAL,
+        MatchStage.SEMI_FINAL
+    ).filter { !byStage[it].isNullOrEmpty() }
+
+    val finalMatch = byStage[MatchStage.FINAL]?.firstOrNull()
+    val thirdPlaceMatches = byStage[MatchStage.THIRD_PLACE].orEmpty()
+    val byId = ordered.associateBy { it.id }
+
+    fun expectedStageCapacity(stage: MatchStage): Int = when (stage) {
+        MatchStage.ROUND_OF_16 -> 8
+        MatchStage.QUARTER_FINAL -> 4
+        MatchStage.SEMI_FINAL -> 2
+        else -> 1
+    }
+
+    fun resolveWingForMatch(match: MatchEntity): Boolean {
+        // Returns true for RIGHT wing (Slot 1 into Final), false for LEFT wing (Slot 2 into Final)
+        var curr: MatchEntity? = match
+        var visited = 0
+        while (curr != null && visited < 8) {
+            val nextId = curr.nextMatchId
+            if (nextId != null) {
+                val parent = byId[nextId]
+                if (parent?.stage == MatchStage.FINAL) {
+                    return curr.nextMatchSlot != 2
+                }
+                curr = parent
+                visited++
+            } else {
+                break
+            }
+        }
+        val halfCap = (expectedStageCapacity(match.stage) / 2).coerceAtLeast(1)
+        return match.bracketIndex < halfCap
+    }
+
+    val rightWing = mutableMapOf<MatchStage, MutableMap<Int, MatchEntity>>()
+    val leftWing = mutableMapOf<MatchStage, MutableMap<Int, MatchEntity>>()
+
+    preFinalStages.forEach { stage ->
+        val halfCap = (expectedStageCapacity(stage) / 2).coerceAtLeast(1)
+        val stageMatches = byStage[stage].orEmpty().sortedBy { it.bracketIndex }
+        val rMap = mutableMapOf<Int, MatchEntity>()
+        val lMap = mutableMapOf<Int, MatchEntity>()
+        stageMatches.forEach { match ->
+            val isRight = resolveWingForMatch(match)
+            val localIdx = if (isRight) {
+                match.bracketIndex.coerceIn(0, halfCap - 1)
+            } else {
+                (match.bracketIndex - halfCap).coerceIn(0, halfCap - 1)
+            }
+            if (isRight) {
+                if (!rMap.containsKey(localIdx)) rMap[localIdx] = match
+                else rMap[rMap.size] = match
+            } else {
+                if (!lMap.containsKey(localIdx)) lMap[localIdx] = match
+                else lMap[lMap.size] = match
+            }
+        }
+        rightWing[stage] = rMap
+        leftWing[stage] = lMap
+    }
+
+    val sideBaseSlots = if (preFinalStages.isEmpty()) 1 else (1 shl (preFinalStages.size - 1))
+    return SymmetricalBracketModel(
+        preFinalStages = preFinalStages,
+        rightWingByStage = rightWing,
+        leftWingByStage = leftWing,
+        finalMatch = finalMatch,
+        thirdPlaceMatches = thirdPlaceMatches,
+        matchNumbersById = matchNumbersById,
+        sideBaseSlots = sideBaseSlots
+    )
+}
 
 @Composable
 fun BracketStagePillsBar(
@@ -159,14 +270,31 @@ fun BracketMatchNode(
     isFinal: Boolean,
     canEdit: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    matchNumber: Int? = null,
+    bestOf: Int = 1
 ) {
     val canTap = canEdit && player1 != null && player2 != null
+    val isReady = player1 != null && player2 != null
     val p1Won = match.isCompleted && match.winnerId != null && match.winnerId == player1?.id
     val p2Won = match.isCompleted && match.winnerId != null && match.winnerId == player2?.id
 
     val score1Text = formatBracketScore(match, isPlayer1 = true)
     val score2Text = formatBracketScore(match, isPlayer1 = false)
+    val displayNum = matchNumber ?: (match.bracketIndex + 1)
+
+    val statusLabel = when {
+        match.isWalkover -> "انسحاب"
+        match.isCompleted -> "مكتملة"
+        isReady -> "جاهزة"
+        else -> "بانتظار"
+    }
+    val statusColor = when {
+        match.isWalkover -> AmberDraw
+        match.isCompleted -> EmeraldWin
+        isReady -> CyberSky
+        else -> TextMuted
+    }
 
     Card(
         modifier = modifier
@@ -180,106 +308,134 @@ fun BracketMatchNode(
                     Modifier
                 }
             ),
-        shape = RoundedCornerShape(15.dp),
+        shape = RoundedCornerShape(if (isFinal) 18.dp else 14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isFinal) ElevatedNavy else MidnightSurface
         ),
         border = BorderStroke(
             width = when {
-                isFinal -> 1.6.dp
-                match.isCompleted -> 1.2.dp
-                canTap -> 1.2.dp
+                isFinal -> 2.dp
+                match.isCompleted -> 1.4.dp
+                isReady -> 1.2.dp
                 else -> 1.dp
             },
             color = when {
-                isFinal && match.winnerId != null -> ChampionshipGold
-                isFinal -> ChampionshipGold.copy(alpha = 0.85f)
-                match.isCompleted -> EmeraldWin.copy(alpha = 0.85f)
-                canTap -> ElectricCobalt
+                isFinal -> ChampionshipGold
+                match.isCompleted -> ChampionshipGold.copy(alpha = 0.72f)
+                isReady -> ElectricCobalt.copy(alpha = 0.85f)
                 else -> CardBorder
             }
         )
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Top bar
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (isFinal) {
+                        Modifier.background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    ChampionshipGold.copy(alpha = 0.14f),
+                                    ElevatedNavy,
+                                    MidnightSurface
+                                )
+                            )
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
+        ) {
+            // Top metadata bar: Match # + Stage + Status + Edit pill
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(ObsidianVoid.copy(alpha = 0.55f))
-                    .padding(horizontal = 9.dp, vertical = 4.dp),
+                    .background(
+                        if (isFinal) ChampionshipGold.copy(alpha = 0.14f)
+                        else ObsidianVoid.copy(alpha = 0.62f)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
+                    Surface(
+                        color = if (isFinal) ChampionshipGold else ElevatedNavy,
+                        shape = RoundedCornerShape(5.dp)
+                    ) {
+                        Text(
+                            text = "#$displayNum",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isFinal) MidnightSurface else CyberSky,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
                     val stageTitle = when {
                         isFinal -> "النهائي الكبير"
-                        match.stage == MatchStage.THIRD_PLACE -> "تحديد المركز الثالث 🥉"
-                        else -> "${match.stage.labelAr} #${match.bracketIndex + 1}"
+                        match.stage == MatchStage.THIRD_PLACE -> "المركز الثالث"
+                        else -> match.stage.labelAr
                     }
                     Text(
                         text = stageTitle,
                         style = MaterialTheme.typography.labelSmall,
                         color = if (isFinal) ChampionshipGold else TextSecondary,
+                        fontWeight = if (isFinal) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (match.isWalkover) {
+                    if (bestOf > 1 && match.stage != MatchStage.THIRD_PLACE) {
                         Text(
-                            text = "انسحاب 3-0",
+                            text = "Bo$bestOf",
                             style = MaterialTheme.typography.labelSmall,
-                            color = com.example.ui.theme.AmberDraw
+                            color = CyberSky
                         )
                     }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     if (match.penaltyScore1 != null && match.penaltyScore2 != null) {
                         Text(
                             text = "ر.ت ${match.penaltyScore1}-${match.penaltyScore2}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = ChampionshipGold
+                            color = ChampionshipGold,
+                            fontWeight = FontWeight.Bold
                         )
-                    } else if (isFinal && match.winnerId != null) {
-                        Icon(
-                            imageVector = Icons.Default.EmojiEvents,
-                            contentDescription = "حُسم النهائي",
-                            tint = ChampionshipGold,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    } else if (match.isCompleted) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "مكتملة",
-                            tint = EmeraldWin,
-                            modifier = Modifier.size(13.dp)
+                    }
+
+                    Surface(
+                        color = statusColor.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                         )
                     }
 
                     if (canTap) {
                         Surface(
-                            color = ElectricCobalt.copy(alpha = 0.25f),
+                            color = ElectricCobalt.copy(alpha = 0.28f),
                             shape = RoundedCornerShape(6.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "تحديث الفائز أو النتيجة",
-                                    tint = CyberSky,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Text(
-                                    text = if (match.winnerId != null) "تعديل" else "تحديد الفائز",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = CyberSky
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = if (match.winnerId != null) "تعديل النتيجة" else "تحديد الفائز",
+                                tint = CyberSky,
+                                modifier = Modifier
+                                    .padding(3.dp)
+                                    .size(11.dp)
+                            )
                         }
                     }
                 }
@@ -290,15 +446,65 @@ fun BracketMatchNode(
                 scoreText = score1Text,
                 isWinner = p1Won,
                 isEliminated = p2Won,
+                isFinal = isFinal,
                 modifier = Modifier.weight(1f)
             )
-            HorizontalDivider(color = CardBorder.copy(alpha = 0.5f))
+            HorizontalDivider(color = if (isFinal) ChampionshipGold.copy(alpha = 0.35f) else CardBorder.copy(alpha = 0.55f))
             BracketSlotRow(
                 player = player2,
                 scoreText = score2Text,
                 isWinner = p2Won,
                 isEliminated = p1Won,
+                isFinal = isFinal,
                 modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+fun BracketPlaceholderNode(
+    stage: MatchStage,
+    slotNumber: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = MidnightSurface.copy(alpha = 0.42f),
+        border = BorderStroke(1.dp, CardBorder.copy(alpha = 0.45f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${stage.labelAr} #$slotNumber",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+                Text(
+                    text = "بانتظار",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
+            Text(
+                text = "مسار مفتوح / BYE",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted
+            )
+            Text(
+                text = "—",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
             )
         }
     }
@@ -310,6 +516,7 @@ private fun BracketSlotRow(
     scoreText: String,
     isWinner: Boolean,
     isEliminated: Boolean,
+    isFinal: Boolean,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -317,64 +524,90 @@ private fun BracketSlotRow(
             .fillMaxWidth()
             .background(
                 when {
-                    isWinner -> ChampionshipGold.copy(alpha = 0.14f)
-                    isEliminated -> ObsidianVoid.copy(alpha = 0.28f)
+                    isWinner -> ChampionshipGold.copy(alpha = 0.16f)
+                    isEliminated -> ObsidianVoid.copy(alpha = 0.38f)
                     else -> Color.Transparent
                 }
             )
-            .padding(horizontal = 9.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 4.dp)
         ) {
             PlayerAvatar(
                 avatarUri = player?.avatarUri,
                 playerName = player?.name ?: "؟",
-                size = 24.dp,
+                size = if (isFinal) 26.dp else 23.dp,
                 borderColor = when {
                     isWinner -> ChampionshipGold
-                    player != null -> CardBorder
+                    isEliminated -> CrimsonLoss.copy(alpha = 0.45f)
+                    player != null -> CyberSky.copy(alpha = 0.55f)
                     else -> CardBorder.copy(alpha = 0.4f)
                 }
             )
             Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = player?.name ?: "بانتظار المتأهل",
-                style = MaterialTheme.typography.bodySmall,
-                color = when {
-                    isWinner -> ChampionshipGold
-                    isEliminated -> TextMuted
-                    player != null -> TextPrimary
-                    else -> TextMuted
-                },
-                fontWeight = if (isWinner) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (isWinner) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "متأهل",
-                    tint = ChampionshipGold,
-                    modifier = Modifier.size(14.dp)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = player?.name ?: "بانتظار المتأهل",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when {
+                        isWinner -> ChampionshipGold
+                        isEliminated -> TextMuted
+                        player != null -> TextPrimary
+                        else -> TextMuted
+                    },
+                    fontWeight = if (isWinner) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (isWinner) {
+                Icon(
+                    imageVector = if (isFinal) Icons.Default.EmojiEvents else Icons.Default.CheckCircle,
+                    contentDescription = "فائز",
+                    tint = ChampionshipGold,
+                    modifier = Modifier.size(13.dp)
+                )
+            } else if (isEliminated) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "خاسر",
+                    tint = CrimsonLoss.copy(alpha = 0.7f),
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+
             Surface(
-                color = if (isWinner) ChampionshipGold.copy(alpha = 0.22f) else ElevatedNavy,
-                shape = RoundedCornerShape(6.dp)
+                color = when {
+                    isWinner -> ChampionshipGold.copy(alpha = 0.24f)
+                    isEliminated -> ObsidianVoid.copy(alpha = 0.6f)
+                    else -> ElevatedNavy
+                },
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.requiredWidthIn(min = 26.dp)
             ) {
                 Text(
                     text = scoreText,
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (isWinner) ChampionshipGold else TextPrimary,
+                    color = when {
+                        isWinner -> ChampionshipGold
+                        isEliminated -> TextMuted
+                        else -> TextPrimary
+                    },
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                 )
             }
         }
@@ -382,14 +615,15 @@ private fun BracketSlotRow(
 }
 
 @Composable
-fun BracketConnectorCanvas(
-    matchesInRound: List<MatchEntity>,
-    nextMatchCount: Int,
-    slotHeight: Dp,
-    nextSlotHeight: Dp,
+fun SymmetricalConnectorCanvas(
+    childMatchesByLocalSlot: Map<Int, MatchEntity>,
+    nextSideMatchCount: Int,
+    childSlotHeight: Dp,
+    parentSlotHeight: Dp,
     connectorWidth: Dp,
-    totalBracketHeight: Dp,
+    totalHeight: Dp,
     headerTopOffset: Dp,
+    flowDirection: BracketFlowDirection,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -397,72 +631,173 @@ fun BracketConnectorCanvas(
         modifier = modifier
             .padding(top = headerTopOffset)
             .width(connectorWidth)
-            .height(totalBracketHeight)
+            .height(totalHeight)
     ) {
         val w = size.width
-        val isRtl = layoutDirection == LayoutDirection.Rtl
-        val childX = if (isRtl) w else 0f
-        val parentX = if (isRtl) 0f else w
+        val childX = if (flowDirection == BracketFlowDirection.LEFT_TO_RIGHT) 0f else w
+        val parentX = if (flowDirection == BracketFlowDirection.LEFT_TO_RIGHT) w else 0f
         val midX = w / 2f
 
-        val slotPx = with(density) { slotHeight.toPx() }
-        val nextSlotPx = with(density) { nextSlotHeight.toPx() }
-        val strokeWidthPx = 2.5.dp.toPx()
+        val childSlotPx = with(density) { childSlotHeight.toPx() }
+        val parentSlotPx = with(density) { parentSlotHeight.toPx() }
+        val baseStroke = 2.2.dp.toPx()
+        val goldStroke = 2.8.dp.toPx()
+        val goldGlow = 5.5.dp.toPx()
 
-        for (pairIdx in 0 until nextMatchCount) {
-            val topChildY = slotPx * (pairIdx * 2) + slotPx / 2f
-            val bottomChildY = slotPx * (pairIdx * 2 + 1) + slotPx / 2f
-            val parentY = nextSlotPx * pairIdx + nextSlotPx / 2f
+        for (pairIdx in 0 until nextSideMatchCount) {
+            val topChildY = childSlotPx * (pairIdx * 2) + childSlotPx / 2f
+            val botChildY = childSlotPx * (pairIdx * 2 + 1) + childSlotPx / 2f
+            val parentY = parentSlotPx * pairIdx + parentSlotPx / 2f
 
-            val topMatch = matchesInRound.getOrNull(pairIdx * 2)
-            val botMatch = matchesInRound.getOrNull(pairIdx * 2 + 1)
-            val topHasWinner = topMatch?.winnerId != null
-            val botHasWinner = botMatch?.winnerId != null
+            val topMatch = childMatchesByLocalSlot[pairIdx * 2]
+            val botMatch = childMatchesByLocalSlot[pairIdx * 2 + 1]
 
-            // Top branch
-            val topPath = Path().apply {
-                moveTo(childX, topChildY)
-                lineTo(midX, topChildY)
-                lineTo(midX, parentY)
-                lineTo(parentX, parentY)
-            }
-            // Bottom branch
-            val botPath = Path().apply {
-                moveTo(childX, bottomChildY)
-                lineTo(midX, bottomChildY)
-                lineTo(midX, parentY)
-                lineTo(parentX, parentY)
-            }
+            drawBranchLine(
+                childX = childX,
+                childY = topChildY,
+                midX = midX,
+                parentX = parentX,
+                parentY = parentY,
+                match = topMatch,
+                baseStroke = baseStroke,
+                goldStroke = goldStroke,
+                goldGlow = goldGlow,
+                drawGold = false
+            )
+            drawBranchLine(
+                childX = childX,
+                childY = botChildY,
+                midX = midX,
+                parentX = parentX,
+                parentY = parentY,
+                match = botMatch,
+                baseStroke = baseStroke,
+                goldStroke = goldStroke,
+                goldGlow = goldGlow,
+                drawGold = false
+            )
+        }
 
-            // Draw inactive paths first so active gold paths render crisply on top
-            if (!topHasWinner) {
-                drawPath(
-                    path = topPath,
-                    color = CardBorder,
-                    style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
-            }
-            if (!botHasWinner) {
-                drawPath(
-                    path = botPath,
-                    color = CardBorder,
-                    style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
-            }
-            if (topHasWinner) {
-                drawPath(
-                    path = topPath,
-                    color = ChampionshipGold,
-                    style = Stroke(width = strokeWidthPx * 1.15f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
-            }
-            if (botHasWinner) {
-                drawPath(
-                    path = botPath,
-                    color = ChampionshipGold,
-                    style = Stroke(width = strokeWidthPx * 1.15f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
-            }
+        // Second pass so golden qualified tracks render cleanly above inactive lines
+        for (pairIdx in 0 until nextSideMatchCount) {
+            val topChildY = childSlotPx * (pairIdx * 2) + childSlotPx / 2f
+            val botChildY = childSlotPx * (pairIdx * 2 + 1) + childSlotPx / 2f
+            val parentY = parentSlotPx * pairIdx + parentSlotPx / 2f
+
+            val topMatch = childMatchesByLocalSlot[pairIdx * 2]
+            val botMatch = childMatchesByLocalSlot[pairIdx * 2 + 1]
+
+            drawBranchLine(
+                childX = childX,
+                childY = topChildY,
+                midX = midX,
+                parentX = parentX,
+                parentY = parentY,
+                match = topMatch,
+                baseStroke = baseStroke,
+                goldStroke = goldStroke,
+                goldGlow = goldGlow,
+                drawGold = true
+            )
+            drawBranchLine(
+                childX = childX,
+                childY = botChildY,
+                midX = midX,
+                parentX = parentX,
+                parentY = parentY,
+                match = botMatch,
+                baseStroke = baseStroke,
+                goldStroke = goldStroke,
+                goldGlow = goldGlow,
+                drawGold = true
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawBranchLine(
+    childX: Float,
+    childY: Float,
+    midX: Float,
+    parentX: Float,
+    parentY: Float,
+    match: MatchEntity?,
+    baseStroke: Float,
+    goldStroke: Float,
+    goldGlow: Float,
+    drawGold: Boolean
+) {
+    val hasWinner = match?.winnerId != null
+    if (drawGold != hasWinner) return
+
+    val path = Path().apply {
+        moveTo(childX, childY)
+        lineTo(midX, childY)
+        lineTo(midX, parentY)
+        lineTo(parentX, parentY)
+    }
+
+    if (hasWinner) {
+        drawPath(
+            path = path,
+            color = ChampionshipGold.copy(alpha = 0.22f),
+            style = Stroke(width = goldGlow, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+        drawPath(
+            path = path,
+            color = ChampionshipGold,
+            style = Stroke(width = goldStroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    } else {
+        val isReady = match?.player1Id != null && match.player2Id != null
+        drawPath(
+            path = path,
+            color = if (isReady) ElectricCobalt.copy(alpha = 0.58f) else CardBorder,
+            style = Stroke(width = baseStroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    }
+}
+
+@Composable
+fun SemiToFinalConnectorCanvas(
+    semiMatch: MatchEntity?,
+    connectorWidth: Dp,
+    totalHeight: Dp,
+    headerTopOffset: Dp,
+    modifier: Modifier = Modifier
+) {
+    Canvas(
+        modifier = modifier
+            .padding(top = headerTopOffset)
+            .width(connectorWidth)
+            .height(totalHeight)
+    ) {
+        val y = size.height / 2f
+        val hasWinner = semiMatch?.winnerId != null
+        val isReady = semiMatch?.player1Id != null && semiMatch.player2Id != null
+        if (hasWinner) {
+            drawLine(
+                color = ChampionshipGold.copy(alpha = 0.25f),
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 6.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = ChampionshipGold,
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 3.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        } else {
+            drawLine(
+                color = if (isReady) ElectricCobalt.copy(alpha = 0.65f) else CardBorder,
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 2.4.dp.toPx(),
+                cap = StrokeCap.Round
+            )
         }
     }
 }
@@ -490,7 +825,7 @@ fun ChampionPedestalNode(
                     Brush.verticalGradient(
                         colors = if (champion != null) {
                             listOf(
-                                ChampionshipGold.copy(alpha = 0.22f),
+                                ChampionshipGold.copy(alpha = 0.24f),
                                 RoyalViolet.copy(alpha = 0.14f),
                                 MidnightSurface
                             )
@@ -504,14 +839,14 @@ fun ChampionPedestalNode(
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(36.dp)
                         .clip(CircleShape)
                         .background(
-                            if (champion != null) ChampionshipGold.copy(alpha = 0.22f)
+                            if (champion != null) ChampionshipGold.copy(alpha = 0.24f)
                             else ElevatedNavy
                         ),
                     contentAlignment = Alignment.Center
@@ -520,7 +855,7 @@ fun ChampionPedestalNode(
                         imageVector = Icons.Default.EmojiEvents,
                         contentDescription = "كأس البطولة",
                         tint = if (champion != null) ChampionshipGold else TextMuted,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
 
@@ -535,7 +870,7 @@ fun ChampionPedestalNode(
                     PlayerAvatar(
                         avatarUri = champion.avatarUri,
                         playerName = champion.name,
-                        size = 40.dp,
+                        size = 38.dp,
                         borderColor = ChampionshipGold
                     )
                     Text(
@@ -603,7 +938,7 @@ fun BracketMatchWinnerDialog(
                     )
                     Text(
                         text = if (isFinal) "اختر بطل البطولة أو سجّل النتيجة الكاملة"
-                        else "اختر اللاعب المتأهل للدور التالي أو عدّل الأهداف",
+                        else "اختر اللاعب المتأهل للدور التالي أو عدّل النتيجة",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -645,7 +980,7 @@ fun BracketMatchWinnerDialog(
                 ) {
                     Icon(Icons.Default.SportsSoccer, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("إدخال النتيجة والأهداف التفصيلية")
+                    Text("إدخال النتيجة التفصيلية")
                 }
 
                 if (match.winnerId != null) {
@@ -747,7 +1082,7 @@ private fun WinnerCandidateCard(
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (scoreText != "-") {
                     Text(
-                        text = "الأهداف: $scoreText",
+                        text = "النتيجة: $scoreText",
                         style = MaterialTheme.typography.labelSmall,
                         color = CyberSky
                     )
@@ -777,19 +1112,4 @@ private fun formatBracketScore(match: MatchEntity, isPlayer1: Boolean): String {
     } else {
         s1?.toString() ?: "-"
     }
-}
-
-fun drawChampionConnectorLine(
-    drawScope: androidx.compose.ui.graphics.drawscope.DrawScope,
-    hasChampion: Boolean
-) {
-    val w = drawScope.size.width
-    val centerY = drawScope.size.height / 2f
-    drawScope.drawLine(
-        color = if (hasChampion) ChampionshipGold else CardBorder,
-        start = Offset(0f, centerY),
-        end = Offset(w, centerY),
-        strokeWidth = with(drawScope) { 2.8.dp.toPx() },
-        cap = StrokeCap.Round
-    )
 }

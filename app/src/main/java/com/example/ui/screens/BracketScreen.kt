@@ -3,9 +3,11 @@ package com.example.ui.screens
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,9 +17,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -25,30 +29,50 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
@@ -56,14 +80,19 @@ import com.example.data.model.MatchStage
 import com.example.data.model.RaceStage
 import com.example.security.AdminPermission
 import com.example.security.hasPermission
-import com.example.ui.components.BracketConnectorCanvas
+import com.example.ui.components.BracketFlowDirection
 import com.example.ui.components.BracketMatchNode
 import com.example.ui.components.BracketMatchWinnerDialog
+import com.example.ui.components.BracketPlaceholderNode
 import com.example.ui.components.BracketStagePillsBar
+import com.example.ui.components.BracketWingFilter
 import com.example.ui.components.ChampionPedestalNode
 import com.example.ui.components.EmptyStatePanel
 import com.example.ui.components.PlayerAvatar
-import com.example.ui.components.drawChampionConnectorLine
+import com.example.ui.components.SemiToFinalConnectorCanvas
+import com.example.ui.components.SymmetricalBracketModel
+import com.example.ui.components.SymmetricalConnectorCanvas
+import com.example.ui.components.buildSymmetricalBracketModel
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CrimsonLoss
@@ -72,9 +101,12 @@ import com.example.ui.theme.ElectricCobalt
 import com.example.ui.theme.ElevatedNavy
 import com.example.ui.theme.EmeraldWin
 import com.example.ui.theme.MidnightSurface
+import com.example.ui.theme.ObsidianVoid
+import com.example.ui.theme.RoyalViolet
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.TournamentUiState
+import kotlin.math.roundToInt
 
 @Composable
 fun BracketScreen(
@@ -87,8 +119,9 @@ fun BracketScreen(
     val knockoutMatches = uiState.knockoutMatches
     val playersById = uiState.players.associateBy { it.id }
     val canEditScores = uiState.currentAdmin?.hasPermission(AdminPermission.EDIT_SCORES) == true
+    val tournamentBestOf = tournament?.bestOf ?: 1
 
-    if (tournament?.format?.isRacing == true) {
+    if (tournament?.format?.isRacing == true && knockoutMatches.isEmpty()) {
         val finalRaces = uiState.races.filter { it.stage == RaceStage.FINAL }
         if (uiState.races.isEmpty() && uiState.racingStandings.isEmpty()) {
             Column(
@@ -315,27 +348,18 @@ fun BracketScreen(
         knockoutMatches.groupBy { it.stage }
             .mapValues { (_, list) -> list.sortedBy { it.bracketIndex } }
     }
-
-    val rounds = remember(matchesByStage) {
-        matchesByStage
-            .filterKeys { it != MatchStage.THIRD_PLACE }
-            .toList()
-            .sortedBy { it.first.order }
-    }
-    val thirdPlaceMatches = remember(matchesByStage) {
-        matchesByStage[MatchStage.THIRD_PLACE].orEmpty()
-    }
+    val model = remember(knockoutMatches) { buildSymmetricalBracketModel(knockoutMatches) }
 
     var selectedStage by remember(knockoutMatches.size) { mutableStateOf<MatchStage?>(null) }
+    var selectedWing by remember(knockoutMatches.size) { mutableStateOf(BracketWingFilter.ALL) }
     var activeWinnerDialogMatch by remember { mutableStateOf<MatchEntity?>(null) }
 
     val completedCount = knockoutMatches.count { it.isCompleted }
     val totalCount = knockoutMatches.size
-    val finalMatch = matchesByStage[MatchStage.FINAL]?.firstOrNull()
-    val championPlayer = uiState.championPlayer ?: finalMatch?.winnerId?.let { playersById[it] }
+    val championPlayer = uiState.championPlayer ?: model.finalMatch?.winnerId?.let { playersById[it] }
 
     Column(modifier = modifier.fillMaxSize()) {
-        // Interactive Bracket Header & Progress
+        // Header + Progress + Filter Pills
         Surface(
             color = MidnightSurface,
             tonalElevation = 2.dp,
@@ -359,21 +383,23 @@ fun BracketScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
-                            val boTag = if ((tournament?.bestOf ?: 1) > 1) " • Best of ${tournament?.bestOf}" else ""
+                            val boTag = if (tournamentBestOf > 1) " • Best of $tournamentBestOf" else ""
                             Text(
-                                text = "مخطط الأدوار الإقصائية التفاعلي$boTag",
+                                text = "شجرة الأدوار الإقصائية المتناظرة$boTag",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = ChampionshipGold,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = if (canEditScores) {
-                                    "اضغط على أي مواجهة لتحديث الفائز أو تسجيل النتيجة"
+                                    "مسار أيمن وأيسر يلتقيان في النهائي الكبير • اضغط على المواجهة للتحديث"
                                 } else {
-                                    "اسحب للتنقل أو اختر المرحلة من الشريط أدناه"
+                                    "قرّب وحرّك الشجرة بحرية أو اختر مساراً محدداً من الأعلى"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = CyberSky
+                                color = CyberSky,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -408,6 +434,7 @@ fun BracketScreen(
                     selectedStage = selectedStage,
                     matchesByStage = matchesByStage,
                     onSelectStage = { stage ->
+                        if (stage == null) selectedWing = BracketWingFilter.ALL
                         selectedStage = if (selectedStage == stage && stage != null) null else stage
                     }
                 )
@@ -420,11 +447,13 @@ fun BracketScreen(
             modifier = Modifier.fillMaxSize()
         ) { focusedStage ->
             if (focusedStage == null) {
-                FullKnockoutTreeCanvas(
-                    rounds = rounds,
-                    thirdPlaceMatches = thirdPlaceMatches,
+                SymmetricalBracketViewport(
+                    model = model,
+                    wingFilter = selectedWing,
+                    onSelectWing = { wing -> selectedWing = wing },
                     playersById = playersById,
                     championPlayer = championPlayer,
+                    bestOf = tournamentBestOf,
                     canEditScores = canEditScores,
                     onMatchClick = { match ->
                         if (canEditScores) {
@@ -436,6 +465,8 @@ fun BracketScreen(
                 FocusedStageMatchesList(
                     stage = focusedStage,
                     matches = matchesByStage[focusedStage].orEmpty(),
+                    matchNumbersById = model.matchNumbersById,
+                    bestOf = tournamentBestOf,
                     playersById = playersById,
                     championPlayer = if (focusedStage == MatchStage.FINAL) championPlayer else null,
                     canEditScores = canEditScores,
@@ -473,210 +504,495 @@ fun BracketScreen(
 }
 
 @Composable
-private fun FullKnockoutTreeCanvas(
-    rounds: List<Pair<MatchStage, List<MatchEntity>>>,
-    thirdPlaceMatches: List<MatchEntity>,
+private fun SymmetricalBracketViewport(
+    model: SymmetricalBracketModel,
+    wingFilter: BracketWingFilter,
+    onSelectWing: (BracketWingFilter) -> Unit,
     playersById: Map<Long, PlayerEntity>,
     championPlayer: PlayerEntity?,
+    bestOf: Int,
     canEditScores: Boolean,
     onMatchClick: (MatchEntity) -> Unit
 ) {
-    val cardWidth = 232.dp
-    val cardHeight = 108.dp
-    val baseSlotHeight = 128.dp
-    val connectorWidth = 42.dp
-    val headerHeight = 44.dp
-    val championColumnWidth = 176.dp
-    val championCardHeight = 166.dp
+    val cardWidth = 220.dp
+    val finalCardWidth = 248.dp
+    val cardHeight = 122.dp
+    val finalCardHeight = 136.dp
+    val baseSlotHeight = 142.dp
+    val connectorWidth = 38.dp
+    val headerHeight = 36.dp
+    val headerGap = 10.dp
+    val headerTopOffset = headerHeight + headerGap
 
-    val firstRoundCount = rounds.firstOrNull()?.second?.size?.coerceAtLeast(1) ?: 1
-    val totalBracketHeight = baseSlotHeight * firstRoundCount
+    val stageCount = model.preFinalStages.size
+    val sideWidthDp: Dp = if (stageCount == 0) 0.dp else (cardWidth * stageCount) + (connectorWidth * stageCount)
+    val naturalTreeWidthDp: Dp = when (wingFilter) {
+        BracketWingFilter.ALL -> if (stageCount == 0) finalCardWidth + 32.dp else (sideWidthDp * 2) + finalCardWidth + 32.dp
+        BracketWingFilter.RIGHT_WING, BracketWingFilter.LEFT_WING -> sideWidthDp + finalCardWidth + 32.dp
+    }
 
-    val hScroll = rememberScrollState()
-    val vScroll = rememberScrollState()
+    val wingsHeightDp: Dp = if (stageCount == 0) {
+        finalCardHeight + 16.dp
+    } else {
+        baseSlotHeight * model.sideBaseSlots
+    }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .drawBehind {
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            ChampionshipGold.copy(alpha = 0.08f),
-                            ElectricCobalt.copy(alpha = 0.04f),
-                            Color.Transparent
-                        ),
-                        center = Offset(size.width * 0.2f, size.height * 0.35f),
-                        radius = size.maxDimension * 0.55f
-                    )
-                )
-            }
-            .horizontalScroll(hScroll)
-            .verticalScroll(vScroll)
-            .padding(16.dp)
-            .testTag("bracket_full_tree")
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-            rounds.forEachIndexed { roundIdx, (stage, sortedMatches) ->
-                val multiplier = 1 shl roundIdx
-                val slotHeight = baseSlotHeight * multiplier
-                val isFinalRound = (stage == MatchStage.FINAL)
+    val finalCenterYDp = wingsHeightDp / 2f
+    val finalBottomDp = finalCenterYDp + finalCardHeight / 2f
+    val championStemHeight = 20.dp
+    val championCardHeight = 160.dp
+    val thirdPlaceExtraDp = if (model.thirdPlaceMatches.isNotEmpty()) 190.dp else 0.dp
+    val centerTotalHeightDp = maxOf(
+        wingsHeightDp,
+        finalBottomDp + championStemHeight + championCardHeight + 12.dp
+    )
+    val naturalTreeHeightDp = headerTopOffset + centerTotalHeightDp + thirdPlaceExtraDp + 24.dp
 
-                // Round Column
-                Column(
-                    modifier = Modifier.width(cardWidth),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Surface(
-                        color = if (isFinalRound) ChampionshipGold.copy(alpha = 0.22f) else ElevatedNavy,
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isFinalRound) ChampionshipGold else ElectricCobalt.copy(alpha = 0.6f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(36.dp)
-                            .testTag("bracket_round_header_${stage.name}")
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            if (isFinalRound) {
-                                Icon(
-                                    imageVector = Icons.Default.EmojiEvents,
-                                    contentDescription = null,
-                                    tint = ChampionshipGold,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                            }
-                            Text(
-                                text = stage.labelAr,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = if (isFinalRound) ChampionshipGold else TextPrimary,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
+    val density = LocalDensity.current
+    val naturalWidthPx = with(density) { naturalTreeWidthDp.toPx() }
+    val naturalHeightPx = with(density) { naturalTreeHeightDp.toPx() }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .width(cardWidth)
-                            .height(totalBracketHeight)
-                    ) {
-                        sortedMatches.forEachIndexed { idx, match ->
-                            val centerY = slotHeight * idx + slotHeight / 2f
-                            val topOffset = centerY - cardHeight / 2f
-                            BracketMatchNode(
-                                match = match,
-                                player1 = match.player1Id?.let { playersById[it] },
-                                player2 = match.player2Id?.let { playersById[it] },
-                                isFinal = isFinalRound,
-                                canEdit = canEditScores,
-                                onClick = { onMatchClick(match) },
-                                modifier = Modifier
-                                    .offset(y = topOffset)
-                                    .width(cardWidth)
-                                    .height(cardHeight)
-                            )
-                        }
-                    }
-                }
-
-                // Connector between rounds
-                if (roundIdx < rounds.lastIndex) {
-                    val nextMatchCount = rounds[roundIdx + 1].second.size
-                    val nextSlotHeight = baseSlotHeight * (1 shl (roundIdx + 1))
-
-                    BracketConnectorCanvas(
-                        matchesInRound = sortedMatches,
-                        nextMatchCount = nextMatchCount,
-                        slotHeight = slotHeight,
-                        nextSlotHeight = nextSlotHeight,
-                        connectorWidth = connectorWidth,
-                        totalBracketHeight = totalBracketHeight,
-                        headerTopOffset = headerHeight
-                    )
-                }
-            }
-
-            // Connector from Final to Champion Pedestal
-            Canvas(
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (stageCount > 0) {
+            Row(
                 modifier = Modifier
-                    .padding(top = headerHeight)
-                    .width(34.dp)
-                    .height(totalBracketHeight)
+                    .fillMaxWidth()
+                    .background(ObsidianVoid.copy(alpha = 0.65f))
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                drawChampionConnectorLine(
-                    drawScope = this,
-                    hasChampion = championPlayer != null
+                FilterChip(
+                    selected = wingFilter == BracketWingFilter.RIGHT_WING,
+                    onClick = {
+                        onSelectWing(
+                            if (wingFilter == BracketWingFilter.RIGHT_WING) BracketWingFilter.ALL
+                            else BracketWingFilter.RIGHT_WING
+                        )
+                    },
+                    label = { Text(BracketWingFilter.RIGHT_WING.labelAr) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = RoyalViolet,
+                        selectedLabelColor = ChampionshipGold
+                    ),
+                    modifier = Modifier.testTag("bracket_wing_filter_right")
+                )
+                FilterChip(
+                    selected = wingFilter == BracketWingFilter.ALL,
+                    onClick = { onSelectWing(BracketWingFilter.ALL) },
+                    label = { Text("الجهتين معاً") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ChampionshipGold.copy(alpha = 0.25f),
+                        selectedLabelColor = ChampionshipGold
+                    ),
+                    modifier = Modifier.testTag("bracket_wing_filter_all")
+                )
+                FilterChip(
+                    selected = wingFilter == BracketWingFilter.LEFT_WING,
+                    onClick = {
+                        onSelectWing(
+                            if (wingFilter == BracketWingFilter.LEFT_WING) BracketWingFilter.ALL
+                            else BracketWingFilter.LEFT_WING
+                        )
+                    },
+                    label = { Text(BracketWingFilter.LEFT_WING.labelAr) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = RoyalViolet,
+                        selectedLabelColor = ChampionshipGold
+                    ),
+                    modifier = Modifier.testTag("bracket_wing_filter_left")
+                )
+            }
+        }
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clipToBounds()
+                .drawBehind {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                ChampionshipGold.copy(alpha = 0.09f),
+                                ElectricCobalt.copy(alpha = 0.06f),
+                                Color.Transparent
+                            ),
+                            center = Offset(size.width * 0.5f, size.height * 0.34f),
+                            radius = size.maxDimension * 0.65f
+                        )
+                    )
+                }
+                .testTag(
+                    if (wingFilter == BracketWingFilter.ALL) "bracket_full_tree"
+                    else "bracket_wing_focused_${wingFilter.name}"
+                )
+        ) {
+            val viewportWPx = with(density) { maxWidth.toPx() }
+            val viewportHPx = with(density) { maxHeight.toPx() }
+
+            val exactFitScale = remember(viewportWPx, naturalWidthPx) {
+                if (naturalWidthPx <= 0f) 1f
+                else ((viewportWPx - 16f) / naturalWidthPx).coerceIn(0.24f, 1.0f)
+            }
+            val initialScale = remember(exactFitScale, maxWidth, stageCount, wingFilter) {
+                if (maxWidth >= 600.dp || exactFitScale >= 0.44f || wingFilter != BracketWingFilter.ALL) {
+                    exactFitScale
+                } else {
+                    // On narrow phones with deep 16-player trees, start slightly zoomed in around center Final + Semis
+                    0.56f
+                }
+            }
+
+            var scale by remember(wingFilter, model.preFinalStages.size, maxWidth) {
+                mutableFloatStateOf(initialScale)
+            }
+            var offsetX by remember(wingFilter, model.preFinalStages.size) { mutableFloatStateOf(0f) }
+            var offsetY by remember(wingFilter, model.preFinalStages.size) { mutableFloatStateOf(0f) }
+
+            fun clampOffsets(targetScale: Float, x: Float, y: Float): Pair<Float, Float> {
+                val scaledW = naturalWidthPx * targetScale
+                val scaledH = naturalHeightPx * targetScale
+                val maxPanX = ((scaledW - viewportWPx) / 2f + 48f).coerceAtLeast(0f)
+                val minPanY = (-(scaledH - viewportHPx + 48f)).coerceAtMost(0f)
+                return Pair(
+                    x.coerceIn(-maxPanX, maxPanX),
+                    y.coerceIn(minPanY, 24f)
                 )
             }
 
-            // Champion Pedestal Column
-            Column(
-                modifier = Modifier.width(championColumnWidth),
-                horizontalAlignment = Alignment.CenterHorizontally
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(naturalWidthPx, naturalHeightPx, viewportWPx, viewportHPx) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val nextScale = (scale * zoom).coerceIn(0.24f, 1.85f)
+                            val (clampedX, clampedY) = clampOffsets(
+                                nextScale,
+                                offsetX + pan.x,
+                                offsetY + pan.y
+                            )
+                            scale = nextScale
+                            offsetX = clampedX
+                            offsetY = clampedY
+                        }
+                    },
+                contentAlignment = Alignment.TopCenter
             ) {
-                Surface(
-                    color = ChampionshipGold.copy(alpha = 0.18f),
-                    shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(1.dp, ChampionshipGold),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(36.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "التتويج باللقب",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = ChampionshipGold,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
                 Box(
                     modifier = Modifier
-                        .width(championColumnWidth)
-                        .height(totalBracketHeight),
-                    contentAlignment = Alignment.Center
+                        .wrapContentSize(align = Alignment.TopCenter, unbounded = true)
+                        .requiredWidth(naturalTreeWidthDp)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offsetX
+                            translationY = offsetY
+                            transformOrigin = TransformOrigin(0.5f, 0f)
+                        }
                 ) {
-                        ChampionPedestalNode(
-                            champion = championPlayer,
+                    SymmetricalBracketTreeContent(
+                        model = model,
+                        wingFilter = wingFilter,
+                        playersById = playersById,
+                        championPlayer = championPlayer,
+                        bestOf = bestOf,
+                        canEditScores = canEditScores,
+                        cardWidth = cardWidth,
+                        finalCardWidth = finalCardWidth,
+                        cardHeight = cardHeight,
+                        finalCardHeight = finalCardHeight,
+                        baseSlotHeight = baseSlotHeight,
+                        connectorWidth = connectorWidth,
+                        headerHeight = headerHeight,
+                        headerGap = headerGap,
+                        wingsHeight = wingsHeightDp,
+                        centerTotalHeight = centerTotalHeightDp,
+                        championStemHeight = championStemHeight,
+                        championCardHeight = championCardHeight,
+                        onMatchClick = onMatchClick
+                    )
+                }
+
+                // Floating Zoom & Quick Center Toolbar
+                Surface(
+                    color = ObsidianVoid.copy(alpha = 0.88f),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, CardBorder),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val next = (scale - 0.16f).coerceIn(0.24f, 1.85f)
+                                val (cx, cy) = clampOffsets(next, offsetX, offsetY)
+                                scale = next
+                                offsetX = cx
+                                offsetY = cy
+                            },
                             modifier = Modifier
-                                .width(championColumnWidth)
-                                .height(championCardHeight)
+                                .minimumInteractiveComponentSize()
+                                .testTag("bracket_zoom_out")
+                        ) {
+                            Icon(Icons.Default.Remove, contentDescription = "تصغير الشجرة", tint = TextPrimary)
+                        }
+
+                        Text(
+                            text = "${(scale * 100f).roundToInt()}%",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = ChampionshipGold,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp)
                         )
+
+                        IconButton(
+                            onClick = {
+                                val next = (scale + 0.16f).coerceIn(0.24f, 1.85f)
+                                val (cx, cy) = clampOffsets(next, offsetX, offsetY)
+                                scale = next
+                                offsetX = cx
+                                offsetY = cy
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("bracket_zoom_in")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "تكبير الشجرة", tint = TextPrimary)
+                        }
+
+                        TextButton(
+                            onClick = {
+                                scale = exactFitScale
+                                offsetX = 0f
+                                offsetY = 0f
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("bracket_zoom_fit")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FitScreen,
+                                contentDescription = null,
+                                tint = CyberSky,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("عرض الكل", style = MaterialTheme.typography.labelSmall, color = CyberSky)
+                        }
+
+                        TextButton(
+                            onClick = {
+                                scale = 1f
+                                offsetX = 0f
+                                offsetY = 0f
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("bracket_zoom_reset")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CenterFocusStrong,
+                                contentDescription = null,
+                                tint = ChampionshipGold,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("النهائي", style = MaterialTheme.typography.labelSmall, color = ChampionshipGold)
+                        }
                     }
                 }
             }
+        }
+    }
+}
 
-            if (thirdPlaceMatches.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+@Composable
+private fun SymmetricalBracketTreeContent(
+    model: SymmetricalBracketModel,
+    wingFilter: BracketWingFilter,
+    playersById: Map<Long, PlayerEntity>,
+    championPlayer: PlayerEntity?,
+    bestOf: Int,
+    canEditScores: Boolean,
+    cardWidth: Dp,
+    finalCardWidth: Dp,
+    cardHeight: Dp,
+    finalCardHeight: Dp,
+    baseSlotHeight: Dp,
+    connectorWidth: Dp,
+    headerHeight: Dp,
+    headerGap: Dp,
+    wingsHeight: Dp,
+    centerTotalHeight: Dp,
+    championStemHeight: Dp,
+    championCardHeight: Dp,
+    onMatchClick: (MatchEntity) -> Unit
+) {
+    val headerTopOffset = headerHeight + headerGap
+    val showLeftWing = (wingFilter == BracketWingFilter.ALL || wingFilter == BracketWingFilter.LEFT_WING) &&
+        model.preFinalStages.isNotEmpty()
+    val showRightWing = (wingFilter == BracketWingFilter.ALL || wingFilter == BracketWingFilter.RIGHT_WING) &&
+        model.preFinalStages.isNotEmpty()
+
+    Column(
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        // Explicit LTR row for geometric symmetry: [Left Wing -> Center Final <- Right Wing]
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            Row(verticalAlignment = Alignment.Top) {
+                if (showLeftWing) {
+                    model.preFinalStages.forEachIndexed { sIdx, stage ->
+                        val sideCount = 1 shl (model.preFinalStages.size - 1 - sIdx)
+                        val slotHeight = baseSlotHeight * (1 shl sIdx)
+                        val wingMap = model.leftWingByStage[stage].orEmpty()
+
+                        BracketWingColumn(
+                            stage = stage,
+                            wingBadge = "أيسر",
+                            sideMatchCount = sideCount,
+                            slotHeight = slotHeight,
+                            wingsHeight = wingsHeight,
+                            matchesByLocalSlot = wingMap,
+                            matchNumbersById = model.matchNumbersById,
+                            bestOf = bestOf,
+                            playersById = playersById,
+                            cardWidth = cardWidth,
+                            cardHeight = cardHeight,
+                            headerHeight = headerHeight,
+                            headerGap = headerGap,
+                            canEditScores = canEditScores,
+                            onMatchClick = onMatchClick
+                        )
+
+                        if (sIdx < model.preFinalStages.lastIndex) {
+                            val nextSideCount = 1 shl (model.preFinalStages.size - 1 - (sIdx + 1))
+                            val nextSlotHeight = baseSlotHeight * (1 shl (sIdx + 1))
+                            SymmetricalConnectorCanvas(
+                                childMatchesByLocalSlot = wingMap,
+                                nextSideMatchCount = nextSideCount,
+                                childSlotHeight = slotHeight,
+                                parentSlotHeight = nextSlotHeight,
+                                connectorWidth = connectorWidth,
+                                totalHeight = wingsHeight,
+                                headerTopOffset = headerTopOffset,
+                                flowDirection = BracketFlowDirection.LEFT_TO_RIGHT
+                            )
+                        } else {
+                            SemiToFinalConnectorCanvas(
+                                semiMatch = wingMap[0],
+                                connectorWidth = connectorWidth,
+                                totalHeight = wingsHeight,
+                                headerTopOffset = headerTopOffset
+                            )
+                        }
+                    }
+                }
+
+                // Center Championship Final + Champion Pedestal Column
+                CenterFinalColumn(
+                    finalMatch = model.finalMatch,
+                    matchNumber = model.finalMatch?.let { model.matchNumbersById[it.id] },
+                    bestOf = bestOf,
+                    playersById = playersById,
+                    championPlayer = championPlayer,
+                    finalCardWidth = finalCardWidth,
+                    finalCardHeight = finalCardHeight,
+                    wingsHeight = wingsHeight,
+                    centerTotalHeight = centerTotalHeight,
+                    championStemHeight = championStemHeight,
+                    championCardHeight = championCardHeight,
+                    headerHeight = headerHeight,
+                    headerGap = headerGap,
+                    canEditScores = canEditScores,
+                    onMatchClick = onMatchClick
+                )
+
+                if (showRightWing) {
+                    val reversedStages = model.preFinalStages.asReversed()
+                    reversedStages.forEachIndexed { revIdx, stage ->
+                        val originalIdx = model.preFinalStages.lastIndex - revIdx
+                        val sideCount = 1 shl (model.preFinalStages.size - 1 - originalIdx)
+                        val slotHeight = baseSlotHeight * (1 shl originalIdx)
+                        val wingMap = model.rightWingByStage[stage].orEmpty()
+
+                        if (revIdx == 0) {
+                            SemiToFinalConnectorCanvas(
+                                semiMatch = wingMap[0],
+                                connectorWidth = connectorWidth,
+                                totalHeight = wingsHeight,
+                                headerTopOffset = headerTopOffset
+                            )
+                        }
+
+                        BracketWingColumn(
+                            stage = stage,
+                            wingBadge = "أيمن",
+                            sideMatchCount = sideCount,
+                            slotHeight = slotHeight,
+                            wingsHeight = wingsHeight,
+                            matchesByLocalSlot = wingMap,
+                            matchNumbersById = model.matchNumbersById,
+                            bestOf = bestOf,
+                            playersById = playersById,
+                            cardWidth = cardWidth,
+                            cardHeight = cardHeight,
+                            headerHeight = headerHeight,
+                            headerGap = headerGap,
+                            canEditScores = canEditScores,
+                            onMatchClick = onMatchClick
+                        )
+
+                        if (revIdx < reversedStages.lastIndex) {
+                            val childOriginalIdx = originalIdx - 1
+                            val childStage = model.preFinalStages[childOriginalIdx]
+                            val childWingMap = model.rightWingByStage[childStage].orEmpty()
+                            val childSlotHeight = baseSlotHeight * (1 shl childOriginalIdx)
+                            SymmetricalConnectorCanvas(
+                                childMatchesByLocalSlot = childWingMap,
+                                nextSideMatchCount = sideCount,
+                                childSlotHeight = childSlotHeight,
+                                parentSlotHeight = slotHeight,
+                                connectorWidth = connectorWidth,
+                                totalHeight = wingsHeight,
+                                headerTopOffset = headerTopOffset,
+                                flowDirection = BracketFlowDirection.RIGHT_TO_LEFT
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Third Place Match neatly centered underneath the Final
+        if (model.thirdPlaceMatches.isNotEmpty() && wingFilter == BracketWingFilter.ALL) {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Surface(
                         color = ElevatedNavy,
                         shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.5f))
+                        border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.55f))
                     ) {
                         Text(
-                            text = "مباراة تحديد المركز الثالث 🥉",
+                            text = "مباراة تحديد المركز الثالث والرابع",
                             style = MaterialTheme.typography.labelLarge,
                             color = ChampionshipGold,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        thirdPlaceMatches.forEach { m ->
+                        model.thirdPlaceMatches.forEach { m ->
                             BracketMatchNode(
                                 match = m,
                                 player1 = m.player1Id?.let { playersById[it] },
@@ -684,8 +1000,10 @@ private fun FullKnockoutTreeCanvas(
                                 isFinal = false,
                                 canEdit = canEditScores,
                                 onClick = { onMatchClick(m) },
+                                matchNumber = model.matchNumbersById[m.id],
+                                bestOf = bestOf,
                                 modifier = Modifier
-                                    .width(cardWidth)
+                                    .width(finalCardWidth)
                                     .height(cardHeight)
                             )
                         }
@@ -697,9 +1015,245 @@ private fun FullKnockoutTreeCanvas(
 }
 
 @Composable
+private fun BracketWingColumn(
+    stage: MatchStage,
+    wingBadge: String,
+    sideMatchCount: Int,
+    slotHeight: Dp,
+    wingsHeight: Dp,
+    matchesByLocalSlot: Map<Int, MatchEntity>,
+    matchNumbersById: Map<Long, Int>,
+    bestOf: Int,
+    playersById: Map<Long, PlayerEntity>,
+    cardWidth: Dp,
+    cardHeight: Dp,
+    headerHeight: Dp,
+    headerGap: Dp,
+    canEditScores: Boolean,
+    onMatchClick: (MatchEntity) -> Unit
+) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Column(
+            modifier = Modifier.width(cardWidth),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Surface(
+                color = ElevatedNavy,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, ElectricCobalt.copy(alpha = 0.65f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(headerHeight)
+                    .testTag("bracket_round_header_${stage.name}_$wingBadge")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stage.labelAr,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Surface(
+                        color = RoyalViolet.copy(alpha = 0.28f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = wingBadge,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyberSky,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(headerGap))
+
+            Box(
+                modifier = Modifier
+                    .width(cardWidth)
+                    .height(wingsHeight)
+            ) {
+                for (localIdx in 0 until sideMatchCount) {
+                    val centerY = slotHeight * localIdx + slotHeight / 2f
+                    val topOffset = centerY - cardHeight / 2f
+                    val match = matchesByLocalSlot[localIdx]
+                    if (match != null) {
+                        BracketMatchNode(
+                            match = match,
+                            player1 = match.player1Id?.let { playersById[it] },
+                            player2 = match.player2Id?.let { playersById[it] },
+                            isFinal = false,
+                            canEdit = canEditScores,
+                            onClick = { onMatchClick(match) },
+                            matchNumber = matchNumbersById[match.id],
+                            bestOf = bestOf,
+                            modifier = Modifier
+                                .offset(y = topOffset)
+                                .width(cardWidth)
+                                .height(cardHeight)
+                        )
+                    } else {
+                        BracketPlaceholderNode(
+                            stage = stage,
+                            slotNumber = localIdx + 1,
+                            modifier = Modifier
+                                .offset(y = topOffset)
+                                .width(cardWidth)
+                                .height(cardHeight)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CenterFinalColumn(
+    finalMatch: MatchEntity?,
+    matchNumber: Int?,
+    bestOf: Int,
+    playersById: Map<Long, PlayerEntity>,
+    championPlayer: PlayerEntity?,
+    finalCardWidth: Dp,
+    finalCardHeight: Dp,
+    wingsHeight: Dp,
+    centerTotalHeight: Dp,
+    championStemHeight: Dp,
+    championCardHeight: Dp,
+    headerHeight: Dp,
+    headerGap: Dp,
+    canEditScores: Boolean,
+    onMatchClick: (MatchEntity) -> Unit
+) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        val finalTop = (wingsHeight / 2f) - (finalCardHeight / 2f)
+        val stemTop = finalTop + finalCardHeight
+        val pedestalTop = stemTop + championStemHeight
+
+        Column(
+            modifier = Modifier.width(finalCardWidth),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Surface(
+                color = ChampionshipGold.copy(alpha = 0.22f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.5.dp, ChampionshipGold),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(headerHeight)
+                    .testTag("bracket_round_header_FINAL")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.EmojiEvents,
+                        contentDescription = null,
+                        tint = ChampionshipGold,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "النهائي الكبير",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = ChampionshipGold,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(headerGap))
+
+            Box(
+                modifier = Modifier
+                    .width(finalCardWidth)
+                    .height(centerTotalHeight)
+            ) {
+                if (finalMatch != null) {
+                    BracketMatchNode(
+                        match = finalMatch,
+                        player1 = finalMatch.player1Id?.let { playersById[it] },
+                        player2 = finalMatch.player2Id?.let { playersById[it] },
+                        isFinal = true,
+                        canEdit = canEditScores,
+                        onClick = { onMatchClick(finalMatch) },
+                        matchNumber = matchNumber,
+                        bestOf = bestOf,
+                        modifier = Modifier
+                            .offset(y = finalTop)
+                            .width(finalCardWidth)
+                            .height(finalCardHeight)
+                    )
+                } else {
+                    BracketPlaceholderNode(
+                        stage = MatchStage.FINAL,
+                        slotNumber = 1,
+                        modifier = Modifier
+                            .offset(y = finalTop)
+                            .width(finalCardWidth)
+                            .height(finalCardHeight)
+                    )
+                }
+
+                // Golden vertical stem down to Champion Pedestal
+                Canvas(
+                    modifier = Modifier
+                        .offset(y = stemTop)
+                        .width(finalCardWidth)
+                        .height(championStemHeight)
+                ) {
+                    val cx = size.width / 2f
+                    val hasChamp = championPlayer != null
+                    if (hasChamp) {
+                        drawLine(
+                            color = ChampionshipGold.copy(alpha = 0.25f),
+                            start = Offset(cx, 0f),
+                            end = Offset(cx, size.height),
+                            strokeWidth = 6.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                    }
+                    drawLine(
+                        color = if (hasChamp) ChampionshipGold else CardBorder,
+                        start = Offset(cx, 0f),
+                        end = Offset(cx, size.height),
+                        strokeWidth = 2.6.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+
+                ChampionPedestalNode(
+                    champion = championPlayer,
+                    modifier = Modifier
+                        .offset(y = pedestalTop)
+                        .width(finalCardWidth)
+                        .height(championCardHeight)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun FocusedStageMatchesList(
     stage: MatchStage,
     matches: List<MatchEntity>,
+    matchNumbersById: Map<Long, Int>,
+    bestOf: Int,
     playersById: Map<Long, PlayerEntity>,
     championPlayer: PlayerEntity?,
     canEditScores: Boolean,
@@ -735,9 +1289,11 @@ private fun FocusedStageMatchesList(
                     isFinal = stage == MatchStage.FINAL,
                     canEdit = canEditScores,
                     onClick = { onMatchClick(match) },
+                    matchNumber = matchNumbersById[match.id],
+                    bestOf = bestOf,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(114.dp)
+                        .height(126.dp)
                 )
             }
 

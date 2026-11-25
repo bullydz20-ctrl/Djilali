@@ -55,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -81,12 +82,20 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.api.ApiService
+import com.example.api.RaceEntry
 import com.example.data.local.MatchEntity
+import com.example.data.local.PlayerEntity
 import com.example.export.TournamentShareHelper
 import com.example.notifications.MatchReminderScheduler
+import com.example.security.AdminPermission
+import com.example.security.hasPermission
 import com.example.ui.components.CommunityTopHeader
+import com.example.ui.components.ConfettiOverlay
+import com.example.ui.components.DisputeMatchDialog
 import com.example.ui.components.ExportShareDialog
 import com.example.ui.components.MatchReminderDialog
+import com.example.ui.components.PlayerProfileDialog
+import com.example.ui.components.RaceResultsDialog
 import com.example.ui.components.ScoreEntryDialog
 import com.example.ui.components.ServerBaseUrlDialog
 import kotlinx.coroutines.launch
@@ -146,11 +155,31 @@ fun FifaTournamentApp(
 
     var showRegisterDialog by remember { mutableStateOf(false) }
     var editingMatch by remember { mutableStateOf<MatchEntity?>(null) }
+    var editingRace by remember { mutableStateOf<RaceEntry?>(null) }
     var reminderTargetMatch by remember { mutableStateOf<MatchEntity?>(null) }
+    var disputeTargetMatch by remember { mutableStateOf<MatchEntity?>(null) }
+    var profileTargetPlayer by remember { mutableStateOf<PlayerEntity?>(null) }
+    var confettiBurst by remember { mutableIntStateOf(0) }
+    var lastSeenChampionId by remember { mutableStateOf<Long?>(null) }
+    var hasInitializedChampion by remember { mutableStateOf(false) }
     var pendingNotificationAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var showExportShareDialog by remember { mutableStateOf(false) }
     var pendingExportText by remember { mutableStateOf("") }
     var showServerUrlDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(uiState.hasServerState, uiState.championPlayer?.id) {
+        if (!uiState.hasServerState) return@LaunchedEffect
+        val currentChampId = uiState.championPlayer?.id
+        if (!hasInitializedChampion) {
+            hasInitializedChampion = true
+            lastSeenChampionId = currentChampId
+        } else if (currentChampId != null && currentChampId != lastSeenChampionId) {
+            lastSeenChampionId = currentChampId
+            confettiBurst++
+        } else if (currentChampId == null) {
+            lastSeenChampionId = null
+        }
+    }
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -404,19 +433,41 @@ fun FifaTournamentApp(
                                     onOpenWebPortal = { openOfficialWebPage() },
                                     onCopyWebUrl = { copyOfficialWebUrl() },
                                     onRetryConnection = { viewModel.refreshFromServer() },
-                                    onConfigureServerUrl = { showServerUrlDialog = true }
+                                    onConfigureServerUrl = { showServerUrlDialog = true },
+                                    onToggleCheckIn = { match, slot -> viewModel.toggleMatchCheckIn(match.id, slot) },
+                                    onVotePrediction = { match, slot -> viewModel.voteMatchPrediction(match.id, slot) },
+                                    onOpenDispute = { disputeTargetMatch = it },
+                                    onPlayerClick = { profileTargetPlayer = it },
+                                    onCelebrateChampion = { confettiBurst++ },
+                                    onCreateRace = { title, stage, track ->
+                                        viewModel.createRace(title = title, stage = stage, trackName = track)
+                                    },
+                                    onEditRaceResults = { editingRace = it },
+                                    onGenerateFinalRace = { viewModel.generateFinalRaceFromStandings() },
+                                    onDeleteRace = viewModel::deleteRace
                                 )
                             }
                             composable(ROUTE_PLAYERS) {
                                 PlayersScreen(
                                     uiState = uiState,
-                                    onOpenRegister = { showRegisterDialog = true }
+                                    onOpenRegister = { showRegisterDialog = true },
+                                    onPlayerClick = { profileTargetPlayer = it }
                                 )
                             }
                             composable(ROUTE_GROUPS) {
                                 GroupsScreen(
                                     uiState = uiState,
-                                    onEditMatch = { editingMatch = it }
+                                    onEditMatch = { editingMatch = it },
+                                    onToggleCheckIn = { match, slot -> viewModel.toggleMatchCheckIn(match.id, slot) },
+                                    onVotePrediction = { match, slot -> viewModel.voteMatchPrediction(match.id, slot) },
+                                    onOpenDispute = { disputeTargetMatch = it },
+                                    onPlayerClick = { profileTargetPlayer = it },
+                                    onCreateRace = { title, stage, track ->
+                                        viewModel.createRace(title = title, stage = stage, trackName = track)
+                                    },
+                                    onEditRaceResults = { editingRace = it },
+                                    onGenerateFinalRace = { viewModel.generateFinalRaceFromStandings() },
+                                    onDeleteRace = viewModel::deleteRace
                                 )
                             }
                             composable(ROUTE_BRACKET) {
@@ -440,6 +491,7 @@ fun FifaTournamentApp(
                                     onCreateFreshTournament = viewModel::createFreshTournament,
                                     onDeleteTournament = viewModel::deleteCurrentTournament,
                                     onAdminAddPlayer = viewModel::adminAddPlayer,
+                                    onBulkImport = viewModel::bulkImportPlayers,
                                     onUpdatePlayerStatus = viewModel::updatePlayerStatus,
                                     onUpdatePlayerDetails = viewModel::updatePlayerDetails,
                                     onDeletePlayer = viewModel::deletePlayer,
@@ -457,6 +509,11 @@ fun FifaTournamentApp(
                                             pen2 = match.penaltyScore2
                                         )
                                     },
+                                    onAutoSchedule = viewModel::autoScheduleMatches,
+                                    onToggleCheckIn = { match, slot -> viewModel.toggleMatchCheckIn(match.id, slot) },
+                                    onOpenDispute = { disputeTargetMatch = it },
+                                    onOpenReminder = { reminderTargetMatch = it },
+                                    onPlayerClick = { profileTargetPlayer = it },
                                     onUpdateOwnProfile = viewModel::updateOwnProfile,
                                     onChangeOwnPin = viewModel::changeOwnPin,
                                     onCreateSubAdmin = viewModel::createSubAdmin,
@@ -465,7 +522,13 @@ fun FifaTournamentApp(
                                     onCrownChampion = viewModel::crownChampion,
                                     onOpenExportShare = { showExportShareDialog = true },
                                     onRetryConnection = { viewModel.refreshFromServer() },
-                                    onConfigureServerUrl = { showServerUrlDialog = true }
+                                    onConfigureServerUrl = { showServerUrlDialog = true },
+                                    onCreateRace = { title, stage, track ->
+                                        viewModel.createRace(title = title, stage = stage, trackName = track)
+                                    },
+                                    onEditRaceResults = { editingRace = it },
+                                    onGenerateFinalRace = { viewModel.generateFinalRaceFromStandings() },
+                                    onDeleteRace = viewModel::deleteRace
                                 )
                             }
                         }
@@ -473,6 +536,8 @@ fun FifaTournamentApp(
                 }
             }
         }
+
+        ConfettiOverlay(burstTrigger = confettiBurst)
     }
 
     if (showRegisterDialog) {
@@ -502,6 +567,7 @@ fun FifaTournamentApp(
                 match = match,
                 player1 = p1,
                 player2 = p2,
+                bestOf = uiState.tournament?.bestOf ?: 1,
                 onDismiss = { editingMatch = null },
                 onSave = { l1s1, l1s2, l2s1, l2s2, pen1, pen2 ->
                     viewModel.updateMatchScore(
@@ -513,6 +579,42 @@ fun FifaTournamentApp(
                         pen1 = pen1,
                         pen2 = pen2,
                         onSuccess = { editingMatch = null }
+                    )
+                },
+                onWalkover = { winnerSlot, reason ->
+                    viewModel.adminWalkoverMatch(
+                        matchId = match.id,
+                        winnerSlot = winnerSlot,
+                        reason = reason.ifBlank { null },
+                        onSuccess = { editingMatch = null }
+                    )
+                },
+                onResolveDispute = { resolutionNote ->
+                    viewModel.resolveMatchDispute(
+                        matchId = match.id,
+                        resolutionNote = resolutionNote,
+                        onSuccess = { editingMatch = null }
+                    )
+                }
+            )
+        }
+    }
+
+    editingRace?.let { targetRace ->
+        val activeTournament = uiState.tournament
+        if (activeTournament != null) {
+            RaceResultsDialog(
+                race = targetRace,
+                tournament = activeTournament,
+                approvedPlayers = uiState.approvedPlayers,
+                onDismiss = { editingRace = null },
+                onSave = { title, trackName, entries ->
+                    viewModel.saveRaceResults(
+                        raceId = targetRace.id,
+                        entries = entries,
+                        title = title,
+                        trackName = trackName,
+                        onSuccess = { editingRace = null }
                     )
                 }
             )
@@ -619,5 +721,61 @@ fun FifaTournamentApp(
                 }
             }
         )
+    }
+
+    profileTargetPlayer?.let { targetPlayer ->
+        val latestPlayer = uiState.players.find { it.id == targetPlayer.id } ?: targetPlayer
+        val playersById = uiState.players.associateBy { it.id }
+        val currentStats = uiState.playerStats.find { it.player.id == latestPlayer.id }
+        val seasonEntry = uiState.seasonLeaderboard.find {
+            it.elysiumNetId.equals(latestPlayer.elysiumNetId, ignoreCase = true)
+        }
+        val playerMatches = uiState.allMatches.filter {
+            it.player1Id == latestPlayer.id || it.player2Id == latestPlayer.id
+        }
+        val scoreUnitLabel = uiState.tournament?.scoreUnitLabel?.ifBlank { "هدف" } ?: "هدف"
+
+        PlayerProfileDialog(
+            player = latestPlayer,
+            currentStats = currentStats,
+            seasonEntry = seasonEntry,
+            playerMatches = playerMatches,
+            playersById = playersById,
+            scoreUnitLabel = scoreUnitLabel,
+            isChampion = uiState.championPlayer?.id == latestPlayer.id,
+            onDismiss = { profileTargetPlayer = null }
+        )
+    }
+
+    disputeTargetMatch?.let { targetMatch ->
+        val latestMatch = uiState.allMatches.find { it.id == targetMatch.id } ?: targetMatch
+        val p1 = latestMatch.player1Id?.let { id -> uiState.players.find { it.id == id } }
+        val p2 = latestMatch.player2Id?.let { id -> uiState.players.find { it.id == id } }
+        if (p1 != null && p2 != null) {
+            DisputeMatchDialog(
+                match = latestMatch,
+                player1 = p1,
+                player2 = p2,
+                canResolveDispute = uiState.currentAdmin?.hasPermission(AdminPermission.EDIT_SCORES) == true,
+                onDismiss = { disputeTargetMatch = null },
+                onImportProofImage = { uri, cb -> viewModel.importImageFromPicker(uri, "dispute", cb) },
+                onSubmitDispute = { submittedBy, note, screenshotUrl ->
+                    viewModel.submitMatchDispute(
+                        matchId = latestMatch.id,
+                        submittedBy = submittedBy,
+                        note = note,
+                        screenshotUrl = screenshotUrl,
+                        onSuccess = { disputeTargetMatch = null }
+                    )
+                },
+                onResolveDispute = { resolutionNote ->
+                    viewModel.resolveMatchDispute(
+                        matchId = latestMatch.id,
+                        resolutionNote = resolutionNote,
+                        onSuccess = { disputeTargetMatch = null }
+                    )
+                }
+            )
+        }
     }
 }

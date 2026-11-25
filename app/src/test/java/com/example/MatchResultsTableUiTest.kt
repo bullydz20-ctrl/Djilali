@@ -258,7 +258,7 @@ class MatchResultsTableUiTest {
         composeRule.onNodeWithTag("match_303_p2_plus").performScrollTo().performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("إدخال ركلات الترجيح").assertIsDisplayed()
+        composeRule.onNodeWithText("إدخال ركلات الترجيح").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("match_303_save_goals").performScrollTo().performClick()
         composeRule.waitForIdle()
 

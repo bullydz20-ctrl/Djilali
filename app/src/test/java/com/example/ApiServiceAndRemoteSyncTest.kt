@@ -61,7 +61,11 @@ class ApiServiceAndRemoteSyncTest {
 
             when {
                 method == "GET" && path == "/api/health" -> {
-                    respondJson(exchange, 200, """{"ok":true,"service":"cp4-arena-web","ts":1730000000000}""")
+                    respondJson(
+                        exchange,
+                        200,
+                        """{"ok":true,"service":"cp4-arena-web","ts":1730000000000,"persistence":{"mode":"postgres","isDurable":true,"labelAr":"PostgreSQL متصل","detailAr":"البيانات محفوظة بشكل دائم"}}"""
+                    )
                 }
 
                 method == "GET" && path == "/api/state" -> {
@@ -168,7 +172,8 @@ class ApiServiceAndRemoteSyncTest {
                           "adminAccounts": [],
                           "currentAdmin": $currentAdminJson,
                           "keepSignedIn": true,
-                          "lockoutState": {"failedAttempts": 0, "lockedUntilMillis": 0}
+                          "lockoutState": {"failedAttempts": 0, "lockedUntilMillis": 0},
+                          "persistence": {"mode": "ephemeral", "isDurable": false, "labelAr": "تخزين مؤقت", "detailAr": "أضف DATABASE_URL"}
                         }
                     """.trimIndent()
                     respondJson(exchange, 200, stateJson)
@@ -283,6 +288,28 @@ class ApiServiceAndRemoteSyncTest {
 
                 method == "PATCH" && path == "/api/matches/55/score" -> {
                     respondJson(exchange, 200, """{"ok":true,"messageAr":"تم حفظ النتيجة"}""")
+                }
+
+                method == "POST" && path == "/api/matches/55/check-in" -> {
+                    val parsed = org.json.JSONObject(reqBody)
+                    assertEquals(1, parsed.getInt("slot"))
+                    respondJson(exchange, 200, """{"ok":true,"messageAr":"تم تأكيد الجاهزية"}""")
+                }
+
+                method == "POST" && path == "/api/matches/55/vote" -> {
+                    val parsed = org.json.JSONObject(reqBody)
+                    assertEquals(2, parsed.getInt("slot"))
+                    respondJson(exchange, 200, """{"ok":true,"messageAr":"تم تسجيل توقعك"}""")
+                }
+
+                method == "POST" && path == "/api/tournaments/7/auto-schedule" -> {
+                    val parsed = org.json.JSONObject(reqBody)
+                    assertEquals(20, parsed.getInt("intervalMinutes"))
+                    respondJson(exchange, 200, """{"ok":true,"scheduledCount":4,"messageAr":"تمت جدولة 4 مباريات"}""")
+                }
+
+                method == "POST" && path == "/api/tournaments/7/players/bulk" -> {
+                    respondJson(exchange, 201, """{"ok":true,"importedCount":2,"skippedCount":1,"messageAr":"تم استيراد 2 لاعب"}""")
                 }
 
                 method == "GET" && path == "/api/events" -> {
@@ -584,5 +611,38 @@ class ApiServiceAndRemoteSyncTest {
         assertEquals("djilali", prefs.getSessionSnapshot().lastUsername)
         repo2.stopRealtimeSync()
         scope2.cancel()
+    }
+
+    @Test
+    fun apiService_alignsCheckInVoteAutoScheduleBulkImportAndPersistenceWithWebServer() = runBlocking {
+        val api = ApiService(initialBaseUrl = "http://127.0.0.1:$serverPort")
+        val health = api.checkHealth()
+        assertTrue(health is ApiResult.Success)
+        val healthData = (health as ApiResult.Success).data
+        assertEquals("postgres", healthData.persistence?.mode)
+        assertEquals(true, healthData.persistence?.isDurable)
+
+        val stateRes = api.fetchArenaState(tournamentId = 7L, lastUsername = "djilali")
+        assertTrue(stateRes is ApiResult.Success)
+        val state = (stateRes as ApiResult.Success).data
+        assertEquals("ephemeral", state.persistence?.mode)
+        assertEquals(false, state.persistence?.isDurable)
+        assertEquals(true, state.tournament?.isThirdPlaceEnabled)
+        assertTrue(recordedRequests.any { it.contains("/api/state?tournamentId=7&username=djilali") })
+
+        val checkInRes = api.toggleMatchCheckIn(55L, playerSlot = 1, checkedIn = true)
+        assertTrue(checkInRes is ApiResult.Success)
+
+        val voteRes = api.voteMatchPrediction(55L, voterKey = "voter-abc", pickedSlot = 2)
+        assertTrue(voteRes is ApiResult.Success)
+
+        val scheduleRes = api.autoScheduleMatches(7L, startAtMillis = 1730000100000L, intervalMinutes = 20, onlyUnscheduled = false)
+        assertTrue(scheduleRes is ApiResult.Success)
+        assertEquals(4, (scheduleRes as ApiResult.Success).data.scheduledCount)
+
+        val bulkRes = api.bulkImportPlayers(7L, linesText = "أحمد | ahmed_1\nيوسف | youcef_2")
+        assertTrue(bulkRes is ApiResult.Success)
+        assertEquals(2, (bulkRes as ApiResult.Success).data.addedCount)
+        assertEquals(1, bulkRes.data.skippedCount)
     }
 }

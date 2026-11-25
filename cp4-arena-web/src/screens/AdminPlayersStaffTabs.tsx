@@ -3,13 +3,14 @@ import { CalendarClock, Check, Edit3, FileSpreadsheet, History, ImagePlus, Plus,
 import { uploadImageFileApi } from '../api';
 import { MatchResultsTable } from '../components/MatchResultsTable';
 import { PlayerAvatar } from '../components/PlayerAvatar';
+import { RacingOverviewPanel, isRacingFormat } from '../components/RacingSection';
 import {
   ADMIN_PERMISSIONS_META,
   LEVEL_LABELS,
   SUB_ADMIN_PRESETS,
   evaluatePinStrengthClient
 } from '../types';
-import type { AdminAccount, ArenaState, Match, Player, PlayerLevel, PlayerStatus } from '../types';
+import type { AdminAccount, ArenaState, Match, Player, PlayerLevel, PlayerStatus, RaceEntry, RaceStage } from '../types';
 
 export function AdminPlayersTab({
   state,
@@ -485,7 +486,11 @@ export function AdminMatchesTab({
   onQuickUpdateGoals,
   onAutoSchedule,
   onToggleCheckIn,
-  onOpenDispute
+  onOpenDispute,
+  onCreateRace,
+  onEditRace,
+  onGenerateFinalRace,
+  onDeleteRace
 }: {
   state: ArenaState;
   onEditMatch: (m: Match) => void;
@@ -493,11 +498,29 @@ export function AdminMatchesTab({
   onAutoSchedule: (payload: { startAtMillis?: number; intervalMinutes?: number; onlyUnscheduled?: boolean }) => Promise<void>;
   onToggleCheckIn: (m: Match, slot: 1 | 2) => void;
   onOpenDispute: (m: Match) => void;
+  onCreateRace?: (payload: { title?: string; stage?: RaceStage; trackName?: string }) => Promise<void>;
+  onEditRace?: (race: RaceEntry) => void;
+  onGenerateFinalRace?: (payload?: { title?: string; trackName?: string; qualifiersCount?: number }) => Promise<void>;
+  onDeleteRace?: (raceId: number) => Promise<void>;
 }) {
   const [intervalMinutes, setIntervalMinutes] = useState(30);
   const [busySchedule, setBusySchedule] = useState(false);
   const playersById = new Map(state.players.map((p) => [p.id, p]));
   const openDisputesCount = state.allMatches.filter((m) => m.disputeStatus === 'OPEN').length;
+
+  if (isRacingFormat(state.tournament?.format)) {
+    return (
+      <RacingOverviewPanel
+        state={state}
+        canEdit={true}
+        canRunDraw={true}
+        onCreateRace={onCreateRace}
+        onEditRace={onEditRace}
+        onGenerateFinalRace={onGenerateFinalRace}
+        onDeleteRace={onDeleteRace}
+      />
+    );
+  }
 
   return (
     <div className="stack-col">
@@ -991,19 +1014,31 @@ export function AdminChampionTab({
   onCrownChampion: (playerId: number | null) => Promise<void>;
   onOpenExportShare: () => void;
 }) {
+  const isRacing = isRacingFormat(state.tournament?.format);
+  const completedRaces = (state.races || []).filter((r) => r.isCompleted).length;
+  const totalRaces = (state.races || []).length;
   const { completedMatches, totalMatches } = state.overviewStats;
-  const pct = totalMatches > 0 ? Math.round((completedMatches / totalMatches) * 100) : 0;
+  const completedCount = isRacing ? completedRaces : completedMatches;
+  const totalCount = isRacing ? totalRaces : totalMatches;
+  const pct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
   const finalMatch = state.knockoutMatches.find((m) => m.stage === 'FINAL');
-  const finalWinner = finalMatch?.winnerId
-    ? state.approvedPlayers.find((p) => p.id === finalMatch.winnerId) || null
-    : null;
+  const finalRace = (state.races || []).find((r) => r.stage === 'FINAL' && r.isCompleted);
+  const finalRaceTopPlayerId = finalRace?.results?.find((r) => !r.dnf && r.position === 1)?.playerId ?? null;
+  const finalWinner = isRacing
+    ? finalRaceTopPlayerId
+      ? state.approvedPlayers.find((p) => p.id === finalRaceTopPlayerId) || null
+      : (state.racingStandings?.[0]?.player ?? null)
+    : finalMatch?.winnerId
+      ? state.approvedPlayers.find((p) => p.id === finalMatch.winnerId) || null
+      : null;
 
   return (
     <div className="stack-col">
       <div className="arena-card stack-col" style={{ gap: 8 }}>
         <div style={{ fontWeight: 800, color: 'var(--cyber-sky)' }}>متابعة تقدم البطولة</div>
         <div style={{ fontSize: '0.88rem' }}>
-          المباريات المكتملة: {completedMatches} من {totalMatches}
+          {isRacing ? `السباقات المكتملة: ${completedCount} من ${totalCount}` : `المباريات المكتملة: ${completedCount} من ${totalCount}`}
         </div>
         <div style={{ height: 8, borderRadius: 999, background: 'var(--elevated-navy)', overflow: 'hidden' }}>
           <div style={{ width: `${pct}%`, height: '100%', background: 'var(--championship-gold)' }} />
@@ -1015,7 +1050,7 @@ export function AdminChampionTab({
         {finalWinner && (
           <button type="button" className="btn btn-gold" onClick={() => onCrownChampion(finalWinner.id)}>
             <Trophy size={18} />
-            <span>تتويج الفائز بالنهائي: {finalWinner.name}</span>
+            <span>{isRacing ? `تتويج المتصدر: ${finalWinner.name}` : `تتويج الفائز بالنهائي: ${finalWinner.name}`}</span>
           </button>
         )}
 

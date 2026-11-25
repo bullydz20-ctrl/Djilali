@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -52,6 +53,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.api.PersistenceInfo
 import com.example.data.local.AdminAccountEntity
 import com.example.data.local.LockoutState
 import com.example.data.model.AdminRole
@@ -81,7 +83,8 @@ fun AdminAuthGate(
     onLogin: (username: String, pin: String, keepSignedIn: Boolean) -> Unit,
     modifier: Modifier = Modifier,
     defaultUsername: String? = null,
-    defaultKeepSignedIn: Boolean = true
+    defaultKeepSignedIn: Boolean = true,
+    persistence: PersistenceInfo? = null
 ) {
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val isLocked = lockoutState.lockedUntilMillis > nowMillis
@@ -148,8 +151,8 @@ fun AdminAuthGate(
                 }
 
                 if (!hasHeadAdmin) {
-                    var username by remember { mutableStateOf(defaultUsername?.takeIf { it.isNotBlank() } ?: "admin") }
-                    var displayName by remember { mutableStateOf("المشرف الرئيسي") }
+                    var username by remember { mutableStateOf(defaultUsername?.takeIf { it.isNotBlank() } ?: "Djilali") }
+                    var displayName by remember { mutableStateOf("Djilali") }
                     var pin by remember { mutableStateOf("") }
                     var confirmPin by remember { mutableStateOf("") }
                     var keepSignedIn by remember { mutableStateOf(defaultKeepSignedIn) }
@@ -167,6 +170,44 @@ fun AdminAuthGate(
                         color = TextSecondary,
                         textAlign = TextAlign.Center
                     )
+
+                    if (persistence?.mode == "ephemeral") {
+                        Surface(
+                            color = AmberDraw.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, AmberDraw.copy(alpha = 0.65f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("ephemeral_persistence_warning")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = AmberDraw,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "لماذا ظهرت هذه الخانة بعد سكون الموقع؟",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = AmberDraw
+                                    )
+                                }
+                                Text(
+                                    text = "الخادم يعمل حالياً بتخزين مؤقت بدون قاعدة PostgreSQL دائمة (DATABASE_URL)، لذا يُعاد ضبط الحسابات والبطولات عند استيقاظ Render من السكون. اربط PostgreSQL و JWT_SECRET في Render لحفظ البيانات وحسابات المساعدين نهائياً.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+                    }
 
                     OutlinedTextField(
                         value = username,
@@ -266,7 +307,7 @@ fun AdminAuthGate(
                                 ?: admins.firstOrNull { it.isActive }?.username
                                 ?: admins.firstOrNull()?.username
                                 ?: remembered
-                                ?: ""
+                                ?: "Djilali"
                         )
                     }
                     var pin by remember { mutableStateOf("") }

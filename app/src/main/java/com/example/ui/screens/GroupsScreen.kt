@@ -41,8 +41,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.api.RaceEntry
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
+import com.example.data.model.RaceStage
 import com.example.data.model.TournamentFormat
 import com.example.domain.GroupStandingRow
 import com.example.security.AdminPermission
@@ -50,6 +52,7 @@ import com.example.security.hasPermission
 import com.example.ui.components.EmptyStatePanel
 import com.example.ui.components.MatchScoreCard
 import com.example.ui.components.PlayerAvatar
+import com.example.ui.components.RacingOverviewSection
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CyberSky
@@ -69,12 +72,41 @@ fun GroupsScreen(
     onVotePrediction: (MatchEntity, Int) -> Unit = { _, _ -> },
     onOpenDispute: ((MatchEntity) -> Unit)? = null,
     onPlayerClick: ((PlayerEntity) -> Unit)? = null,
+    onCreateRace: (String, RaceStage, String) -> Unit = { _, _, _ -> },
+    onEditRaceResults: (RaceEntry) -> Unit = {},
+    onGenerateFinalRace: () -> Unit = {},
+    onDeleteRace: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tournament = uiState.tournament
     val playersById = uiState.players.associateBy { it.id }
     val canEditScores = uiState.currentAdmin?.hasPermission(AdminPermission.EDIT_SCORES) == true
     var selectedGroupIdx by remember { mutableIntStateOf(0) }
+
+    if (tournament?.format?.isRacing == true) {
+        LazyColumn(
+            modifier = modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                RacingOverviewSection(
+                    tournament = tournament,
+                    races = uiState.races,
+                    standings = uiState.racingStandings,
+                    playersById = playersById,
+                    approvedPlayers = uiState.approvedPlayers,
+                    canManageRaces = canEditScores,
+                    onCreateRace = onCreateRace,
+                    onEditRaceResults = onEditRaceResults,
+                    onGenerateFinalRace = onGenerateFinalRace,
+                    onDeleteRace = onDeleteRace,
+                    onPlayerClick = onPlayerClick
+                )
+            }
+        }
+        return
+    }
 
     if (tournament?.format == TournamentFormat.DIRECT_KNOCKOUT) {
         Column(

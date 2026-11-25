@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { CheckCircle2, Edit3, GitBranch, RefreshCw, Trophy, X } from 'lucide-react';
+import { CheckCircle2, Edit3, Flag, GitBranch, RefreshCw, Trophy, X } from 'lucide-react';
 import { EmptyStatePanel, PlayerAvatar } from '../components/PlayerAvatar';
+import { isRacingFormat } from '../components/RacingSection';
 import { STAGE_LABELS, adminHasPermission } from '../types';
 import type { ArenaState, Match, MatchStage, Player } from '../types';
 
@@ -20,6 +21,53 @@ export function BracketScreen({
 
   const playersById = new Map<number, Player>(state.players.map((p) => [p.id, p]));
   const canEdit = adminHasPermission(state.currentAdmin, 'EDIT_SCORES');
+
+  if (isRacingFormat(state.tournament?.format) && state.knockoutMatches.length === 0) {
+    const finalRace = (state.races || []).find((r) => r.stage === 'FINAL');
+    const topStandings = (state.racingStandings || []).slice(0, 5);
+    return (
+      <div className="stack-col">
+        <div className="arena-card arena-card-gold stack-col" style={{ gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--championship-gold)', fontWeight: 800 }}>
+            <Flag size={20} />
+            <span>
+              {state.tournament?.format === 'RACE_QUALIFIERS_FINAL'
+                ? 'بطولة سباقات (تصفيات ثم السباق النهائي)'
+                : 'بطولة سباقات بنظام النقاط والترتيب'}
+            </span>
+          </div>
+          <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+            {finalRace
+              ? `تم فتح ${finalRace.title} (${finalRace.isCompleted ? 'مكتمل' : 'جاري السباق'}) — يمكنك متابعة جدول النقاط والسباقات من تبويب الترتيب والسباقات.`
+              : 'تُحتسب نقاط المراكز وتُحدث المراكز مباشرة بعد كل سباق من تبويب الترتيب والسباقات.'}
+          </div>
+        </div>
+        {topStandings.length > 0 && (
+          <div className="arena-card stack-col" style={{ gap: 8 }}>
+            <div style={{ fontWeight: 800, color: 'var(--cyber-sky)' }}>المتصدرون حالياً</div>
+            {topStandings.map((row) => (
+              <div
+                key={row.player.id}
+                className="arena-subcard"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className="score-num" style={{ color: 'var(--championship-gold)', fontWeight: 800 }}>
+                    #{row.rank}
+                  </span>
+                  <PlayerAvatar avatarUrl={row.player.avatarUrl} name={row.player.name} size={30} />
+                  <span style={{ fontWeight: 700 }}>{row.player.name}</span>
+                </div>
+                <span className="score-num" style={{ color: 'var(--championship-gold)', fontWeight: 800 }}>
+                  {row.totalPoints} نقطة
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (state.knockoutMatches.length === 0) {
     return (

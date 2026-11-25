@@ -9,6 +9,8 @@ import com.example.api.ApiResult
 import com.example.api.ApiService
 import com.example.api.AutoScheduleResult
 import com.example.api.BulkImportResult
+import com.example.api.RaceEntry
+import com.example.api.RaceResultDraft
 import com.example.api.RemoteArenaState
 import com.example.data.local.AdminAccountEntity
 import com.example.data.local.AdminSessionState
@@ -19,6 +21,7 @@ import com.example.data.local.SessionPreferences
 import com.example.data.local.TournamentEntity
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
+import com.example.data.model.RaceStage
 import com.example.notifications.MatchReminderScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -115,6 +118,12 @@ class RemoteArenaRepository(
                         if (connected) {
                             backoffMs = 2_000L
                             _isServerReachable.value = true
+                            _connectionError.value = null
+                            if (_remoteState.value == null) {
+                                scope.launch {
+                                    refreshState()
+                                }
+                            }
                         }
                     }
                 )
@@ -135,7 +144,8 @@ class RemoteArenaRepository(
 
     suspend fun refreshState(overrideTournamentId: Long? = _selectedTournamentId.value): RepoResult<RemoteArenaState> {
         _isSyncing.value = true
-        return when (val res = apiService.fetchArenaState(overrideTournamentId)) {
+        val lastUsername = sessionPrefs.getSessionSnapshot().lastUsername
+        return when (val res = apiService.fetchArenaState(overrideTournamentId, lastUsername)) {
             is ApiResult.Success -> {
                 val state = res.data
                 _remoteState.value = state
@@ -507,6 +517,37 @@ class RemoteArenaRepository(
 
     suspend fun crownChampion(tournamentId: Long, playerId: Long?): RepoResult<Unit> =
         executeAndRefresh { apiService.crownChampion(tournamentId, playerId) }
+
+    suspend fun createRace(
+        tournamentId: Long,
+        title: String? = null,
+        stage: RaceStage = RaceStage.REGULAR,
+        trackName: String? = null
+    ): RepoResult<RaceEntry?> = executeAndRefresh {
+        apiService.createRace(tournamentId, title, stage, trackName)
+    }
+
+    suspend fun saveRaceResults(
+        raceId: Long,
+        entries: List<RaceResultDraft>,
+        title: String? = null,
+        trackName: String? = null
+    ): RepoResult<Unit> = executeAndRefresh {
+        apiService.saveRaceResults(raceId, entries, title, trackName)
+    }
+
+    suspend fun generateFinalRaceFromStandings(
+        tournamentId: Long,
+        qualifiersCount: Int? = null,
+        title: String? = null,
+        trackName: String? = null
+    ): RepoResult<RaceEntry?> = executeAndRefresh {
+        apiService.generateFinalRaceFromStandings(tournamentId, qualifiersCount, title, trackName)
+    }
+
+    suspend fun deleteRace(raceId: Long): RepoResult<Unit> = executeAndRefresh {
+        apiService.deleteRace(raceId)
+    }
 
     suspend fun toggleMatchCheckIn(
         matchId: Long,

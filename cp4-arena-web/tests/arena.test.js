@@ -85,7 +85,19 @@ test('CP4 ARENA full end-to-end backend, security, multi-game, draw, bracket, an
     assert.equal(initState.json.hasHeadAdmin, false);
     assert.equal(initState.json.currentAdmin, null);
     assert.ok(initState.json.tournaments.length >= 1);
-    assert.ok(initState.json.gameCatalog.some((g) => g.id === 'Tekken 8'));
+    const catalogIds = initState.json.gameCatalog.map((g) => g.id);
+    assert.deepEqual(catalogIds, [
+      'FIFA 22',
+      'JUMP FORCE',
+      'Tekken 7',
+      'Mortal Kombat 11',
+      'RIDE 4',
+      'DriveClub',
+      'Call of Duty'
+    ]);
+    for (const removed of ['FIFA 16', 'EA SPORTS FC 25', 'eFootball PES', 'NBA 2K', 'PUBG', 'Tekken 8', 'Rocket League']) {
+      assert.ok(!catalogIds.includes(removed), `Expected ${removed} to be excluded from gameCatalog`);
+    }
 
     const unauthCreate = await api(srv.baseUrl, '/api/tournaments', {
       method: 'POST',
@@ -1211,6 +1223,173 @@ test('Features 1, 3, 4: Season leaderboard, Hall of Fame, Check-in, Predictions,
     assert.ok(finalState.json.hallOfFame.length >= 1);
     assert.ok(finalState.json.hallOfFame[0].thirdPlaceName);
     assert.ok((finalState.json.auditLogs || []).length >= 5);
+  } finally {
+    await srv.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Approved 7-game catalog, dynamic rules (Best-of, Teams, Racing custom points & finals), online compatibility, and legacy preservation', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-games-racing-'));
+  const srv = await startServer({
+    dbPath: path.join(tmpDir, 'games.db'),
+    uploadsDir: path.join(tmpDir, 'uploads')
+  });
+
+  try {
+    const setup = await api(srv.baseUrl, '/api/admin/setup-head', {
+      method: 'POST',
+      body: { username: 'GameDirector', displayName: 'منظم الألعاب', pin: '492817', keepSignedIn: true }
+    });
+    assert.equal(setup.status, 201);
+    const token = setup.json.token;
+
+    // Verify online compatibility metadata for all 7 approved games
+    const state0 = await api(srv.baseUrl, '/api/state', { token });
+    const byId = new Map(state0.json.gameCatalog.map((g) => [g.id, g]));
+    assert.equal(byId.size, 7);
+    assert.equal(byId.get('FIFA 22').onlineStatus, 'LOCAL_OR_LAN_ONLY');
+    assert.equal(byId.get('JUMP FORCE').onlineStatus, 'LOCAL_OR_LAN_ONLY');
+    assert.equal(byId.get('DriveClub').onlineStatus, 'LOCAL_OR_LAN_ONLY');
+    assert.equal(byId.get('Tekken 7').onlineStatus, 'VERIFY_REQUIRED');
+    assert.equal(byId.get('Mortal Kombat 11').onlineStatus, 'VERIFY_REQUIRED');
+    assert.equal(byId.get('RIDE 4').onlineStatus, 'VERIFY_REQUIRED');
+    assert.equal(byId.get('Call of Duty').onlineStatus, 'VERIFY_REQUIRED');
+
+    // 1. Fighting (Tekken 7): forced 1v1 + Best of 3
+    const tkCreate = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token,
+      body: {
+        name: 'بطولة Tekken 7 الفردية',
+        gameTitle: 'Tekken 7',
+        playMode: 'TEAMS', // must coerce to SOLO_1V1 for Fighting
+        teamSize: 4,
+        bestOf: 3,
+        format: 'DIRECT_KNOCKOUT',
+        maxParticipants: 8
+      }
+    });
+    assert.equal(tkCreate.status, 201);
+    assert.equal(tkCreate.json.tournament.playMode, 'SOLO_1V1');
+    assert.equal(tkCreate.json.tournament.teamSize, 1);
+    assert.equal(tkCreate.json.tournament.bestOf, 3);
+
+    // 2. Call of Duty (single unified option): Teams + Best of 5
+    const codCreate = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token,
+      body: {
+        name: 'دوري Call of Duty للفرق',
+        gameTitle: 'Call of Duty',
+        playMode: 'TEAMS',
+        teamSize: 4,
+        bestOf: 5,
+        format: 'GROUPS_KNOCKOUT',
+        maxParticipants: 16
+      }
+    });
+    assert.equal(codCreate.status, 201);
+    assert.equal(codCreate.json.tournament.playMode, 'TEAMS');
+    assert.equal(codCreate.json.tournament.teamSize, 4);
+    assert.equal(codCreate.json.tournament.bestOf, 5);
+
+    // 3. Racing (RIDE 4): Qualifiers -> Final + custom organizer placement points [10, 6, 4, 2]
+    const rideCreate = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token,
+      body: {
+        name: 'جائزة RIDE 4 الكبرى',
+        gameTitle: 'RIDE 4',
+        format: 'RACE_QUALIFIERS_FINAL',
+        qualifiersPerGroup: 2,
+        racingPointsConfig: [10, 6, 4, 2],
+        maxParticipants: 8
+      }
+    });
+    assert.equal(rideCreate.status, 201);
+    const rideId = rideCreate.json.tournament.id;
+    assert.equal(rideCreate.json.tournament.playMode, 'RACE_POINTS');
+    assert.deepEqual(rideCreate.json.tournament.racingPointsConfig, [10, 6, 4, 2]);
+
+    await api(srv.baseUrl, `/api/tournaments/${rideId}/players/bulk`, {
+      method: 'POST',
+      token,
+      body: {
+        linesText: 'متسابق 1 | r1 | Ducati\nمتسابق 2 | r2 | Yamaha\nمتسابق 3 | r3 | Kawasaki',
+        status: 'APPROVED'
+      }
+    });
+
+    // Draw opens Race #1 (QUALIFIER)
+    const rideDraw = await api(srv.baseUrl, `/api/tournaments/${rideId}/draw`, {
+      method: 'POST',
+      token,
+      body: {}
+    });
+    assert.equal(rideDraw.status, 200);
+
+    const rideState1 = await api(srv.baseUrl, `/api/state?tournamentId=${rideId}`, { token });
+    assert.equal(rideState1.json.races.length, 1);
+    const [p1, p2, p3] = rideState1.json.approvedPlayers;
+    const race1 = rideState1.json.races[0];
+
+    // Save Race #1 results (p2 finishes #1 = 10 pts, p1 finishes #2 = 6 pts, p3 DNF = 0 pts)
+    const saveRace1 = await api(srv.baseUrl, `/api/races/${race1.id}/results`, {
+      method: 'PUT',
+      token,
+      body: {
+        trackName: 'Monza GP',
+        entries: [
+          { playerId: p2.id, position: 1, bestLapOrTime: '1:44.20' },
+          { playerId: p1.id, position: 2, bestLapOrTime: '1:45.10' },
+          { playerId: p3.id, position: 3, dnf: true }
+        ]
+      }
+    });
+    assert.equal(saveRace1.status, 200);
+
+    const rideState2 = await api(srv.baseUrl, `/api/state?tournamentId=${rideId}`, { token });
+    assert.equal(rideState2.json.racingStandings[0].player.id, p2.id);
+    assert.equal(rideState2.json.racingStandings[0].totalPoints, 10);
+    assert.equal(rideState2.json.racingStandings[1].player.id, p1.id);
+    assert.equal(rideState2.json.racingStandings[1].totalPoints, 6);
+
+    // Generate Final Race from top 2 qualifiers
+    const genFinal = await api(srv.baseUrl, `/api/tournaments/${rideId}/races/generate-final`, {
+      method: 'POST',
+      token,
+      body: { trackName: 'Silverstone Final', qualifiersCount: 2 }
+    });
+    assert.equal(genFinal.status, 201);
+    const finalRace = genFinal.json.race;
+    assert.equal(finalRace.stage, 'FINAL');
+    assert.equal(finalRace.results.length, 2);
+
+    // Export must include racing standings & races cleanly
+    const exp = await api(srv.baseUrl, `/api/tournaments/${rideId}/export`, { token });
+    assert.equal(exp.status, 200);
+    assert.ok(exp.json.fullText.includes('RIDE 4'));
+    assert.ok(exp.json.fullText.includes(p2.name));
+
+    // Backup & Restore preserves races, raceResults, and custom game fields (schemaVersion 3)
+    const backup = await api(srv.baseUrl, '/api/admin/backup', { token });
+    assert.equal(backup.status, 200);
+    assert.ok(Array.isArray(backup.json.races) && backup.json.races.length === 2);
+    assert.ok(Array.isArray(backup.json.raceResults) && backup.json.raceResults.length >= 3);
+
+    const restore = await api(srv.baseUrl, '/api/admin/restore', {
+      method: 'POST',
+      token,
+      body: backup.json
+    });
+    assert.equal(restore.status, 200);
+
+    const afterRestore = await api(srv.baseUrl, `/api/state?tournamentId=${rideId}`, {
+      token: restore.json.token
+    });
+    assert.equal(afterRestore.json.races.length, 2);
+    assert.equal(afterRestore.json.racingStandings[0].totalPoints, 10);
   } finally {
     await srv.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });

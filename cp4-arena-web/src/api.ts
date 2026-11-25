@@ -345,6 +345,49 @@ export async function updateKnockoutWinnerApi(matchId: number, winnerPlayerId: n
   });
 }
 
+export async function createRaceApi(
+  tournamentId: number,
+  payload: { title?: string; stage?: 'REGULAR' | 'QUALIFIER' | 'FINAL'; trackName?: string } = {}
+) {
+  return apiRequest<{ ok: boolean; race: unknown; messageAr: string }>(`/api/tournaments/${tournamentId}/races`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function saveRaceResultsApi(
+  raceId: number,
+  payload: {
+    title?: string;
+    trackName?: string;
+    entries: Array<{ playerId: number; position: number; bestLapOrTime?: string; dnf?: boolean }>;
+  }
+) {
+  return apiRequest<{ ok: boolean; race: unknown; messageAr: string }>(`/api/races/${raceId}/results`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function generateFinalRaceApi(
+  tournamentId: number,
+  payload: { title?: string; trackName?: string; qualifiersCount?: number } = {}
+) {
+  return apiRequest<{ ok: boolean; race: unknown; messageAr: string }>(
+    `/api/tournaments/${tournamentId}/races/generate-final`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function deleteRaceApi(raceId: number) {
+  return apiRequest<{ ok: boolean; messageAr: string }>(`/api/races/${raceId}`, {
+    method: 'DELETE'
+  });
+}
+
 export async function bulkImportPlayersApi(
   tournamentId: number,
   linesText: string,

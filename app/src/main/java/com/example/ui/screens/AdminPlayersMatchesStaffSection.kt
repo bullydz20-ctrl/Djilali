@@ -27,10 +27,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -59,6 +63,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.example.api.RaceEntry
 import com.example.data.local.AdminAccountEntity
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
@@ -66,53 +71,78 @@ import com.example.data.model.AdminRole
 import com.example.data.model.MatchStage
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
+import com.example.data.model.RaceStage
 import com.example.ui.components.MatchResultsTableCard
 import com.example.ui.components.PlayerAvatar
+import com.example.ui.components.RacingOverviewSection
 import com.example.ui.components.TournamentExportShareCard
+import com.example.ui.theme.AmberDraw
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CrimsonLoss
 import com.example.ui.theme.CyberSky
 import com.example.ui.theme.ElectricCobalt
+import com.example.ui.theme.ElevatedNavy
 import com.example.ui.theme.EmeraldWin
 import com.example.ui.theme.MidnightSurface
+import com.example.ui.theme.RoyalViolet
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.TournamentUiState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AdminPlayersTab(
     uiState: TournamentUiState,
     onImportAvatar: (Uri, (String) -> Unit) -> Unit = { _, _ -> },
     onAdminAddPlayer: (String, String, String?, PlayerLevel, Int, String, Boolean, () -> Unit) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onBulkImport: (linesText: String, status: PlayerStatus, onSuccess: () -> Unit) -> Unit = { _, _, _ -> },
     onStatusChange: (PlayerEntity, PlayerStatus) -> Unit,
     onUpdateDetails: (PlayerEntity) -> Unit,
     onDeletePlayer: (PlayerEntity) -> Unit
 ) {
     var editingPlayer by remember { mutableStateOf<PlayerEntity?>(null) }
     var showAddPlayerDialog by remember { mutableStateOf(false) }
+    var showBulkImportDialog by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // Pending queue + direct add CTA
-        Row(
+        // Pending queue + direct add / bulk import CTAs
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
                 text = "طلبات التسجيل الجديدة (${uiState.pendingPlayers.size})",
                 style = MaterialTheme.typography.titleMedium,
                 color = ChampionshipGold
             )
-            Button(
-                onClick = { showAddPlayerDialog = true },
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                modifier = Modifier.testTag("admin_add_player_button")
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("إضافة لاعب مباشرة", style = MaterialTheme.typography.labelMedium)
+                Button(
+                    onClick = { showAddPlayerDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("admin_add_player_button")
+                ) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("إضافة لاعب مباشرة", style = MaterialTheme.typography.labelMedium)
+                }
+                OutlinedButton(
+                    onClick = { showBulkImportDialog = true },
+                    border = BorderStroke(1.dp, CyberSky.copy(alpha = 0.7f)),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("admin_bulk_import_button")
+                ) {
+                    Icon(Icons.Default.CloudUpload, contentDescription = null, tint = CyberSky, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("استيراد دفعة", style = MaterialTheme.typography.labelMedium, color = CyberSky)
+                }
             }
         }
 
@@ -188,6 +218,20 @@ fun AdminPlayersTab(
         )
     }
 
+    if (showBulkImportDialog) {
+        BulkImportPlayersDialog(
+            onDismiss = { showBulkImportDialog = false },
+            onSubmit = { linesText, autoApprove ->
+                onBulkImport(
+                    linesText,
+                    if (autoApprove) PlayerStatus.APPROVED else PlayerStatus.PENDING
+                ) {
+                    showBulkImportDialog = false
+                }
+            }
+        )
+    }
+
     editingPlayer?.let { target ->
         EditPlayerDialog(
             player = target,
@@ -199,6 +243,69 @@ fun AdminPlayersTab(
             }
         )
     }
+}
+
+@Composable
+private fun BulkImportPlayersDialog(
+    onDismiss: () -> Unit,
+    onSubmit: (linesText: String, autoApprove: Boolean) -> Unit
+) {
+    var linesText by remember { mutableStateOf("") }
+    var autoApprove by remember { mutableStateOf(true) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MidnightSurface,
+        title = { Text("استيراد اللاعبين دفعة واحدة", color = ChampionshipGold) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "أدخل لاعباً في كل سطر بالصيغة:\nالاسم | معرف ElysiumNet/ XeMoNat | النادي (اختياري)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CyberSky
+                )
+                OutlinedTextField(
+                    value = linesText,
+                    onValueChange = { linesText = it },
+                    label = { Text("قائمة اللاعبين *") },
+                    placeholder = { Text("أحمد | ahmed_99 | ريال مدريد\nيوسف | youcef_pro | برشلونة") },
+                    minLines = 5,
+                    maxLines = 10,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("bulk_import_input")
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("اعتماد اللاعبين مباشرة في البطولة", style = MaterialTheme.typography.bodySmall, color = TextPrimary)
+                    Switch(
+                        checked = autoApprove,
+                        onCheckedChange = { autoApprove = it },
+                        modifier = Modifier.testTag("bulk_import_approve_switch")
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmit(linesText.trim(), autoApprove) },
+                enabled = linesText.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt),
+                modifier = Modifier.testTag("bulk_import_submit_button")
+            ) {
+                Text("استيراد القائمة")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("إلغاء") }
+        }
+    )
 }
 
 @Composable
@@ -461,23 +568,158 @@ private fun EditPlayerDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AdminMatchesTab(
     uiState: TournamentUiState,
     onEditMatch: (MatchEntity) -> Unit,
-    onQuickUpdateGoals: (MatchEntity, Int, Int) -> Unit = { _, _, _ -> }
+    onQuickUpdateGoals: (MatchEntity, Int, Int) -> Unit = { _, _, _ -> },
+    onAutoSchedule: (Long, Int, Boolean, () -> Unit) -> Unit = { _, _, _, _ -> },
+    onToggleCheckIn: (MatchEntity, Int) -> Unit = { _, _ -> },
+    onOpenDispute: ((MatchEntity) -> Unit)? = null,
+    onOpenReminder: ((MatchEntity) -> Unit)? = null,
+    onPlayerClick: ((PlayerEntity) -> Unit)? = null,
+    onCreateRace: (String, RaceStage, String) -> Unit = { _, _, _ -> },
+    onEditRaceResults: (RaceEntry) -> Unit = {},
+    onGenerateFinalRace: () -> Unit = {},
+    onDeleteRace: (Long) -> Unit = {}
 ) {
     val playersById = uiState.players.associateBy { it.id }
 
-    MatchResultsTableCard(
-        matches = uiState.allMatches,
-        playersById = playersById,
-        canEdit = true,
-        onQuickUpdateGoals = onQuickUpdateGoals,
-        onOpenDetailedEditor = onEditMatch,
-        title = "جدول إدارة نتائج المباريات",
-        showFilters = true
-    )
+    if (uiState.tournament?.format?.isRacing == true) {
+        RacingOverviewSection(
+            tournament = uiState.tournament,
+            races = uiState.races,
+            standings = uiState.racingStandings,
+            playersById = playersById,
+            approvedPlayers = uiState.approvedPlayers,
+            canManageRaces = true,
+            onCreateRace = onCreateRace,
+            onEditRaceResults = onEditRaceResults,
+            onGenerateFinalRace = onGenerateFinalRace,
+            onDeleteRace = onDeleteRace,
+            onPlayerClick = onPlayerClick
+        )
+        return
+    }
+
+    val remindersByMatchId = uiState.matchReminders.associateBy { it.matchId }
+    val openDisputesCount = uiState.allMatches.count { it.disputeStatus == "OPEN" }
+    var intervalMinutes by remember { mutableStateOf(20) }
+    var onlyUnscheduled by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (openDisputesCount > 0) {
+            Surface(
+                color = CrimsonLoss.copy(alpha = 0.14f),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, CrimsonLoss.copy(alpha = 0.7f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.Flag, contentDescription = null, tint = CrimsonLoss, modifier = Modifier.size(18.dp))
+                    Text(
+                        text = "يوجد $openDisputesCount بلاغ / اعتراض مفتوح بانتظار المراجعة والحسم من أيقونة العلم أو محرر النتيجة.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextPrimary
+                    )
+                }
+            }
+        }
+
+        if (uiState.tournament != null && uiState.allMatches.isNotEmpty()) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+                border = BorderStroke(1.dp, CyberSky.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.Schedule, contentDescription = null, tint = CyberSky, modifier = Modifier.size(18.dp))
+                        Text(
+                            text = "الجدولة التلقائية لمواعيد المباريات",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = ChampionshipGold
+                        )
+                    }
+                    Text(
+                        text = "اختر الفاصل الزمني بين كل مباراة والتي تليها (بدءاً من بعد 15 دقيقة من الآن):",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(15, 20, 30, 45, 60).forEach { mins ->
+                            FilterChip(
+                                selected = intervalMinutes == mins,
+                                onClick = { intervalMinutes = mins },
+                                label = { Text("$mins د") },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricCobalt,
+                                    selectedLabelColor = ChampionshipGold
+                                )
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "تحديث المباريات غير المجدولة فقط",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextPrimary
+                        )
+                        Switch(checked = onlyUnscheduled, onCheckedChange = { onlyUnscheduled = it })
+                    }
+                    Button(
+                        onClick = {
+                            val startAt = System.currentTimeMillis() + 15 * 60_000L
+                            onAutoSchedule(startAt, intervalMinutes, onlyUnscheduled) {}
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = RoyalViolet),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("admin_auto_schedule_button")
+                    ) {
+                        Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("توزيع مواعيد المباريات تلقائياً (كل $intervalMinutes د)")
+                    }
+                }
+            }
+        }
+
+        MatchResultsTableCard(
+            matches = uiState.allMatches,
+            playersById = playersById,
+            canEdit = true,
+            onQuickUpdateGoals = onQuickUpdateGoals,
+            onOpenDetailedEditor = onEditMatch,
+            remindersByMatchId = remindersByMatchId,
+            onOpenReminder = onOpenReminder,
+            onToggleCheckIn = onToggleCheckIn,
+            onOpenDispute = onOpenDispute,
+            onPlayerClick = onPlayerClick,
+            title = "جدول إدارة نتائج المباريات",
+            showFilters = true
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -989,13 +1231,27 @@ fun AdminProgressAndChampionTab(
     onCrownChampion: (Long?) -> Unit,
     onOpenExportShare: () -> Unit = {}
 ) {
+    val isRacing = uiState.tournament?.format?.isRacing == true
     val overview = uiState.overviewStats
-    val progress = if (overview.totalMatches > 0) {
-        overview.completedMatches.toFloat() / overview.totalMatches.toFloat()
-    } else 0f
+    val completedRaces = uiState.races.count { it.isCompleted }
+    val totalRaces = uiState.races.size
+    val progress = if (isRacing) {
+        if (totalRaces > 0) completedRaces.toFloat() / totalRaces.toFloat() else 0f
+    } else {
+        if (overview.totalMatches > 0) overview.completedMatches.toFloat() / overview.totalMatches.toFloat() else 0f
+    }
 
     val finalMatch = uiState.knockoutMatches.find { it.stage == MatchStage.FINAL }
     val finalWinner = finalMatch?.winnerId?.let { wId -> uiState.approvedPlayers.find { it.id == wId } }
+
+    val finalRaceWinner = uiState.races
+        .lastOrNull { it.stage == RaceStage.FINAL && it.isCompleted }
+        ?.results
+        ?.firstOrNull { !it.dnf && it.position == 1 }
+        ?.playerId
+        ?.let { id -> uiState.approvedPlayers.find { it.id == id } }
+    val racingLeader = uiState.racingStandings.firstOrNull()?.player
+    val suggestedChampion = if (isRacing) (finalRaceWinner ?: racingLeader) else finalWinner
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Card(
@@ -1006,7 +1262,11 @@ fun AdminProgressAndChampionTab(
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("متابعة تقدم البطولة", style = MaterialTheme.typography.titleMedium, color = CyberSky)
                 Text(
-                    text = "المباريات المكتملة: ${overview.completedMatches} من ${overview.totalMatches}",
+                    text = if (isRacing) {
+                        "السباقات المكتملة: $completedRaces من $totalRaces"
+                    } else {
+                        "المباريات المكتملة: ${overview.completedMatches} من ${overview.totalMatches}"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextPrimary
                 )
@@ -1026,15 +1286,22 @@ fun AdminProgressAndChampionTab(
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("اختيار بطل البطولة وإعلان النتائج النهائية", style = MaterialTheme.typography.titleMedium, color = ChampionshipGold)
 
-                if (finalWinner != null) {
+                if (suggestedChampion != null) {
                     Button(
-                        onClick = { onCrownChampion(finalWinner.id) },
+                        onClick = { onCrownChampion(suggestedChampion.id) },
                         colors = ButtonDefaults.buttonColors(containerColor = ChampionshipGold),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = MidnightSurface)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("تتويج الفائز بالنهائي: ${finalWinner.name}", color = MidnightSurface)
+                        Text(
+                            text = if (isRacing) {
+                                "تتويج متصدر السباقات: ${suggestedChampion.name}"
+                            } else {
+                                "تتويج الفائز بالنهائي: ${suggestedChampion.name}"
+                            },
+                            color = MidnightSurface
+                        )
                     }
                 }
 
@@ -1068,5 +1335,93 @@ fun AdminProgressAndChampionTab(
             onOpenExportShare = onOpenExportShare,
             tag = "admin_export_share_card"
         )
+    }
+}
+
+@Composable
+fun AdminAuditLogTab(
+    uiState: TournamentUiState
+) {
+    val formatter = remember {
+        SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(Icons.Default.History, contentDescription = null, tint = ChampionshipGold)
+            Text(
+                text = "سجل نشاط المشرفين (${uiState.auditLogs.size})",
+                style = MaterialTheme.typography.titleMedium,
+                color = ChampionshipGold
+            )
+        }
+
+        if (uiState.auditLogs.isEmpty()) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+                border = BorderStroke(1.dp, CardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "لا توجد عمليات مسجلة في السجل بعد.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+        } else {
+            uiState.auditLogs.forEach { entry ->
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+                    border = BorderStroke(1.dp, CardBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${entry.actorDisplayName.ifBlank { entry.actorUsername }} (@${entry.actorUsername})",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = CyberSky
+                            )
+                            Text(
+                                text = formatter.format(Date(entry.createdAt)),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
+                        Text(
+                            text = entry.summaryAr,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextPrimary
+                        )
+                        if (entry.actionType.isNotBlank()) {
+                            Surface(
+                                color = ElevatedNavy,
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = entry.actionType,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ChampionshipGold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

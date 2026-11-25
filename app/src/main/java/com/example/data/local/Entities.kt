@@ -7,9 +7,11 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.Relation
 import com.example.data.model.AdminRole
+import com.example.data.model.DEFAULT_RACING_POINTS_JSON
 import com.example.data.model.DrawMode
 import com.example.data.model.KnockoutTieRule
 import com.example.data.model.MatchStage
+import com.example.data.model.PlayMode
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
 import com.example.data.model.TournamentFormat
@@ -27,6 +29,10 @@ data class TournamentEntity(
     val startDateTime: String,
     val maxParticipants: Int = 16,
     val format: TournamentFormat = TournamentFormat.GROUPS_KNOCKOUT,
+    val playMode: PlayMode = PlayMode.SOLO_1V1,
+    val teamSize: Int = 1,
+    val bestOf: Int = 1,
+    val racingPointsConfig: String = DEFAULT_RACING_POINTS_JSON,
     val groupCount: Int = 4,
     val qualifiersPerGroup: Int = 2,
     val drawMode: DrawMode = DrawMode.RANDOM,
@@ -34,7 +40,7 @@ data class TournamentEntity(
     val matchDurationMinutes: Int = 12,
     val targetGoalsRule: String = "المباراة الكاملة (6 دقائق لكل شوط)",
     val isRegistrationClosedManual: Boolean = false,
-    val isThirdPlaceEnabled: Boolean = false,
+    val isThirdPlaceEnabled: Boolean = true,
     val status: TournamentStatus = TournamentStatus.REGISTRATION_OPEN,
     val championPlayerId: Long? = null,
     val createdAt: Long = System.currentTimeMillis()

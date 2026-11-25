@@ -6,15 +6,18 @@ import {
   bulkImportPlayersApi,
   cancelReminderApi,
   changeOwnPinApi,
+  createRaceApi,
   createSubAdminApi,
   createTournamentApi,
   crownChampionApi,
   deletePlayerApi,
+  deleteRaceApi,
   deleteSubAdminApi,
   deleteTournamentApi,
   downloadBackupApi,
   fetchArenaState,
   fetchBackupJsonApi,
+  generateFinalRaceApi,
   generateKnockoutApi,
   getAuthToken,
   getLastAdminUsername,
@@ -25,6 +28,7 @@ import {
   restoreBackupApi,
   runDrawApi,
   saveHeadAutoBackup,
+  saveRaceResultsApi,
   scheduleReminderApi,
   setAuthToken,
   setLastAdminUsername,
@@ -47,6 +51,7 @@ import {
   InstallPwaModal,
   MatchReminderModal,
   PlayerProfileModal,
+  RaceResultsModal,
   RegisterPlayerModal,
   ScoreEntryModal
 } from './components/Dialogs';
@@ -56,7 +61,7 @@ import { BracketScreen } from './screens/BracketScreen';
 import { GroupsScreen } from './screens/GroupsScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { PlayersScreen } from './screens/PlayersScreen';
-import type { ArenaState, Match, Player, PlayerLevel, PlayerStatus } from './types';
+import type { ArenaState, Match, Player, PlayerLevel, PlayerStatus, RaceEntry } from './types';
 
 type TabKey = 'HOME' | 'PLAYERS' | 'GROUPS' | 'BRACKET' | 'ADMIN';
 
@@ -88,6 +93,7 @@ export default function App() {
 
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [editingMatch, setEditingMatch] = useState<Match | null>(null);
+  const [editingRace, setEditingRace] = useState<RaceEntry | null>(null);
   const [reminderMatch, setReminderMatch] = useState<Match | null>(null);
   const [disputeMatch, setDisputeMatch] = useState<Match | null>(null);
   const [profilePlayer, setProfilePlayer] = useState<Player | null>(null);
@@ -317,6 +323,18 @@ export default function App() {
                   onOpenPlayerProfile={(p) => setProfilePlayer(p)}
                   onCelebrateChampion={() => showToast('🏆 تحية كبيرة لبطل البطولة!')}
                   onOpenAdmin={() => setActiveTab('ADMIN')}
+                  onCreateRace={async (payload) => {
+                    if (!state.tournament) return;
+                    await runAction(() => createRaceApi(state.tournament!.id, payload));
+                  }}
+                  onEditRace={(race) => setEditingRace(race)}
+                  onGenerateFinalRace={async (payload) => {
+                    if (!state.tournament) return;
+                    await runAction(() => generateFinalRaceApi(state.tournament!.id, payload));
+                  }}
+                  onDeleteRace={async (raceId) => {
+                    await runAction(() => deleteRaceApi(raceId));
+                  }}
                 />
               )}
 
@@ -352,6 +370,18 @@ export default function App() {
                     runAction(() => voteMatchPredictionApi(m.id, slot)).catch(() => undefined);
                   }}
                   onOpenDispute={(m) => setDisputeMatch(m)}
+                  onCreateRace={async (payload) => {
+                    if (!state.tournament) return;
+                    await runAction(() => createRaceApi(state.tournament!.id, payload));
+                  }}
+                  onEditRace={(race) => setEditingRace(race)}
+                  onGenerateFinalRace={async (payload) => {
+                    if (!state.tournament) return;
+                    await runAction(() => generateFinalRaceApi(state.tournament!.id, payload));
+                  }}
+                  onDeleteRace={async (raceId) => {
+                    await runAction(() => deleteRaceApi(raceId));
+                  }}
                 />
               )}
 
@@ -477,6 +507,18 @@ export default function App() {
                   onRestoreBackup={async (backupData) => {
                     await runAction(() => restoreBackupApi(backupData));
                   }}
+                  onCreateRace={async (payload) => {
+                    if (!state.tournament) return;
+                    await runAction(() => createRaceApi(state.tournament!.id, payload));
+                  }}
+                  onEditRace={(race) => setEditingRace(race)}
+                  onGenerateFinalRace={async (payload) => {
+                    if (!state.tournament) return;
+                    await runAction(() => generateFinalRaceApi(state.tournament!.id, payload));
+                  }}
+                  onDeleteRace={async (raceId) => {
+                    await runAction(() => deleteRaceApi(raceId));
+                  }}
                 />
               )}
             </div>
@@ -536,6 +578,7 @@ export default function App() {
             player1={playersById.get(editingMatch.player1Id)!}
             player2={playersById.get(editingMatch.player2Id)!}
             scoreUnitLabel={state?.tournament?.scoreUnitLabel || 'نقطة'}
+            bestOf={state?.tournament?.bestOf ?? 1}
             onClose={() => setEditingMatch(null)}
             onSave={async (payload) => {
               await runAction(() => updateMatchScoreApi(editingMatch.id, payload));
@@ -551,6 +594,19 @@ export default function App() {
             }}
           />
         )}
+
+      {editingRace && state?.tournament && (
+        <RaceResultsModal
+          race={editingRace}
+          approvedPlayers={state.approvedPlayers}
+          pointsConfig={state.tournament.racingPointsConfig}
+          onClose={() => setEditingRace(null)}
+          onSave={async (payload) => {
+            await runAction(() => saveRaceResultsApi(editingRace.id, payload));
+            setEditingRace(null);
+          }}
+        />
+      )}
 
       {disputeMatch && (
         <DisputeMatchModal

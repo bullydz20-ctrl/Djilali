@@ -1,23 +1,65 @@
 export const TournamentFormat = {
   GROUPS_KNOCKOUT: 'GROUPS_KNOCKOUT',
   LEAGUE_KNOCKOUT: 'LEAGUE_KNOCKOUT',
-  DIRECT_KNOCKOUT: 'DIRECT_KNOCKOUT'
+  DIRECT_KNOCKOUT: 'DIRECT_KNOCKOUT',
+  RACE_POINTS: 'RACE_POINTS',
+  RACE_QUALIFIERS_FINAL: 'RACE_QUALIFIERS_FINAL'
 };
 
 export const TOURNAMENT_FORMAT_META = {
   GROUPS_KNOCKOUT: {
-    labelAr: 'مجموعات + أدوار إقصائية',
+    labelAr: 'مجموعات ثم إقصائيات',
     descriptionAr: 'توزيع على مجموعات ثم تأهل المتصدرين للأدوار الإقصائية'
   },
   LEAGUE_KNOCKOUT: {
-    labelAr: 'دوري + أدوار إقصائية',
-    descriptionAr: 'مواجهات بنظام الدوري ثم تأهل أفضل اللاعبين للإقصائيات'
+    labelAr: 'نظام المجموعات والنقاط (دوري + إقصائيات)',
+    descriptionAr: 'مواجهات نقاط وترتيب ثم تأهل أفضل اللاعبين للإقصائيات'
   },
   DIRECT_KNOCKOUT: {
     labelAr: 'خروج مباشر (إقصائيات فقط)',
     descriptionAr: 'مواجهات إقصائية مباشرة من الدور الأول حتى النهائي'
+  },
+  RACE_POINTS: {
+    labelAr: 'نقاط وترتيب بعد السباقات',
+    descriptionAr: 'تجميع نقاط المراكز وتحديث ترتيب المتسابقين تلقائياً بعد كل سباق'
+  },
+  RACE_QUALIFIERS_FINAL: {
+    labelAr: 'تصفيات ثم نهائي (سباقات)',
+    descriptionAr: 'جولات تصفيات بنقاط المراكز ثم تأهل المتصدرين للسباق النهائي'
   }
 };
+
+export const PlayMode = {
+  SOLO_1V1: 'SOLO_1V1',
+  TEAMS: 'TEAMS',
+  RACE_POINTS: 'RACE_POINTS'
+};
+
+export const PLAY_MODE_META = {
+  SOLO_1V1: { labelAr: 'فردي (1 ضد 1)' },
+  TEAMS: { labelAr: 'نظام الفرق' },
+  RACE_POINTS: { labelAr: 'سباقات وترتيب نقاط' }
+};
+
+export const RaceStage = {
+  REGULAR: 'REGULAR',
+  QUALIFIER: 'QUALIFIER',
+  FINAL: 'FINAL'
+};
+
+export const RACE_STAGE_META = {
+  REGULAR: { labelAr: 'سباق جولة' },
+  QUALIFIER: { labelAr: 'سباق تصفيات' },
+  FINAL: { labelAr: 'السباق النهائي' }
+};
+
+export const OnlineCompatibilityStatus = {
+  OFFICIAL_ONLINE: 'OFFICIAL_ONLINE',
+  LOCAL_OR_LAN_ONLY: 'LOCAL_OR_LAN_ONLY',
+  VERIFY_REQUIRED: 'VERIFY_REQUIRED'
+};
+
+export const DEFAULT_RACING_POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
 
 export const DrawMode = {
   RANDOM: 'RANDOM',
@@ -112,8 +154,8 @@ export const TournamentStatus = {
 export const TOURNAMENT_STATUS_META = {
   REGISTRATION_OPEN: { labelAr: 'التسجيل مفتوح' },
   REGISTRATION_CLOSED: { labelAr: 'التسجيل مغلق' },
-  GROUP_STAGE: { labelAr: 'مرحلة المجموعات / الدوري' },
-  KNOCKOUT_STAGE: { labelAr: 'الأدوار الإقصائية' },
+  GROUP_STAGE: { labelAr: 'مرحلة المجموعات / السباقات' },
+  KNOCKOUT_STAGE: { labelAr: 'الأدوار الإقصائية / النهائي' },
   COMPLETED: { labelAr: 'انتهت البطولة' }
 };
 
@@ -142,13 +184,13 @@ export const ADMIN_PERMISSION_LIST = [
     key: AdminPermission.RUN_DRAW,
     field: 'canRunDraw',
     titleAr: 'إجراء القرعة',
-    descriptionAr: 'توزيع المجموعات وتوليد جداول المباريات والإقصائيات'
+    descriptionAr: 'توزيع المجموعات وتوليد جداول المباريات والإقصائيات أو السباقات'
   },
   {
     key: AdminPermission.EDIT_SCORES,
     field: 'canEditScores',
     titleAr: 'تسجيل النتائج',
-    descriptionAr: 'إدخال وتعديل نتائج المباريات والحسم الإضافي'
+    descriptionAr: 'إدخال وتعديل نتائج المباريات أو مراكز السباقات'
   },
   {
     key: AdminPermission.CROWN_CHAMPION,
@@ -188,15 +230,167 @@ export const SUB_ADMIN_PRESETS = [
 ];
 
 export const GAME_CATALOG = [
-  { id: 'FIFA 22', label: 'FIFA 22', categoryAr: 'كرة قدم', scoreUnitLabel: 'هدف', defaultRule: 'المباراة الكاملة (6 دقائق لكل شوط)', defaultDuration: 12 },
-  { id: 'EA SPORTS FC 25', label: 'EA SPORTS FC 25', categoryAr: 'كرة قدم', scoreUnitLabel: 'هدف', defaultRule: 'المباراة الكاملة (6 دقائق لكل شوط)', defaultDuration: 12 },
-  { id: 'eFootball PES', label: 'eFootball PES', categoryAr: 'كرة قدم', scoreUnitLabel: 'هدف', defaultRule: 'مباراة كاملة 10 دقائق + إضافي عند الإقصائيات', defaultDuration: 10 },
-  { id: 'Tekken 8', label: 'Tekken 8', categoryAr: 'ألعاب قتال', scoreUnitLabel: 'جولة', defaultRule: 'الأفضل من 3 مجموعات (First to 3)', defaultDuration: 8 },
-  { id: 'Mortal Kombat 1', label: 'Mortal Kombat 1', categoryAr: 'ألعاب قتال', scoreUnitLabel: 'جولة', defaultRule: 'الأفضل من 3 مواجهات (FT3)', defaultDuration: 8 },
-  { id: 'Street Fighter 6', label: 'Street Fighter 6', categoryAr: 'ألعاب قتال', scoreUnitLabel: 'جولة', defaultRule: 'الأفضل من 3 مواجهات (FT3)', defaultDuration: 8 },
-  { id: 'Call of Duty', label: 'Call of Duty', categoryAr: 'تصويب', scoreUnitLabel: 'نقطة', defaultRule: 'نظام المواجهة 1 ضد 1 أو البحث والتدمير (Best of 5)', defaultDuration: 15 },
-  { id: 'Rocket League', label: 'Rocket League', categoryAr: 'رياضة مركبات', scoreUnitLabel: 'هدف', defaultRule: 'مباراة 5 دقائق + هدف ذهبي', defaultDuration: 7 },
-  { id: 'NBA 2K', label: 'NBA 2K', categoryAr: 'كرة سلة', scoreUnitLabel: 'نقطة', defaultRule: '4 أرباع × 5 دقائق', defaultDuration: 20 },
-  { id: 'Fortnite', label: 'Fortnite', categoryAr: 'باتل رويال', scoreUnitLabel: 'نقطة', defaultRule: 'نظام البوكس فايت / النقاط المجمعة', defaultDuration: 15 },
-  { id: 'PUBG', label: 'PUBG', categoryAr: 'باتل رويال', scoreUnitLabel: 'نقطة', defaultRule: 'مواجهات النقاط والإقصاء المباشر', defaultDuration: 20 }
+  {
+    id: 'FIFA 22',
+    label: 'FIFA 22',
+    categoryAr: 'كرة قدم',
+    categoryType: 'FOOTBALL',
+    scoreUnitLabel: 'هدف',
+    defaultRule: 'المباراة الكاملة (6 دقائق لكل شوط)',
+    defaultDuration: 12,
+    supportedFormats: [
+      TournamentFormat.GROUPS_KNOCKOUT,
+      TournamentFormat.LEAGUE_KNOCKOUT,
+      TournamentFormat.DIRECT_KNOCKOUT
+    ],
+    defaultFormat: TournamentFormat.GROUPS_KNOCKOUT,
+    supportedPlayModes: [PlayMode.TEAMS, PlayMode.SOLO_1V1],
+    defaultPlayMode: PlayMode.TEAMS,
+    supportsTeamSize: true,
+    defaultTeamSize: 2,
+    supportsBestOf: false,
+    defaultBestOf: 1,
+    supportsCustomRacePoints: false,
+    onlineStatus: OnlineCompatibilityStatus.LOCAL_OR_LAN_ONLY,
+    onlineStatusLabelAr: 'محلي / تحقق مطلوب (خوادم EA الرسمية أُغلقت في نوفمبر 2024)',
+    compatibilityNoteAr:
+      'تم إغلاق خوادم EA الرسمية لـ FIFA 22. اللعب المعتمد حالياً محلي (حضوري) أو عبر Share Play / شبكة محلية بعد تحقق المنظم.'
+  },
+  {
+    id: 'JUMP FORCE',
+    label: 'JUMP FORCE',
+    categoryAr: 'ألعاب قتال — 1 ضد 1',
+    categoryType: 'FIGHTING',
+    scoreUnitLabel: 'جولة',
+    defaultRule: 'نظام 1 ضد 1 — Best of 3',
+    defaultDuration: 8,
+    supportedFormats: [TournamentFormat.DIRECT_KNOCKOUT, TournamentFormat.GROUPS_KNOCKOUT],
+    defaultFormat: TournamentFormat.DIRECT_KNOCKOUT,
+    supportedPlayModes: [PlayMode.SOLO_1V1],
+    defaultPlayMode: PlayMode.SOLO_1V1,
+    supportsTeamSize: false,
+    defaultTeamSize: 1,
+    supportsBestOf: true,
+    defaultBestOf: 3,
+    supportsCustomRacePoints: false,
+    onlineStatus: OnlineCompatibilityStatus.LOCAL_OR_LAN_ONLY,
+    onlineStatusLabelAr: 'محلي / غرف أصدقاء (خوادم التصنيف الرسمية أُغلقت في 2022)',
+    compatibilityNoteAr:
+      'خوادم الأونلاين والتصنيف الرسمية لـ JUMP FORCE مغلقة منذ أغسطس 2022. يجب التحقق من إمكانية اللعب المحلي أو غرف الأصدقاء قبل بدء البطولة.'
+  },
+  {
+    id: 'Tekken 7',
+    label: 'Tekken 7',
+    categoryAr: 'ألعاب قتال — 1 ضد 1',
+    categoryType: 'FIGHTING',
+    scoreUnitLabel: 'جولة',
+    defaultRule: 'نظام 1 ضد 1 — Best of 3',
+    defaultDuration: 8,
+    supportedFormats: [TournamentFormat.DIRECT_KNOCKOUT, TournamentFormat.GROUPS_KNOCKOUT],
+    defaultFormat: TournamentFormat.DIRECT_KNOCKOUT,
+    supportedPlayModes: [PlayMode.SOLO_1V1],
+    defaultPlayMode: PlayMode.SOLO_1V1,
+    supportsTeamSize: false,
+    defaultTeamSize: 1,
+    supportsBestOf: true,
+    defaultBestOf: 3,
+    supportsCustomRacePoints: false,
+    onlineStatus: OnlineCompatibilityStatus.VERIFY_REQUIRED,
+    onlineStatusLabelAr: 'يتطلب التحقق من توافق PSN والمنطقة قبل اللعب أونلاين',
+    compatibilityNoteAr:
+      'تدعم Tekken 7 اللعب المحلي وطور أونلاين P2P عبر PlayStation Network (يتطلب اشتراك PS Plus والتحقق من توافق الاتصال والمنطقة).'
+  },
+  {
+    id: 'Mortal Kombat 11',
+    label: 'Mortal Kombat 11',
+    categoryAr: 'ألعاب قتال — 1 ضد 1',
+    categoryType: 'FIGHTING',
+    scoreUnitLabel: 'جولة',
+    defaultRule: 'نظام 1 ضد 1 — Best of 3',
+    defaultDuration: 8,
+    supportedFormats: [TournamentFormat.DIRECT_KNOCKOUT, TournamentFormat.GROUPS_KNOCKOUT],
+    defaultFormat: TournamentFormat.DIRECT_KNOCKOUT,
+    supportedPlayModes: [PlayMode.SOLO_1V1],
+    defaultPlayMode: PlayMode.SOLO_1V1,
+    supportsTeamSize: false,
+    defaultTeamSize: 1,
+    supportsBestOf: true,
+    defaultBestOf: 3,
+    supportsCustomRacePoints: false,
+    onlineStatus: OnlineCompatibilityStatus.VERIFY_REQUIRED,
+    onlineStatusLabelAr: 'يتطلب التحقق من توافق PSN والحساب قبل اللعب أونلاين',
+    compatibilityNoteAr:
+      'تدعم Mortal Kombat 11 اللعب المحلي 1 ضد 1 وغرف أونلاين عبر PSN (يتطلب اشتراك PS Plus والتحقق من تطابق الإصدار والتحديث).'
+  },
+  {
+    id: 'RIDE 4',
+    label: 'RIDE 4',
+    categoryAr: 'ألعاب سباق',
+    categoryType: 'RACING',
+    scoreUnitLabel: 'نقطة',
+    defaultRule: 'نقاط وترتيب المراكز بعد كل سباق',
+    defaultDuration: 10,
+    supportedFormats: [TournamentFormat.RACE_POINTS, TournamentFormat.RACE_QUALIFIERS_FINAL],
+    defaultFormat: TournamentFormat.RACE_POINTS,
+    supportedPlayModes: [PlayMode.RACE_POINTS],
+    defaultPlayMode: PlayMode.RACE_POINTS,
+    supportsTeamSize: false,
+    defaultTeamSize: 1,
+    supportsBestOf: false,
+    defaultBestOf: 1,
+    supportsCustomRacePoints: true,
+    onlineStatus: OnlineCompatibilityStatus.VERIFY_REQUIRED,
+    onlineStatusLabelAr: 'يتطلب التحقق من غرف السباق أونلاين أو تحدي الأزمنة المحلي',
+    compatibilityNoteAr:
+      'تدعم RIDE 4 غرف السباق عبر PSN وتحديات الأزمنة الأوفلاين. يجب على المنظم التحقق من استقرار الغرفة وفئة الدراجات قبل الإعلان عن الأونلاين.'
+  },
+  {
+    id: 'DriveClub',
+    label: 'DriveClub',
+    categoryAr: 'ألعاب سباق',
+    categoryType: 'RACING',
+    scoreUnitLabel: 'نقطة',
+    defaultRule: 'نقاط المراكز / تحدي الأزمنة الفردي',
+    defaultDuration: 10,
+    supportedFormats: [TournamentFormat.RACE_POINTS, TournamentFormat.RACE_QUALIFIERS_FINAL],
+    defaultFormat: TournamentFormat.RACE_POINTS,
+    supportedPlayModes: [PlayMode.RACE_POINTS],
+    defaultPlayMode: PlayMode.RACE_POINTS,
+    supportsTeamSize: false,
+    defaultTeamSize: 1,
+    supportsBestOf: false,
+    defaultBestOf: 1,
+    supportsCustomRacePoints: true,
+    onlineStatus: OnlineCompatibilityStatus.LOCAL_OR_LAN_ONLY,
+    onlineStatusLabelAr: 'محلي / أوفلاين فقط (خوادم سوني الرسمية أُغلقت في مارس 2020)',
+    compatibilityNoteAr:
+      'تم إغلاق خوادم DriveClub الأونلاين الرسمية منذ مارس 2020. البطولة معتمدة عبر تسجيل الأزمنة والنقاط محلياً أوفلاين فقط.'
+  },
+  {
+    id: 'Call of Duty',
+    label: 'Call of Duty',
+    categoryAr: 'أكشن وتصويب',
+    categoryType: 'SHOOTER',
+    scoreUnitLabel: 'نقطة',
+    defaultRule: 'نظام المواجهة المخصص (فردي 1 ضد 1 أو فرق)',
+    defaultDuration: 15,
+    supportedFormats: [
+      TournamentFormat.DIRECT_KNOCKOUT,
+      TournamentFormat.GROUPS_KNOCKOUT,
+      TournamentFormat.LEAGUE_KNOCKOUT
+    ],
+    defaultFormat: TournamentFormat.DIRECT_KNOCKOUT,
+    supportedPlayModes: [PlayMode.SOLO_1V1, PlayMode.TEAMS],
+    defaultPlayMode: PlayMode.SOLO_1V1,
+    supportsTeamSize: true,
+    defaultTeamSize: 4,
+    supportsBestOf: true,
+    defaultBestOf: 3,
+    supportsCustomRacePoints: false,
+    onlineStatus: OnlineCompatibilityStatus.VERIFY_REQUIRED,
+    onlineStatusLabelAr: 'يتطلب تحقق المنظم من خوادم الإصدار / LAN / Crossplay قبل الاعتماد',
+    compatibilityNoteAr:
+      'يُعرض Call of Duty كخيار موحد؛ على المنظم تحديد قواعد المواجهة والتحقق من توافق الإصدار وخوادم اللعب (أونلاين أو LAN) قبل انطلاق البطولة.'
+  }
 ];
+

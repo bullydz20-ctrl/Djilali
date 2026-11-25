@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MatchReminderEntity::class,
         AppMetaEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -46,6 +46,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN playMode TEXT NOT NULL DEFAULT 'SOLO_1V1'")
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN teamSize INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN bestOf INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN racingPointsConfig TEXT NOT NULL DEFAULT '[25,18,15,12,10,8,6,4,2,1]'")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -53,7 +62,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "fifa22_community_tournament.db"
                 )
-                    .addMigrations(MIGRATION_4_5)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_6_7)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

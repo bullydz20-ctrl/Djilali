@@ -19,7 +19,8 @@ import {
 import { getHeadAutoBackupSummary } from '../api';
 import { EmptyStatePanel } from '../components/PlayerAvatar';
 import { adminHasPermission, evaluatePinStrengthClient } from '../types';
-import type { ArenaState, Match, PlayerLevel, PlayerStatus } from '../types';
+import type { ArenaState, Match, PlayerLevel, PlayerStatus, RaceEntry, RaceStage } from '../types';
+import { isRacingFormat } from '../components/RacingSection';
 import { AdminAuthGate } from './AdminAuthGate';
 import {
   AdminAuditLogTab,
@@ -60,7 +61,11 @@ export function AdminScreen({
   onCrownChampion,
   onOpenExportShare,
   onDownloadBackup,
-  onRestoreBackup
+  onRestoreBackup,
+  onCreateRace,
+  onEditRace,
+  onGenerateFinalRace,
+  onDeleteRace
 }: {
   state: ArenaState;
   onSetupHead: (p: { username: string; displayName: string; pin: string; keepSignedIn: boolean }) => Promise<void>;
@@ -119,6 +124,10 @@ export function AdminScreen({
   onOpenExportShare: () => void;
   onDownloadBackup: () => Promise<void>;
   onRestoreBackup: (backupData: unknown) => Promise<void>;
+  onCreateRace?: (payload: { title?: string; stage?: RaceStage; trackName?: string }) => Promise<void>;
+  onEditRace?: (race: RaceEntry) => void;
+  onGenerateFinalRace?: (payload?: { title?: string; trackName?: string; qualifiersCount?: number }) => Promise<void>;
+  onDeleteRace?: (raceId: number) => Promise<void>;
 }) {
   const admin = state.currentAdmin;
   const [showOwnAccountModal, setShowOwnAccountModal] = useState(false);
@@ -145,10 +154,10 @@ export function AdminScreen({
       allowedSections.push({ key: 'PLAYERS', label: `المشاركون${pendingBadge}`, icon: <Users size={15} /> });
     }
     if (adminHasPermission(admin, 'RUN_DRAW')) {
-      allowedSections.push({ key: 'DRAW', label: 'القرعة', icon: <Dices size={15} /> });
+      allowedSections.push({ key: 'DRAW', label: isRacingFormat(state.tournament?.format) ? 'التأهل والسباقات' : 'القرعة', icon: <Dices size={15} /> });
     }
     if (adminHasPermission(admin, 'EDIT_SCORES')) {
-      allowedSections.push({ key: 'MATCHES', label: 'المباريات', icon: <Trophy size={15} /> });
+      allowedSections.push({ key: 'MATCHES', label: isRacingFormat(state.tournament?.format) ? 'السباقات' : 'المباريات', icon: <Trophy size={15} /> });
     }
     if (admin.role === 'HEAD_ADMIN') {
       const subCount = state.adminAccounts.filter((a) => a.role === 'SUB_ADMIN').length;
@@ -398,6 +407,7 @@ export function AdminScreen({
                   state={state}
                   onRunDraw={onRunDraw}
                   onGenerateKnockout={onGenerateKnockout}
+                  onGenerateFinalRace={onGenerateFinalRace ? () => onGenerateFinalRace() : undefined}
                 />
               ) : (
                 <EmptyStatePanel
@@ -414,6 +424,10 @@ export function AdminScreen({
                 onAutoSchedule={onAutoSchedule}
                 onToggleCheckIn={onToggleCheckIn}
                 onOpenDispute={onOpenDispute}
+                onCreateRace={onCreateRace}
+                onEditRace={onEditRace}
+                onGenerateFinalRace={onGenerateFinalRace}
+                onDeleteRace={onDeleteRace}
               />
             )}
             {selected === 'SUB_ADMINS' && (

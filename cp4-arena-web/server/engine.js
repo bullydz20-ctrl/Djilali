@@ -1,7 +1,10 @@
 import {
+  DEFAULT_RACING_POINTS,
   KnockoutTieRule,
   MATCH_STAGE_META,
   MatchStage,
+  PLAY_MODE_META,
+  RACE_STAGE_META,
   TOURNAMENT_FORMAT_META,
   TOURNAMENT_STATUS_META
 } from './constants.js';
@@ -194,6 +197,94 @@ export function computeStandings(players, matches, qualifiersCount) {
   return rows.map((row, idx) => ({
     ...row,
     position: idx + 1,
+    isQualified: idx < qualifiersCount
+  }));
+}
+
+export function parseRacingPointsConfig(raw) {
+  let list = [];
+  if (Array.isArray(raw)) {
+    list = raw;
+  } else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        list = parsed;
+      } else {
+        list = raw.split(/[,،\s]+/);
+      }
+    } catch {
+      list = raw.split(/[,،\s]+/);
+    }
+  }
+  const normalized = list
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n) && n >= 0)
+    .map((n) => Math.floor(n))
+    .slice(0, 32);
+  return normalized.length > 0 ? normalized : [...DEFAULT_RACING_POINTS];
+}
+
+export function computeRacingStandings(players, races, qualifiersCount = 4) {
+  if (!players.length) return [];
+  const accMap = new Map();
+  for (const p of players) {
+    accMap.set(p.id, {
+      racesEntered: 0,
+      wins: 0,
+      podiums: 0,
+      totalPoints: 0,
+      bestPosition: null,
+      lastPosition: null
+    });
+  }
+
+  for (const race of races || []) {
+    if (!race.isCompleted) continue;
+    for (const r of race.results || []) {
+      const acc = accMap.get(r.playerId);
+      if (!acc) continue;
+      acc.racesEntered += 1;
+      acc.totalPoints += Number(r.pointsAwarded) || 0;
+      if (!r.dnf && Number(r.position) >= 1) {
+        if (r.position === 1) acc.wins += 1;
+        if (r.position <= 3) acc.podiums += 1;
+        if (acc.bestPosition == null || r.position < acc.bestPosition) {
+          acc.bestPosition = r.position;
+        }
+        acc.lastPosition = r.position;
+      }
+    }
+  }
+
+  const rows = players.map((player) => {
+    const a = accMap.get(player.id);
+    return {
+      rank: 0,
+      player,
+      racesEntered: a.racesEntered,
+      wins: a.wins,
+      podiums: a.podiums,
+      totalPoints: a.totalPoints,
+      bestPosition: a.bestPosition,
+      lastPosition: a.lastPosition,
+      isQualified: false
+    };
+  });
+
+  rows.sort((a, b) => {
+    if (b.totalPoints !== a.totalPoints) return b.totalPoints - a.totalPoints;
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    if (b.podiums !== a.podiums) return b.podiums - a.podiums;
+    const bestA = a.bestPosition ?? 999;
+    const bestB = b.bestPosition ?? 999;
+    if (bestA !== bestB) return bestA - bestB;
+    return a.player.name.localeCompare(b.player.name, 'ar');
+  });
+
+  return rows.map((row, idx) => ({
+    ...row,
+    rank: idx + 1,
     isQualified: idx < qualifiersCount
   }));
 }
@@ -514,8 +605,11 @@ export function buildExportData(state) {
   const stats = state.overviewStats;
   const unit = t?.scoreUnitLabel || 'نقطة';
   const gameTitle = t?.gameTitle || 'CP4 ARENA';
+  const isRacing = t?.format === 'RACE_POINTS' || t?.format === 'RACE_QUALIFIERS_FINAL';
   const finalMatch = state.knockoutMatches.find((m) => m.stage === MatchStage.FINAL);
   const thirdPlaceMatch = state.knockoutMatches.find((m) => m.stage === MatchStage.THIRD_PLACE);
+  const racingStandings = state.racingStandings || [];
+  const races = state.races || [];
   const resolvedChampion =
     state.championPlayer ?? (finalMatch?.winnerId ? playersById.get(finalMatch.winnerId) : null);
 
@@ -528,77 +622,123 @@ export function buildExportData(state) {
   lines.push('المجتمع: COMMUNITY PS4 & GAMING ONLINE');
   if (t) {
     lines.push(`النظام: ${TOURNAMENT_FORMAT_META[t.format]?.labelAr ?? t.format}`);
+    if (t.playMode) {
+      const modeLabel = PLAY_MODE_META[t.playMode]?.labelAr ?? t.playMode;
+      const teamSuffix = t.playMode === 'TEAMS' && t.teamSize > 1 ? ` (${t.teamSize} لاعبين/فريق)` : '';
+      lines.push(`نمط اللعب: ${modeLabel}${teamSuffix}`);
+    }
+    if (t.bestOf && t.bestOf > 1) {
+      lines.push(`نظام الحسم: Best of ${t.bestOf}`);
+    }
     lines.push(`الحالة: ${TOURNAMENT_STATUS_META[t.status]?.labelAr ?? t.status}`);
     lines.push(`المشاركون المعتمدون: ${state.approvedPlayers.length} / ${t.maxParticipants}`);
   }
-  lines.push(`تقدم المباريات: ${stats.completedMatches} / ${stats.totalMatches} مكتملة`);
-  lines.push(`إجمالي (${unit}): ${stats.totalGoals}`);
+  if (isRacing) {
+    const completedRaces = races.filter((r) => r.isCompleted).length;
+    lines.push(`تقدم السباقات: ${completedRaces} / ${races.length} مكتملة`);
+  } else {
+    lines.push(`تقدم المباريات: ${stats.completedMatches} / ${stats.totalMatches} مكتملة`);
+    lines.push(`إجمالي (${unit}): ${stats.totalGoals}`);
+  }
   lines.push('');
 
   if (resolvedChampion) {
     lines.push(`🥇 بطل البطولة: ${resolvedChampion.name} (${resolvedChampion.elysiumNetId})`);
     if (resolvedChampion.clubName) lines.push(`   الفريق / النادي: ${resolvedChampion.clubName}`);
-    if (finalMatch?.isCompleted && finalMatch.winnerId) {
-      const runnerUpId = finalMatch.winnerId === finalMatch.player1Id ? finalMatch.player2Id : finalMatch.player1Id;
-      const runnerUp = runnerUpId ? playersById.get(runnerUpId) : null;
-      if (runnerUp) lines.push(`🥈 الوصيف: ${runnerUp.name} (${runnerUp.elysiumNetId})`);
-    }
-    if (thirdPlaceMatch?.isCompleted && thirdPlaceMatch.winnerId) {
-      const thirdPlayer = playersById.get(thirdPlaceMatch.winnerId);
-      if (thirdPlayer) lines.push(`🥉 المركز الثالث: ${thirdPlayer.name} (${thirdPlayer.elysiumNetId})`);
+    if (isRacing && racingStandings.length >= 2) {
+      const podium = racingStandings.filter((r) => r.player.id !== resolvedChampion.id);
+      if (podium[0]) lines.push(`🥈 الوصيف: ${podium[0].player.name} (${podium[0].totalPoints} نقطة)`);
+      if (podium[1]) lines.push(`🥉 المركز الثالث: ${podium[1].player.name} (${podium[1].totalPoints} نقطة)`);
+    } else {
+      if (finalMatch?.isCompleted && finalMatch.winnerId) {
+        const runnerUpId = finalMatch.winnerId === finalMatch.player1Id ? finalMatch.player2Id : finalMatch.player1Id;
+        const runnerUp = runnerUpId ? playersById.get(runnerUpId) : null;
+        if (runnerUp) lines.push(`🥈 الوصيف: ${runnerUp.name} (${runnerUp.elysiumNetId})`);
+      }
+      if (thirdPlaceMatch?.isCompleted && thirdPlaceMatch.winnerId) {
+        const thirdPlayer = playersById.get(thirdPlaceMatch.winnerId);
+        if (thirdPlayer) lines.push(`🥉 المركز الثالث: ${thirdPlayer.name} (${thirdPlayer.elysiumNetId})`);
+      }
     }
     lines.push('');
   }
 
-  lines.push('── أبرز الجوائز والإحصائيات ──');
-  lines.push(`• هداف البطولة / الأكثر تسجيلاً: ${stats.topScorer ? `${stats.topScorer.player.name} (${stats.topScorer.goalsScored} ${unit})` : 'لم يتحدد بعد'}`);
-  lines.push(`• أقوى دفاع: ${stats.bestDefense ? `${stats.bestDefense.player.name} (استقبل ${stats.bestDefense.goalsConceded} | نظيفة ${stats.bestDefense.cleanSheets})` : 'لم يتحدد بعد'}`);
-  lines.push(`• أعلى نسبة فوز: ${stats.highestWinRate ? `${stats.highestWinRate.player.name} (${stats.highestWinRate.winRatePercent}% - ${stats.highestWinRate.wins} فوز)` : 'لم يتحدد بعد'}`);
+  if (isRacing) {
+    if (racingStandings.length > 0) {
+      lines.push('── ترتيب نقاط المتسابقين ──');
+      for (const row of racingStandings) {
+        const qual = t?.format === 'RACE_QUALIFIERS_FINAL' && row.isQualified ? ' ✓ متأهل للنهائي' : '';
+        lines.push(
+          `  ${row.rank}. ${row.player.name} — ${row.totalPoints} نقطة (سباقات ${row.racesEntered} | فوز ${row.wins} | منصة ${row.podiums})${qual}`
+        );
+      }
+    }
+    if (races.length > 0) {
+      lines.push('');
+      lines.push('── نتائج السباقات ──');
+      for (const race of races) {
+        const stageAr = RACE_STAGE_META[race.stage]?.labelAr ?? race.stage;
+        const trackSuffix = race.trackName ? ` — ${race.trackName}` : '';
+        lines.push(`▶ ${race.title} (${stageAr}${trackSuffix}) [${race.isCompleted ? 'مكتمل' : 'جاري'}]`);
+        for (const res of race.results || []) {
+          const pName = playersById.get(res.playerId)?.name ?? `متسابق #${res.playerId}`;
+          const timeStr = res.bestLapOrTime ? ` • ${res.bestLapOrTime}` : '';
+          const dnfStr = res.dnf ? ' [DNF]' : '';
+          lines.push(`  ${res.position}. ${pName} — +${res.pointsAwarded} ن${timeStr}${dnfStr}`);
+        }
+      }
+    }
+  } else {
+    lines.push('── أبرز الجوائز والإحصائيات ──');
+    lines.push(`• هداف البطولة / الأكثر تسجيلاً: ${stats.topScorer ? `${stats.topScorer.player.name} (${stats.topScorer.goalsScored} ${unit})` : 'لم يتحدد بعد'}`);
+    lines.push(`• أقوى دفاع: ${stats.bestDefense ? `${stats.bestDefense.player.name} (استقبل ${stats.bestDefense.goalsConceded} | نظيفة ${stats.bestDefense.cleanSheets})` : 'لم يتحدد بعد'}`);
+    lines.push(`• أعلى نسبة فوز: ${stats.highestWinRate ? `${stats.highestWinRate.player.name} (${stats.highestWinRate.winRatePercent}% - ${stats.highestWinRate.wins} فوز)` : 'لم يتحدد بعد'}`);
 
-  if (state.groupsWithStandings.length > 0) {
-    lines.push('');
-    lines.push('── ترتيب المجموعات ──');
-    for (const grp of state.groupsWithStandings) {
-      lines.push(`[${grp.group.name}]`);
-      for (const row of grp.standings) {
+    if (state.groupsWithStandings.length > 0) {
+      lines.push('');
+      lines.push('── ترتيب المجموعات ──');
+      for (const grp of state.groupsWithStandings) {
+        lines.push(`[${grp.group.name}]`);
+        for (const row of grp.standings) {
+          const qual = row.isQualified ? ' ✓ متأهل' : '';
+          const diff = row.goalDifference > 0 ? `+${row.goalDifference}` : `${row.goalDifference}`;
+          lines.push(`  ${row.position}. ${row.player.name} — ${row.points} ن (لعب ${row.played} | ف ${row.wins} | ت ${row.draws} | خ ${row.losses} | ف.أ ${diff})${qual}`);
+        }
+      }
+    } else if (state.leagueStandings.length > 0) {
+      lines.push('');
+      lines.push('── ترتيب جدول الدوري ──');
+      for (const row of state.leagueStandings) {
         const qual = row.isQualified ? ' ✓ متأهل' : '';
         const diff = row.goalDifference > 0 ? `+${row.goalDifference}` : `${row.goalDifference}`;
         lines.push(`  ${row.position}. ${row.player.name} — ${row.points} ن (لعب ${row.played} | ف ${row.wins} | ت ${row.draws} | خ ${row.losses} | ف.أ ${diff})${qual}`);
       }
     }
-  } else if (state.leagueStandings.length > 0) {
-    lines.push('');
-    lines.push('── ترتيب جدول الدوري ──');
-    for (const row of state.leagueStandings) {
-      const qual = row.isQualified ? ' ✓ متأهل' : '';
-      const diff = row.goalDifference > 0 ? `+${row.goalDifference}` : `${row.goalDifference}`;
-      lines.push(`  ${row.position}. ${row.player.name} — ${row.points} ن (لعب ${row.played} | ف ${row.wins} | ت ${row.draws} | خ ${row.losses} | ف.أ ${diff})${qual}`);
-    }
-  }
 
-  if (state.knockoutMatches.length > 0) {
-    lines.push('');
-    lines.push('── نتائج الأدوار الإقصائية ──');
-    const byStage = new Map();
-    for (const m of state.knockoutMatches) {
-      if (!byStage.has(m.stage)) byStage.set(m.stage, []);
-      byStage.get(m.stage).push(m);
-    }
-    const orderedStages = [...byStage.keys()].sort((a, b) => MATCH_STAGE_META[a].order - MATCH_STAGE_META[b].order);
-    for (const st of orderedStages) {
-      lines.push(`▶ ${MATCH_STAGE_META[st].labelAr}`);
-      for (const m of byStage.get(st).sort((a, b) => a.bracketIndex - b.bracketIndex)) {
-        lines.push(`  • ${formatMatchLine(m, playersById)}`);
+    if (state.knockoutMatches.length > 0) {
+      lines.push('');
+      lines.push('── نتائج الأدوار الإقصائية ──');
+      const byStage = new Map();
+      for (const m of state.knockoutMatches) {
+        if (!byStage.has(m.stage)) byStage.set(m.stage, []);
+        byStage.get(m.stage).push(m);
+      }
+      const orderedStages = [...byStage.keys()].sort((a, b) => MATCH_STAGE_META[a].order - MATCH_STAGE_META[b].order);
+      for (const st of orderedStages) {
+        lines.push(`▶ ${MATCH_STAGE_META[st].labelAr}`);
+        for (const m of byStage.get(st).sort((a, b) => a.bracketIndex - b.bracketIndex)) {
+          lines.push(`  • ${formatMatchLine(m, playersById)}`);
+        }
       }
     }
-  }
 
-  const groupOrLeagueMatches = state.allMatches.filter((m) => m.stage === MatchStage.GROUP || m.stage === MatchStage.LEAGUE);
-  if (groupOrLeagueMatches.length > 0) {
-    lines.push('');
-    lines.push('── نتائج مباريات المجموعات / الدوري ──');
-    for (const m of groupOrLeagueMatches) {
-      lines.push(`  • ${formatMatchLine(m, playersById)}`);
+    const groupOrLeagueMatches = state.allMatches.filter((m) => m.stage === MatchStage.GROUP || m.stage === MatchStage.LEAGUE);
+    if (groupOrLeagueMatches.length > 0) {
+      lines.push('');
+      lines.push('── نتائج مباريات المجموعات / الدوري ──');
+      for (const m of groupOrLeagueMatches) {
+        lines.push(`  • ${formatMatchLine(m, playersById)}`);
+      }
     }
   }
 
@@ -611,24 +751,36 @@ export function buildExportData(state) {
   social.push('');
   if (resolvedChampion) {
     social.push(`👑 البطل المتوج: ${resolvedChampion.name} (${resolvedChampion.elysiumNetId})`);
+  } else if (isRacing) {
+    const completedRaces = races.filter((r) => r.isCompleted).length;
+    social.push(`🏎️ الحالة: ${TOURNAMENT_STATUS_META[t?.status]?.labelAr ?? 'جارية'} (${completedRaces}/${races.length} سباق)`);
   } else {
     social.push(`📊 الحالة: ${TOURNAMENT_STATUS_META[t?.status]?.labelAr ?? 'جارية'} (${stats.completedMatches}/${stats.totalMatches} مباراة)`);
   }
-  if (finalMatch && (finalMatch.isCompleted || finalMatch.leg1Score1 != null)) {
-    social.push(`🔥 النهائي: ${formatMatchLine(finalMatch, playersById)}`);
+  if (isRacing) {
+    if (racingStandings.length > 0) {
+      social.push('🏁 ترتيب الصدارة:');
+      for (const row of racingStandings.slice(0, 3)) {
+        social.push(`  ${row.rank}. ${row.player.name} (${row.totalPoints} نقطة)`);
+      }
+    }
+  } else {
+    if (finalMatch && (finalMatch.isCompleted || finalMatch.leg1Score1 != null)) {
+      social.push(`🔥 النهائي: ${formatMatchLine(finalMatch, playersById)}`);
+    }
+    if (thirdPlaceMatch && thirdPlaceMatch.isCompleted) {
+      social.push(`🥉 المركز الثالث: ${formatMatchLine(thirdPlaceMatch, playersById)}`);
+    }
+    const semis = state.knockoutMatches.filter((m) => m.stage === MatchStage.SEMI_FINAL && m.isCompleted).sort((a, b) => a.bracketIndex - b.bracketIndex);
+    if (semis.length > 0) {
+      social.push('⚡ نصف النهائي:');
+      for (const m of semis) social.push(`• ${formatMatchLine(m, playersById)}`);
+    }
+    if (stats.topScorer) {
+      social.push(`⚽ الأكثر تسجيلاً: ${stats.topScorer.player.name} (${stats.topScorer.goalsScored} ${unit})`);
+    }
+    social.push(`🥅 إجمالي (${unit}): ${stats.totalGoals}`);
   }
-  if (thirdPlaceMatch && thirdPlaceMatch.isCompleted) {
-    social.push(`🥉 المركز الثالث: ${formatMatchLine(thirdPlaceMatch, playersById)}`);
-  }
-  const semis = state.knockoutMatches.filter((m) => m.stage === MatchStage.SEMI_FINAL && m.isCompleted).sort((a, b) => a.bracketIndex - b.bracketIndex);
-  if (semis.length > 0) {
-    social.push('⚡ نصف النهائي:');
-    for (const m of semis) social.push(`• ${formatMatchLine(m, playersById)}`);
-  }
-  if (stats.topScorer) {
-    social.push(`⚽ الأكثر تسجيلاً: ${stats.topScorer.player.name} (${stats.topScorer.goalsScored} ${unit})`);
-  }
-  social.push(`🥅 إجمالي (${unit}): ${stats.totalGoals}`);
   social.push('');
   const gameTag = gameTitle.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'Gaming';
   social.push(`#CP4_ARENA #${gameTag} #ElysiumNet`);
@@ -757,6 +909,27 @@ export function computeSeasonLeaderboard(db) {
     }
   }
 
+  const completedRaces = db
+    .prepare('SELECT r.*, rr.player_id, rr.position, rr.points_awarded, rr.dnf FROM races r JOIN race_results rr ON rr.race_id = r.id WHERE r.is_completed = 1')
+    .all();
+
+  const racingScoreByTournamentPlayer = new Map();
+  for (const row of completedRaces) {
+    const key = keyByPlayerId.get(row.player_id);
+    const entry = key ? aggByKey.get(key) : null;
+    if (entry) {
+      entry.matchesPlayed += 1;
+      entry.goalsScored += Number(row.points_awarded) || 0;
+      if (!row.dnf && row.position === 1) entry.wins += 1;
+      else if (!row.dnf && row.position <= 3) entry.draws += 1;
+    }
+    if (!racingScoreByTournamentPlayer.has(row.tournament_id)) {
+      racingScoreByTournamentPlayer.set(row.tournament_id, new Map());
+    }
+    const tMap = racingScoreByTournamentPlayer.get(row.tournament_id);
+    tMap.set(row.player_id, (tMap.get(row.player_id) || 0) + (Number(row.points_awarded) || 0));
+  }
+
   for (const t of tournaments) {
     const finalM = finalsByTournament.get(t.id);
     const champId = t.champion_player_id ?? finalM?.winner_id ?? null;
@@ -775,6 +948,18 @@ export function computeSeasonLeaderboard(db) {
     if (thirdM?.winner_id != null) {
       const k = keyByPlayerId.get(thirdM.winner_id);
       if (k && aggByKey.has(k)) aggByKey.get(k).thirdPlaces += 1;
+    }
+    if (!finalM && t.status === 'COMPLETED' && racingScoreByTournamentPlayer.has(t.id)) {
+      const sorted = [...racingScoreByTournamentPlayer.get(t.id).entries()].sort((a, b) => b[1] - a[1]);
+      const nonChamp = sorted.filter(([pid]) => pid !== champId);
+      if (nonChamp[0]) {
+        const k = keyByPlayerId.get(nonChamp[0][0]);
+        if (k && aggByKey.has(k)) aggByKey.get(k).runnerUps += 1;
+      }
+      if (nonChamp[1]) {
+        const k = keyByPlayerId.get(nonChamp[1][0]);
+        if (k && aggByKey.has(k)) aggByKey.get(k).thirdPlaces += 1;
+      }
     }
   }
 
@@ -834,10 +1019,14 @@ export function buildHallOfFame(db) {
 
   const getPlayerStmt = db.prepare('SELECT * FROM players WHERE id = ?');
   const getMatchesStmt = db.prepare('SELECT * FROM matches WHERE tournament_id = ?');
+  const getRacesStmt = db.prepare('SELECT * FROM races WHERE tournament_id = ? ORDER BY race_number ASC, id ASC');
+  const getRaceResultsStmt = db.prepare('SELECT * FROM race_results WHERE tournament_id = ?');
 
   return tournaments
     .map((t) => {
       const matches = getMatchesStmt.all(t.id);
+      const races = getRacesStmt.all(t.id);
+      const raceResults = getRaceResultsStmt.all(t.id);
       const finalM = matches.find((m) => m.stage === MatchStage.FINAL && m.is_completed);
       const thirdM = matches.find((m) => m.stage === MatchStage.THIRD_PLACE && m.is_completed);
       const champId = t.champion_player_id ?? finalM?.winner_id ?? null;
@@ -845,11 +1034,19 @@ export function buildHallOfFame(db) {
       if (!champion) return null;
 
       let runnerUp = null;
+      let thirdPlace = thirdM?.winner_id != null ? summarizePlayerSlim(getPlayerStmt.get(thirdM.winner_id)) : null;
       if (finalM?.winner_id != null) {
         const runnerId = finalM.winner_id === finalM.player1_id ? finalM.player2_id : finalM.player1_id;
         if (runnerId != null) runnerUp = summarizePlayerSlim(getPlayerStmt.get(runnerId));
+      } else if (races.length > 0 && raceResults.length > 0) {
+        const ptsByPlayer = new Map();
+        for (const rr of raceResults) {
+          ptsByPlayer.set(rr.player_id, (ptsByPlayer.get(rr.player_id) || 0) + (Number(rr.points_awarded) || 0));
+        }
+        const sorted = [...ptsByPlayer.entries()].filter(([pid]) => pid !== champId).sort((a, b) => b[1] - a[1]);
+        if (sorted[0]) runnerUp = summarizePlayerSlim(getPlayerStmt.get(sorted[0][0]));
+        if (sorted[1]) thirdPlace = summarizePlayerSlim(getPlayerStmt.get(sorted[1][0]));
       }
-      const thirdPlace = thirdM?.winner_id != null ? summarizePlayerSlim(getPlayerStmt.get(thirdM.winner_id)) : null;
 
       let totalGoals = 0;
       let completedMatches = 0;
@@ -858,6 +1055,10 @@ export function buildHallOfFame(db) {
         if (m.leg1_score1 != null && m.leg1_score2 != null) {
           totalGoals += m.leg1_score1 + m.leg1_score2 + (m.is_two_legged ? (m.leg2_score1 ?? 0) + (m.leg2_score2 ?? 0) : 0);
         }
+      }
+      if (races.length > 0) {
+        completedMatches = races.filter((r) => r.is_completed).length;
+        totalGoals = raceResults.reduce((sum, rr) => sum + (Number(rr.points_awarded) || 0), 0);
       }
 
       return {
@@ -869,7 +1070,7 @@ export function buildHallOfFame(db) {
         startDateTime: t.start_date_time,
         createdAt: t.created_at,
         completedMatches,
-        totalMatches: matches.length,
+        totalMatches: races.length > 0 ? races.length : matches.length,
         totalGoals,
         championName: champion.name,
         championElysiumNetId: champion.elysiumNetId,

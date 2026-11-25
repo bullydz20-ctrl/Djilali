@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SportsEsports
@@ -41,11 +43,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,12 +60,20 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.local.TournamentEntity
+import com.example.data.model.DEFAULT_RACING_POINTS
+import com.example.data.model.DEFAULT_RACING_POINTS_JSON
 import com.example.data.model.DrawMode
 import com.example.data.model.GAME_CATALOG
 import com.example.data.model.KnockoutTieRule
+import com.example.data.model.PlayMode
 import com.example.data.model.TournamentFormat
 import com.example.data.model.TournamentStatus
+import com.example.data.model.findApprovedGamePreset
+import com.example.data.model.formatRacingPointsConfig
+import com.example.data.model.parseRacingPointsConfig
 import com.example.domain.TournamentEngine
+import com.example.ui.components.OnlineCompatibilityBanner
+import com.example.ui.theme.AmberDraw
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CrimsonLoss
@@ -83,20 +95,26 @@ fun AdminTournamentSettingsTab(
     onDeleteTournament: () -> Unit
 ) {
     val tid = tournament?.id
+    val defaultPreset = remember { GAME_CATALOG.first() }
+    val initialPreset = remember(tid, tournament?.gameTitle) {
+        findApprovedGamePreset(tournament?.gameTitle)
+    }
+    val isExistingLegacy = tournament != null && initialPreset == null
+
     var name by remember(tid, tournament?.name) {
-        mutableStateOf(tournament?.name ?: "بطولة النخبة — CP4 ARENA")
+        mutableStateOf(tournament?.name ?: "بطولة ${defaultPreset.label} — CP4 ARENA")
     }
     var gameTitle by remember(tid, tournament?.gameTitle) {
-        mutableStateOf(tournament?.gameTitle ?: "FIFA 22")
+        mutableStateOf(tournament?.gameTitle ?: defaultPreset.label)
     }
     var gameCategory by remember(tid, tournament?.gameCategory) {
-        mutableStateOf(tournament?.gameCategory ?: "كرة قدم")
+        mutableStateOf(tournament?.gameCategory ?: defaultPreset.categoryAr)
     }
     var scoreUnitLabel by remember(tid, tournament?.scoreUnitLabel) {
-        mutableStateOf(tournament?.scoreUnitLabel ?: "هدف")
+        mutableStateOf(tournament?.scoreUnitLabel ?: defaultPreset.scoreUnitLabel)
     }
     var description by remember(tid, tournament?.description) {
-        mutableStateOf(tournament?.description ?: "البطولة الرسمية لمجتمع CP4 ARENA • جميع الألعاب مدعومة.")
+        mutableStateOf(tournament?.description ?: "البطولة الرسمية لمجتمع CP4 ARENA • قوانين مخصصة حسب اللعبة المختارة.")
     }
     var bannerUri by remember(tid, tournament?.bannerUri) { mutableStateOf(tournament?.bannerUri) }
     var startDateTime by remember(tid, tournament?.startDateTime) {
@@ -106,7 +124,20 @@ fun AdminTournamentSettingsTab(
         mutableStateOf((tournament?.maxParticipants ?: 16).toString())
     }
     var format by remember(tid, tournament?.format) {
-        mutableStateOf(tournament?.format ?: TournamentFormat.GROUPS_KNOCKOUT)
+        mutableStateOf(tournament?.format ?: defaultPreset.defaultFormat)
+    }
+    var playMode by remember(tid, tournament?.playMode) {
+        mutableStateOf(tournament?.playMode ?: defaultPreset.defaultPlayMode)
+    }
+    var teamSize by remember(tid, tournament?.teamSize) {
+        mutableStateOf((tournament?.teamSize ?: defaultPreset.defaultTeamSize).toString())
+    }
+    var bestOf by remember(tid, tournament?.bestOf) {
+        mutableIntStateOf(tournament?.bestOf ?: defaultPreset.defaultBestOf)
+    }
+    var racingPointsText by remember(tid, tournament?.racingPointsConfig) {
+        val list = parseRacingPointsConfig(tournament?.racingPointsConfig ?: DEFAULT_RACING_POINTS_JSON)
+        mutableStateOf(list.joinToString(", "))
     }
     var groupCount by remember(tid, tournament?.groupCount) {
         mutableStateOf((tournament?.groupCount ?: 4).toString())
@@ -121,15 +152,37 @@ fun AdminTournamentSettingsTab(
         mutableStateOf(tournament?.knockoutTieRule ?: KnockoutTieRule.SINGLE_MATCH_PENALTIES)
     }
     var matchDuration by remember(tid, tournament?.matchDurationMinutes) {
-        mutableStateOf((tournament?.matchDurationMinutes ?: 12).toString())
+        mutableStateOf((tournament?.matchDurationMinutes ?: defaultPreset.defaultDurationMinutes).toString())
     }
     var targetGoalsRule by remember(tid, tournament?.targetGoalsRule) {
-        mutableStateOf(tournament?.targetGoalsRule ?: "شوطان • 6 دقائق للشوط")
+        mutableStateOf(tournament?.targetGoalsRule ?: defaultPreset.defaultRule)
     }
     var manualClosed by remember(tid, tournament?.isRegistrationClosedManual) {
         mutableStateOf(tournament?.isRegistrationClosedManual ?: false)
     }
+    var isThirdPlaceEnabled by remember(tid, tournament?.isThirdPlaceEnabled) {
+        mutableStateOf(tournament?.isThirdPlaceEnabled ?: true)
+    }
     var showDeleteConfirm by remember(tid) { mutableStateOf(false) }
+
+    val selectedPreset = findApprovedGamePreset(gameTitle)
+    val activePlayModes = selectedPreset?.supportedPlayModes ?: PlayMode.entries
+    val activeFormats = remember(selectedPreset, format) {
+        if (selectedPreset != null) {
+            selectedPreset.supportedFormats
+        } else {
+            listOf(
+                TournamentFormat.GROUPS_KNOCKOUT,
+                TournamentFormat.LEAGUE_KNOCKOUT,
+                TournamentFormat.DIRECT_KNOCKOUT,
+                TournamentFormat.RACE_POINTS,
+                TournamentFormat.RACE_QUALIFIERS_FINAL
+            )
+        }
+    }
+    val supportsTeamSize = playMode == PlayMode.TEAMS && (selectedPreset?.supportsTeamSize ?: true)
+    val supportsBestOf = selectedPreset?.supportsBestOf ?: (bestOf > 1)
+    val isRacingMode = format.isRacing || selectedPreset?.supportsCustomRacePoints == true
 
     val bannerPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -161,7 +214,7 @@ fun AdminTournamentSettingsTab(
                             color = ChampionshipGold
                         )
                         Text(
-                            text = "اختر اللعبة من القائمة أو اكتب اسم أي لعبة مخصصة ثم اضغط «إنشاء البطولة الجديدة».",
+                            text = "اختر إحدى الألعاب الـ 7 المعتمدة ليضبط النظام القواعد المناسبة لها تلقائياً، ثم اضغط «إنشاء البطولة الجديدة».",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
@@ -170,6 +223,7 @@ fun AdminTournamentSettingsTab(
             }
         }
 
+        // Approved 7-Game Catalog Selector + Online Compatibility Verification
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MidnightSurface),
@@ -184,10 +238,10 @@ fun AdminTournamentSettingsTab(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Icon(Icons.Default.SportsEsports, contentDescription = null, tint = ChampionshipGold)
-                    Text("اختيار اللعبة (دعم جميع الألعاب)", style = MaterialTheme.typography.titleMedium, color = ChampionshipGold)
+                    Text("قائمة الألعاب المعتمدة (7 ألعاب)", style = MaterialTheme.typography.titleMedium, color = ChampionshipGold)
                 }
                 Text(
-                    text = "اختر لعبة جاهزة أو اكتب أي لعبة مخصصة (كرة قدم، قتال، شوتر، سباقات...):",
+                    text = "يتكيف نموذج البطولة والقواعد تلقائياً حسب نوع اللعبة المختارة:",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -201,12 +255,28 @@ fun AdminTournamentSettingsTab(
                         FilterChip(
                             selected = selected,
                             onClick = {
+                                val prevDefaultName = "بطولة $gameTitle — CP4 ARENA"
                                 gameTitle = item.label
                                 gameCategory = item.categoryAr
                                 scoreUnitLabel = item.scoreUnitLabel
                                 targetGoalsRule = item.defaultRule
                                 matchDuration = item.defaultDurationMinutes.toString()
-                                if (tournament == null || name.startsWith("بطولة النخبة") || name.startsWith("بطولة جديدة")) {
+                                if (format !in item.supportedFormats) {
+                                    format = item.defaultFormat
+                                }
+                                if (playMode !in item.supportedPlayModes) {
+                                    playMode = item.defaultPlayMode
+                                }
+                                teamSize = if (playMode == PlayMode.TEAMS) {
+                                    item.defaultTeamSize.coerceAtLeast(2).toString()
+                                } else {
+                                    "1"
+                                }
+                                bestOf = if (item.supportsBestOf) item.defaultBestOf else 1
+                                if (item.supportsCustomRacePoints && racingPointsText.isBlank()) {
+                                    racingPointsText = DEFAULT_RACING_POINTS.joinToString(", ")
+                                }
+                                if (tournament == null || name.startsWith("بطولة النخبة") || name.startsWith("بطولة جديدة") || name == prevDefaultName) {
                                     name = "بطولة ${item.label} — CP4 ARENA"
                                 }
                             },
@@ -220,33 +290,33 @@ fun AdminTournamentSettingsTab(
                     }
                 }
 
-                OutlinedTextField(
-                    value = gameTitle,
-                    onValueChange = { gameTitle = it },
-                    label = { Text("اسم اللعبة المخصصة *") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("admin_game_title_input")
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = gameCategory,
-                        onValueChange = { gameCategory = it },
-                        label = { Text("التصنيف") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = scoreUnitLabel,
-                        onValueChange = { scoreUnitLabel = it },
-                        label = { Text("وحدة النتيجة (هدف/جولة/نقطة)") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1.2f).testTag("admin_score_unit_input")
-                    )
+                if (selectedPreset != null) {
+                    OnlineCompatibilityBanner(preset = selectedPreset)
+                } else if (isExistingLegacy) {
+                    Surface(
+                        color = AmberDraw.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, AmberDraw.copy(alpha = 0.55f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Info, contentDescription = null, tint = AmberDraw, modifier = Modifier.size(18.dp))
+                            Text(
+                                text = "بطولة سابقة محفوظة للعبة «$gameTitle». جميع نتائجها ومشاركوها محفوظون، ويمكنك الاستمرار بإدارتها أو اختيار لعبة من القائمة المعتمدة.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextPrimary
+                            )
+                        }
+                    }
                 }
             }
         }
 
+        // Basic Details Card
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MidnightSurface),
@@ -308,6 +378,7 @@ fun AdminTournamentSettingsTab(
             }
         }
 
+        // Dynamic Game-Specific System & Rules Card
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MidnightSurface),
@@ -317,24 +388,134 @@ fun AdminTournamentSettingsTab(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("النظام والقواعد المخصصة", style = MaterialTheme.typography.titleMedium, color = CyberSky)
+                Text(
+                    text = "نظام البطولة وإعدادات ${selectedPreset?.label ?: gameTitle}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = CyberSky
+                )
 
-                Text("نظام البطولة", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TournamentFormat.entries.forEach { fmt ->
-                        FilterChip(
-                            selected = format == fmt,
-                            onClick = { format = fmt },
-                            label = { Text(fmt.labelAr) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = ElectricCobalt,
-                                selectedLabelColor = TextPrimary
-                            ),
-                            modifier = Modifier.fillMaxWidth()
+                // Play Mode (e.g., FIFA 22 Teams/1v1, COD 1v1/Teams, Fighting locked 1v1, Racing Race Points)
+                if (activePlayModes.size > 1) {
+                    Text("نمط المشاركة", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        activePlayModes.forEach { pm ->
+                            FilterChip(
+                                selected = playMode == pm,
+                                onClick = {
+                                    playMode = pm
+                                    if (pm == PlayMode.TEAMS && (teamSize.toIntOrNull() ?: 1) < 2) {
+                                        teamSize = (selectedPreset?.defaultTeamSize ?: 2).coerceAtLeast(2).toString()
+                                    } else if (pm != PlayMode.TEAMS) {
+                                        teamSize = "1"
+                                    }
+                                },
+                                label = { Text(pm.labelAr) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricCobalt,
+                                    selectedLabelColor = ChampionshipGold
+                                ),
+                                modifier = Modifier.testTag("admin_play_mode_${pm.name}")
+                            )
+                        }
+                    }
+                } else {
+                    Surface(
+                        color = ElectricCobalt.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, CyberSky.copy(alpha = 0.45f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "نمط اللعب المعتمد: ${playMode.labelAr}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = CyberSky,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                         )
                     }
                 }
 
+                // Team Size (only when TEAMS mode is selected and supported)
+                if (supportsTeamSize) {
+                    Text("عدد اللاعبين في كل فريق", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(2, 3, 4, 5, 6, 11).forEach { sz ->
+                            FilterChip(
+                                selected = teamSize.toIntOrNull() == sz,
+                                onClick = { teamSize = sz.toString() },
+                                label = { Text("$sz لاعبين") },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = RoyalViolet,
+                                    selectedLabelColor = ChampionshipGold
+                                )
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = teamSize,
+                        onValueChange = { if (it.all { c -> c.isDigit() } && it.length <= 2) teamSize = it },
+                        label = { Text("تحديد عدد اللاعبين يدوياً (2 - 16)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("admin_team_size_input")
+                    )
+                }
+
+                // Game-filtered Tournament Formats
+                Text("نظام البطولة المتاح للعبة", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    activeFormats.forEach { fmt ->
+                        FilterChip(
+                            selected = format == fmt,
+                            onClick = { format = fmt },
+                            label = {
+                                Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                    Text(fmt.labelAr, style = MaterialTheme.typography.labelLarge)
+                                    Text(fmt.descriptionAr, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                }
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = ElectricCobalt,
+                                selectedLabelColor = TextPrimary
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("admin_format_${fmt.name}")
+                        )
+                    }
+                }
+
+                // Best-of (Fighting + Call of Duty)
+                if (supportsBestOf) {
+                    Text("عدد الجولات / الحسم (Best of)", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(1, 3, 5).forEach { bo ->
+                            FilterChip(
+                                selected = bestOf == bo,
+                                onClick = {
+                                    bestOf = bo
+                                    targetGoalsRule = "نظام ${playMode.labelAr} — Best of $bo"
+                                },
+                                label = { Text("Best of $bo") },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = RoyalViolet,
+                                    selectedLabelColor = ChampionshipGold
+                                ),
+                                modifier = Modifier.testTag("admin_best_of_$bo")
+                            )
+                        }
+                    }
+                }
+
+                // Participants + Groups / Qualifiers
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = maxParticipants,
@@ -356,68 +537,135 @@ fun AdminTournamentSettingsTab(
                     }
                 }
 
-                if (format != TournamentFormat.DIRECT_KNOCKOUT) {
+                if (format == TournamentFormat.GROUPS_KNOCKOUT ||
+                    format == TournamentFormat.LEAGUE_KNOCKOUT ||
+                    format == TournamentFormat.RACE_QUALIFIERS_FINAL
+                ) {
                     OutlinedTextField(
                         value = qualifiersPerGroup,
                         onValueChange = { if (it.all { c -> c.isDigit() } && it.length <= 2) qualifiersPerGroup = it },
                         label = {
                             Text(
-                                if (format == TournamentFormat.GROUPS_KNOCKOUT) "المتأهلون من كل مجموعة"
-                                else "عدد المتأهلين من الدوري للإقصائيات"
+                                when (format) {
+                                    TournamentFormat.GROUPS_KNOCKOUT -> "المتأهلون من كل مجموعة"
+                                    TournamentFormat.LEAGUE_KNOCKOUT -> "عدد المتأهلين من الدوري للإقصائيات"
+                                    TournamentFormat.RACE_QUALIFIERS_FINAL -> "عدد المتأهلين للسباق النهائي"
+                                    else -> "عدد المتأهلين"
+                                }
                             )
                         },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("admin_qualifiers_input")
                     )
                 }
 
-                Text("نظام القرعة", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DrawMode.entries.forEach { dm ->
+                // Racing Placement Points Customization (RIDE 4 / DriveClub)
+                if (isRacingMode) {
+                    Text("تخصيص نقاط المراكز للسباقات (من المركز 1 إلى الأخير)", style = MaterialTheme.typography.labelLarge, color = ChampionshipGold)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         FilterChip(
-                            selected = drawMode == dm,
-                            onClick = { drawMode = dm },
-                            label = { Text(dm.labelAr) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = RoyalViolet,
-                                selectedLabelColor = TextPrimary
-                            )
+                            selected = false,
+                            onClick = { racingPointsText = "25, 18, 15, 12, 10, 8, 6, 4, 2, 1" },
+                            label = { Text("قياسي (25-18-15...)") }
+                        )
+                        FilterChip(
+                            selected = false,
+                            onClick = { racingPointsText = "10, 8, 6, 5, 4, 3, 2, 1" },
+                            label = { Text("مختصر (10-8-6...)") }
+                        )
+                        FilterChip(
+                            selected = false,
+                            onClick = { racingPointsText = "15, 12, 10, 8, 6, 4, 2, 1" },
+                            label = { Text("متوازن (15-12-10...)") }
                         )
                     }
-                }
-
-                Text("قواعد الأدوار الإقصائية", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    KnockoutTieRule.entries.forEach { rule ->
-                        FilterChip(
-                            selected = tieRule == rule,
-                            onClick = { tieRule = rule },
-                            label = { Text(rule.labelAr) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = ElectricCobalt,
-                                selectedLabelColor = TextPrimary
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
-                        value = matchDuration,
-                        onValueChange = { if (it.all { c -> c.isDigit() } && it.length <= 2) matchDuration = it },
-                        label = { Text("مدة المباراة (دقيقة)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        value = racingPointsText,
+                        onValueChange = { racingPointsText = it },
+                        label = { Text("نقاط كل مركز مفصولة بفاصلة") },
+                        placeholder = { Text("25, 18, 15, 12, 10, 8, 6, 4, 2, 1") },
                         singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.fillMaxWidth().testTag("admin_racing_points_input")
                     )
+                }
+
+                // Match/Knockout/Draw controls (only for non-racing tournaments)
+                if (!isRacingMode) {
+                    Text("نظام القرعة", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DrawMode.entries.forEach { dm ->
+                            FilterChip(
+                                selected = drawMode == dm,
+                                onClick = { drawMode = dm },
+                                label = { Text(dm.labelAr) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = RoyalViolet,
+                                    selectedLabelColor = TextPrimary
+                                )
+                            )
+                        }
+                    }
+
+                    Text("قواعد الأدوار الإقصائية", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        KnockoutTieRule.entries.forEach { rule ->
+                            FilterChip(
+                                selected = tieRule == rule,
+                                onClick = { tieRule = rule },
+                                label = { Text(rule.labelAr) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricCobalt,
+                                    selectedLabelColor = TextPrimary
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = matchDuration,
+                            onValueChange = { if (it.all { c -> c.isDigit() } && it.length <= 2) matchDuration = it },
+                            label = { Text("مدة المباراة (دقيقة)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = targetGoalsRule,
+                            onValueChange = { targetGoalsRule = it },
+                            label = { Text("قاعدة الحسم / الجولات") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1.4f)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("مباراة تحديد المركز الثالث والرابع", style = MaterialTheme.typography.titleSmall, color = TextPrimary)
+                            Text("تأهيل خاسري نصف النهائي تلقائياً للعب على البرونزية", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                        }
+                        Switch(
+                            checked = isThirdPlaceEnabled,
+                            onCheckedChange = { isThirdPlaceEnabled = it },
+                            modifier = Modifier.testTag("admin_third_place_switch")
+                        )
+                    }
+                } else {
                     OutlinedTextField(
                         value = targetGoalsRule,
                         onValueChange = { targetGoalsRule = it },
-                        label = { Text("قاعدة الأهداف / الأشواط") },
+                        label = { Text("قواعد السباق والحلبات") },
                         singleLine = true,
-                        modifier = Modifier.weight(1.4f)
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
@@ -433,9 +681,12 @@ fun AdminTournamentSettingsTab(
                     Switch(checked = manualClosed, onCheckedChange = { manualClosed = it })
                 }
 
-                val cleanGameTitle = gameTitle.trim().ifBlank { "FIFA 22" }
-                val cleanGameCategory = gameCategory.trim().ifBlank { "ألعاب إلكترونية" }
-                val cleanScoreUnit = scoreUnitLabel.trim().ifBlank { "نقطة" }
+                val cleanGameTitle = selectedPreset?.label ?: gameTitle.trim().ifBlank { defaultPreset.label }
+                val cleanGameCategory = selectedPreset?.categoryAr ?: gameCategory.trim().ifBlank { defaultPreset.categoryAr }
+                val cleanScoreUnit = selectedPreset?.scoreUnitLabel ?: scoreUnitLabel.trim().ifBlank { "نقطة" }
+                val cleanTeamSize = if (playMode == PlayMode.TEAMS) (teamSize.toIntOrNull() ?: 2).coerceIn(2, 16) else 1
+                val cleanBestOf = if (supportsBestOf) bestOf.takeIf { it in listOf(1, 3, 5) } ?: 3 else 1
+                val cleanRacingPointsJson = formatRacingPointsConfig(parseRacingPointsConfig(racingPointsText))
 
                 if (tournament != null) {
                     Button(
@@ -451,12 +702,17 @@ fun AdminTournamentSettingsTab(
                                     startDateTime = startDateTime,
                                     maxParticipants = (maxParticipants.toIntOrNull() ?: 16).coerceIn(2, 64),
                                     format = format,
+                                    playMode = playMode,
+                                    teamSize = cleanTeamSize,
+                                    bestOf = cleanBestOf,
+                                    racingPointsConfig = cleanRacingPointsJson,
                                     groupCount = (groupCount.toIntOrNull() ?: 4).coerceIn(1, 8),
                                     qualifiersPerGroup = (qualifiersPerGroup.toIntOrNull() ?: 2).coerceIn(1, 16),
                                     drawMode = drawMode,
                                     knockoutTieRule = tieRule,
                                     matchDurationMinutes = (matchDuration.toIntOrNull() ?: 12).coerceIn(1, 90),
                                     targetGoalsRule = targetGoalsRule,
+                                    isThirdPlaceEnabled = if (isRacingMode) false else isThirdPlaceEnabled,
                                     isRegistrationClosedManual = manualClosed,
                                     status = if (manualClosed && tournament.status == TournamentStatus.REGISTRATION_OPEN) {
                                         TournamentStatus.REGISTRATION_CLOSED
@@ -491,12 +747,17 @@ fun AdminTournamentSettingsTab(
                                     startDateTime = startDateTime.trim().ifBlank { "يُحدد لاحقاً" },
                                     maxParticipants = (maxParticipants.toIntOrNull() ?: 16).coerceIn(2, 64),
                                     format = format,
+                                    playMode = playMode,
+                                    teamSize = cleanTeamSize,
+                                    bestOf = cleanBestOf,
+                                    racingPointsConfig = cleanRacingPointsJson,
                                     groupCount = (groupCount.toIntOrNull() ?: 4).coerceIn(1, 8),
                                     qualifiersPerGroup = (qualifiersPerGroup.toIntOrNull() ?: 2).coerceIn(1, 16),
                                     drawMode = drawMode,
                                     knockoutTieRule = tieRule,
                                     matchDurationMinutes = (matchDuration.toIntOrNull() ?: 12).coerceIn(1, 90),
                                     targetGoalsRule = targetGoalsRule,
+                                    isThirdPlaceEnabled = if (isRacingMode) false else isThirdPlaceEnabled,
                                     isRegistrationClosedManual = manualClosed,
                                     status = if (manualClosed) TournamentStatus.REGISTRATION_CLOSED else TournamentStatus.REGISTRATION_OPEN
                                 )
@@ -518,9 +779,12 @@ fun AdminTournamentSettingsTab(
         }
 
         if (tournament != null) {
-            val cleanGameTitle = gameTitle.trim().ifBlank { "FIFA 22" }
-            val cleanGameCategory = gameCategory.trim().ifBlank { "ألعاب إلكترونية" }
-            val cleanScoreUnit = scoreUnitLabel.trim().ifBlank { "نقطة" }
+            val cleanGameTitle = selectedPreset?.label ?: gameTitle.trim().ifBlank { defaultPreset.label }
+            val cleanGameCategory = selectedPreset?.categoryAr ?: gameCategory.trim().ifBlank { defaultPreset.categoryAr }
+            val cleanScoreUnit = selectedPreset?.scoreUnitLabel ?: scoreUnitLabel.trim().ifBlank { "نقطة" }
+            val cleanTeamSize = if (playMode == PlayMode.TEAMS) (teamSize.toIntOrNull() ?: 2).coerceIn(2, 16) else 1
+            val cleanBestOf = if (supportsBestOf) bestOf.takeIf { it in listOf(1, 3, 5) } ?: 3 else 1
+            val cleanRacingPointsJson = formatRacingPointsConfig(parseRacingPointsConfig(racingPointsText))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -537,12 +801,17 @@ fun AdminTournamentSettingsTab(
                                 startDateTime = "يُحدد لاحقاً",
                                 maxParticipants = (maxParticipants.toIntOrNull() ?: 16).coerceIn(2, 64),
                                 format = format,
+                                playMode = playMode,
+                                teamSize = cleanTeamSize,
+                                bestOf = cleanBestOf,
+                                racingPointsConfig = cleanRacingPointsJson,
                                 groupCount = (groupCount.toIntOrNull() ?: 4).coerceIn(1, 8),
                                 qualifiersPerGroup = (qualifiersPerGroup.toIntOrNull() ?: 2).coerceIn(1, 16),
                                 drawMode = drawMode,
                                 knockoutTieRule = tieRule,
                                 matchDurationMinutes = (matchDuration.toIntOrNull() ?: 12).coerceIn(1, 90),
-                                targetGoalsRule = targetGoalsRule
+                                targetGoalsRule = targetGoalsRule,
+                                isThirdPlaceEnabled = if (isRacingMode) false else isThirdPlaceEnabled
                             )
                         )
                     },
@@ -601,10 +870,50 @@ fun AdminTournamentSettingsTab(
 fun AdminDrawTab(
     uiState: TournamentUiState,
     onRunDraw: (manualGroups: Map<Long, Int>, manualKnockoutOrder: List<Long>) -> Unit,
-    onGenerateKnockoutFromStandings: () -> Unit
+    onGenerateKnockoutFromStandings: () -> Unit,
+    onGenerateFinalRace: () -> Unit = {}
 ) {
     val tournament = uiState.tournament ?: return
     val approved = uiState.approvedPlayers
+
+    if (tournament.format.isRacing) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+                border = BorderStroke(1.dp, CyberSky.copy(alpha = 0.6f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("إدارة السباقات والتأهل (${tournament.format.labelAr})", style = MaterialTheme.typography.titleMedium, color = ChampionshipGold)
+                    Text(
+                        text = "المتسابقون المعتمدون: ${approved.size} • السباقات المسجلة: ${uiState.races.size}. في ألعاب السباق يمكنك إضافة الجولات وتسجيل المراكز مباشرة من تبويب «السباقات» ليتم تحديث الترتيب العام تلقائياً.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                    if (tournament.format == TournamentFormat.RACE_QUALIFIERS_FINAL && uiState.racingStandings.isNotEmpty()) {
+                        Button(
+                            onClick = onGenerateFinalRace,
+                            colors = ButtonDefaults.buttonColors(containerColor = RoyalViolet),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("admin_draw_generate_final_race_button")
+                        ) {
+                            Icon(Icons.Default.Flag, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("توليد السباق النهائي (أفضل ${tournament.qualifiersPerGroup} متسابقين)")
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
     val groupAssignments = remember(approved, tournament.groupCount) {
         mutableStateMapOf<Long, Int>().apply {
             approved.forEachIndexed { idx, p ->

@@ -1,4 +1,12 @@
-export type TournamentFormat = 'GROUPS_KNOCKOUT' | 'LEAGUE_KNOCKOUT' | 'DIRECT_KNOCKOUT';
+export type TournamentFormat =
+  | 'GROUPS_KNOCKOUT'
+  | 'LEAGUE_KNOCKOUT'
+  | 'DIRECT_KNOCKOUT'
+  | 'RACE_POINTS'
+  | 'RACE_QUALIFIERS_FINAL';
+export type PlayMode = 'SOLO_1V1' | 'TEAMS' | 'RACE_POINTS';
+export type RaceStage = 'REGULAR' | 'QUALIFIER' | 'FINAL';
+export type OnlineCompatibilityStatus = 'OFFICIAL_ONLINE' | 'LOCAL_OR_LAN_ONLY' | 'VERIFY_REQUIRED';
 export type DrawMode = 'RANDOM' | 'MANUAL';
 export type KnockoutTieRule = 'SINGLE_MATCH_PENALTIES' | 'TWO_LEGS_FINAL_SINGLE';
 export type PlayerStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
@@ -45,9 +53,48 @@ export interface Tournament {
   targetGoalsRule: string;
   isRegistrationClosedManual: boolean;
   isThirdPlaceEnabled?: boolean;
+  playMode: PlayMode;
+  teamSize: number;
+  bestOf: 1 | 3 | 5;
+  racingPointsConfig: number[];
   status: TournamentStatus;
   championPlayerId: number | null;
   createdAt: number;
+}
+
+export interface RaceResultEntry {
+  id: number;
+  raceId: number;
+  tournamentId: number;
+  playerId: number;
+  position: number;
+  pointsAwarded: number;
+  bestLapOrTime: string;
+  dnf: boolean;
+}
+
+export interface RaceEntry {
+  id: number;
+  tournamentId: number;
+  raceNumber: number;
+  title: string;
+  stage: RaceStage;
+  trackName: string;
+  isCompleted: boolean;
+  createdAt: number;
+  results: RaceResultEntry[];
+}
+
+export interface RacingStandingRow {
+  rank: number;
+  player: Player;
+  racesEntered: number;
+  wins: number;
+  podiums: number;
+  totalPoints: number;
+  bestPosition: number | null;
+  lastPosition: number | null;
+  isQualified: boolean;
 }
 
 export interface Player {
@@ -196,9 +243,22 @@ export interface GameCatalogItem {
   id: string;
   label: string;
   categoryAr: string;
+  categoryType: 'FOOTBALL' | 'FIGHTING' | 'RACING' | 'SHOOTER';
   scoreUnitLabel: string;
   defaultRule: string;
   defaultDuration: number;
+  supportedFormats: TournamentFormat[];
+  defaultFormat: TournamentFormat;
+  supportedPlayModes: PlayMode[];
+  defaultPlayMode: PlayMode;
+  supportsTeamSize: boolean;
+  defaultTeamSize: number;
+  supportsBestOf: boolean;
+  defaultBestOf: 1 | 3 | 5;
+  supportsCustomRacePoints: boolean;
+  onlineStatus: OnlineCompatibilityStatus;
+  onlineStatusLabelAr: string;
+  compatibilityNoteAr: string;
 }
 
 export interface SeasonLeaderboardEntry {
@@ -265,6 +325,8 @@ export interface ArenaState {
   leagueMatches: Match[];
   knockoutMatches: Match[];
   allMatches: Match[];
+  races: RaceEntry[];
+  racingStandings: RacingStandingRow[];
   matchReminders: MatchReminder[];
   playerStats: PlayerStats[];
   overviewStats: TournamentOverviewStats;
@@ -285,9 +347,23 @@ export interface ArenaState {
 }
 
 export const FORMAT_LABELS: Record<TournamentFormat, string> = {
-  GROUPS_KNOCKOUT: 'مجموعات + أدوار إقصائية',
-  LEAGUE_KNOCKOUT: 'دوري + أدوار إقصائية',
-  DIRECT_KNOCKOUT: 'خروج مباشر (إقصائيات فقط)'
+  GROUPS_KNOCKOUT: 'مجموعات ثم إقصائيات',
+  LEAGUE_KNOCKOUT: 'نظام المجموعات والنقاط (دوري + إقصائيات)',
+  DIRECT_KNOCKOUT: 'خروج مباشر (إقصائيات فقط)',
+  RACE_POINTS: 'نقاط وترتيب بعد السباقات',
+  RACE_QUALIFIERS_FINAL: 'تصفيات ثم نهائي (سباقات)'
+};
+
+export const PLAY_MODE_LABELS: Record<PlayMode, string> = {
+  SOLO_1V1: 'فردي (1 ضد 1)',
+  TEAMS: 'نظام الفرق',
+  RACE_POINTS: 'سباقات وترتيب نقاط'
+};
+
+export const RACE_STAGE_LABELS: Record<RaceStage, { label: string }> = {
+  REGULAR: { label: 'سباق جولة' },
+  QUALIFIER: { label: 'سباق تصفيات' },
+  FINAL: { label: 'السباق النهائي' }
 };
 
 export const DRAW_MODE_LABELS: Record<DrawMode, string> = {

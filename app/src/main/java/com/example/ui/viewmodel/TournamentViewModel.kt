@@ -7,6 +7,10 @@ import androidx.lifecycle.viewModelScope
 import com.example.api.ApiService
 import com.example.api.AuditLogEntry
 import com.example.api.HallOfFameEntry
+import com.example.api.PersistenceInfo
+import com.example.api.RaceEntry
+import com.example.api.RaceResultDraft
+import com.example.api.RacingStandingRow
 import com.example.api.RemoteArenaState
 import com.example.api.SeasonLeaderboardEntry
 import com.example.data.local.AdminAccountEntity
@@ -20,6 +24,7 @@ import com.example.data.local.TournamentEntity
 import com.example.data.model.AdminRole
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
+import com.example.data.model.RaceStage
 import com.example.data.repository.RemoteArenaRepository
 import com.example.data.repository.RepoResult
 import com.example.domain.GroupStandingRow
@@ -53,6 +58,8 @@ data class TournamentUiState(
     val leagueMatches: List<MatchEntity> = emptyList(),
     val knockoutMatches: List<MatchEntity> = emptyList(),
     val allMatches: List<MatchEntity> = emptyList(),
+    val races: List<RaceEntry> = emptyList(),
+    val racingStandings: List<RacingStandingRow> = emptyList(),
     val matchReminders: List<MatchReminderEntity> = emptyList(),
     val playerStats: List<PlayerStats> = emptyList(),
     val overviewStats: TournamentOverviewStats = TournamentOverviewStats(0, 0, 0, null, null, null),
@@ -70,7 +77,8 @@ data class TournamentUiState(
     val isSyncing: Boolean = false,
     val isRealtimeConnected: Boolean = false,
     val isServerReachable: Boolean = true,
-    val connectionError: String? = null
+    val connectionError: String? = null,
+    val persistence: PersistenceInfo? = null
 )
 
 class TournamentViewModel(application: Application) : AndroidViewModel(application) {
@@ -155,6 +163,8 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
                 leagueMatches = remote.leagueMatches,
                 knockoutMatches = remote.knockoutMatches,
                 allMatches = remote.allMatches,
+                races = remote.races,
+                racingStandings = remote.racingStandings,
                 matchReminders = remote.matchReminders,
                 playerStats = remote.playerStats,
                 overviewStats = remote.overviewStats,
@@ -177,7 +187,8 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
                 isSyncing = meta.isSyncing,
                 isRealtimeConnected = meta.isRealtimeConnected,
                 isServerReachable = meta.isServerReachable,
-                connectionError = meta.connectionError
+                connectionError = meta.connectionError,
+                persistence = remote.persistence
             )
         }
     }.stateIn(
@@ -449,6 +460,59 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
         val id = uiState.value.tournament?.id ?: return
         viewModelScope.launch {
             handleResult(repository.crownChampion(id, playerId))
+        }
+    }
+
+    fun createRace(
+        title: String = "",
+        stage: RaceStage = RaceStage.REGULAR,
+        trackName: String = "",
+        onSuccess: () -> Unit = {}
+    ) {
+        val id = uiState.value.tournament?.id ?: return
+        viewModelScope.launch {
+            val res = repository.createRace(
+                tournamentId = id,
+                title = title.ifBlank { null },
+                stage = stage,
+                trackName = trackName.ifBlank { null }
+            )
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun saveRaceResults(
+        raceId: Long,
+        entries: List<RaceResultDraft>,
+        title: String? = null,
+        trackName: String? = null,
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val res = repository.saveRaceResults(raceId, entries, title, trackName)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun generateFinalRaceFromStandings(
+        qualifiersCount: Int? = null,
+        title: String? = null,
+        trackName: String? = null,
+        onSuccess: () -> Unit = {}
+    ) {
+        val id = uiState.value.tournament?.id ?: return
+        viewModelScope.launch {
+            val res = repository.generateFinalRaceFromStandings(id, qualifiersCount, title, trackName)
+            handleResult(res)
+            if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun deleteRace(raceId: Long) {
+        viewModelScope.launch {
+            handleResult(repository.deleteRace(raceId))
         }
     }
 

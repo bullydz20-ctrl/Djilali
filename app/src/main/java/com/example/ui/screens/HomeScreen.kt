@@ -57,16 +57,23 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.api.HallOfFameEntry
+import com.example.api.RaceEntry
 import com.example.api.SeasonLeaderboardEntry
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
+import com.example.data.model.PlayMode
+import com.example.data.model.RaceStage
+import com.example.data.model.TournamentFormat
+import com.example.data.model.findApprovedGamePreset
 import com.example.domain.PlayerStats
 import com.example.security.AdminPermission
 import com.example.security.hasPermission
 import com.example.ui.components.ChampionShowcaseCard
 import com.example.ui.components.EmptyStatePanel
 import com.example.ui.components.MatchResultsTableCard
+import com.example.ui.components.OnlineCompatibilityBanner
 import com.example.ui.components.PlayerAvatar
+import com.example.ui.components.RacingOverviewSection
 import com.example.ui.components.ScheduledRemindersCard
 import com.example.ui.components.TournamentExportShareCard
 import com.example.ui.components.TournamentHeroBanner
@@ -105,6 +112,10 @@ fun HomeScreen(
     onOpenDispute: ((MatchEntity) -> Unit)? = null,
     onPlayerClick: ((PlayerEntity) -> Unit)? = null,
     onCelebrateChampion: (() -> Unit)? = null,
+    onCreateRace: (String, RaceStage, String) -> Unit = { _, _, _ -> },
+    onEditRaceResults: (RaceEntry) -> Unit = {},
+    onGenerateFinalRace: () -> Unit = {},
+    onDeleteRace: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tournament = uiState.tournament
@@ -235,122 +246,174 @@ fun HomeScreen(
                             )
                         RulePill(
                             icon = Icons.Default.MilitaryTech,
-                            title = "التأهل",
+                            title = "التأهل والنظام",
                             value = when (tournament.format) {
-                                com.example.data.model.TournamentFormat.GROUPS_KNOCKOUT -> "${tournament.qualifiersPerGroup} من كل مجموعة"
-                                com.example.data.model.TournamentFormat.LEAGUE_KNOCKOUT -> "أفضل ${tournament.qualifiersPerGroup} في الدوري"
-                                com.example.data.model.TournamentFormat.DIRECT_KNOCKOUT -> "خروج مباشر"
+                                TournamentFormat.GROUPS_KNOCKOUT -> "${tournament.qualifiersPerGroup} من كل مجموعة"
+                                TournamentFormat.LEAGUE_KNOCKOUT -> "أفضل ${tournament.qualifiersPerGroup} في الدوري"
+                                TournamentFormat.DIRECT_KNOCKOUT -> "خروج مباشر"
+                                TournamentFormat.RACE_POINTS -> "نقاط السباقات"
+                                TournamentFormat.RACE_QUALIFIERS_FINAL -> "تصفيات ثم نهائي (${tournament.qualifiersPerGroup} متأهلين)"
                             },
                             modifier = Modifier.weight(1f)
                         )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val playModeLabel = if (tournament.playMode == PlayMode.TEAMS) {
+                            "${tournament.playMode.labelAr} (${tournament.teamSize} لاعبين)"
+                        } else {
+                            tournament.playMode.labelAr
+                        }
+                        RulePill(
+                            icon = Icons.Default.SportsEsports,
+                            title = "نمط اللعب",
+                            value = playModeLabel,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (tournament.bestOf > 1 || tournament.format.isRacing) {
+                            RulePill(
+                                icon = Icons.Default.Star,
+                                title = if (tournament.format.isRacing) "نظام الحسم" else "نظام السلسلة",
+                                value = if (tournament.format.isRacing) "نقاط المراكز" else "Best of ${tournament.bestOf}",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    findApprovedGamePreset(tournament.gameTitle)?.let { preset ->
+                        OnlineCompatibilityBanner(preset = preset)
                     }
                 }
             }
         }
 
-        // Tournament Statistics & Top Players
-        item {
-            SectionTitle(title = "إحصائيات البطولة وأفضل اللاعبين")
-        }
-
-        item {
-            val stats = uiState.overviewStats
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    StatHighlightCard(
-                        icon = Icons.Default.SportsScore,
-                        label = if (scoreUnit == "هدف") "إجمالي الأهداف" else "إجمالي ($scoreUnit)",
-                        value = stats.totalGoals.toString(),
-                        subtext = "في ${stats.completedMatches} / ${stats.totalMatches} مباراة",
-                        accent = CyberSky,
-                        modifier = Modifier.weight(1f)
-                    )
-                    StatHighlightCard(
-                        icon = Icons.Default.Star,
-                        label = if (scoreUnit == "هدف") "هداف البطولة" else "الأعلى تسجيلاً",
-                        value = stats.topScorer?.player?.name ?: "—",
-                        subtext = stats.topScorer?.let { "${it.goalsScored} $scoreUnit" } ?: "بانتظار المباريات",
-                        accent = ChampionshipGold,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    StatHighlightCard(
-                        icon = Icons.Default.Shield,
-                        label = "أقوى دفاع",
-                        value = stats.bestDefense?.player?.name ?: "—",
-                        subtext = stats.bestDefense?.let { "استقبل ${it.goalsConceded} • شباك نظيفة ${it.cleanSheets}" }
-                            ?: "بانتظار المباريات",
-                        accent = EmeraldWin,
-                        modifier = Modifier.weight(1f)
-                    )
-                    StatHighlightCard(
-                        icon = Icons.AutoMirrored.Filled.TrendingUp,
-                        label = "أعلى نسبة فوز",
-                        value = stats.highestWinRate?.player?.name ?: "—",
-                        subtext = stats.highestWinRate?.let { "${it.winRatePercent}% (${it.wins} فوز)" }
-                            ?: "بانتظار المباريات",
-                        accent = RoyalViolet,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-        }
-
-        val topPlayers = uiState.playerStats.filter { it.matchesPlayed > 0 }.take(5)
-        if (topPlayers.isNotEmpty()) {
-            items(topPlayers, key = { "top_${it.player.id}" }) { stat ->
-                TopPlayerRow(
-                    stat = stat,
-                    scoreUnitLabel = scoreUnit,
-                    onClick = if (onPlayerClick != null) {
-                        { onPlayerClick(stat.player) }
-                    } else null
-                )
-            }
-        }
-
-        // Live & Recent Matches
-        item {
-            SectionTitle(title = "جدول المباريات والنتائج المباشرة")
-        }
-
-        if (uiState.allMatches.isEmpty()) {
+        if (tournament.format.isRacing) {
             item {
-                EmptyStatePanel(
-                    icon = Icons.Default.SportsScore,
-                    title = "لم تبدأ القرعة بعد",
-                    subtitle = "عند اعتماد اللاعبين وإجراء القرعة من لوحة المشرف، ستظهر جميع المباريات والنتائج المباشرة هنا."
+                SectionTitle(title = "ترتيب المتسابقين والسباقات")
+            }
+            item {
+                RacingOverviewSection(
+                    tournament = tournament,
+                    races = uiState.races,
+                    standings = uiState.racingStandings,
+                    playersById = playersById,
+                    approvedPlayers = uiState.approvedPlayers,
+                    canManageRaces = canEditScores,
+                    onCreateRace = onCreateRace,
+                    onEditRaceResults = onEditRaceResults,
+                    onGenerateFinalRace = onGenerateFinalRace,
+                    onDeleteRace = onDeleteRace,
+                    onPlayerClick = onPlayerClick
                 )
             }
         } else {
-            val orderedMatches = uiState.allMatches.sortedWith(
-                compareBy<MatchEntity> { it.isCompleted }
-                    .thenByDescending { it.stage.order }
-                    .thenBy { it.roundNumber }
-            )
+            // Tournament Statistics & Top Players
             item {
-                MatchResultsTableCard(
-                    matches = orderedMatches,
-                    playersById = playersById,
-                    canEdit = canEditScores,
-                    onQuickUpdateGoals = onQuickUpdateGoals,
-                    onOpenDetailedEditor = onEditMatch,
-                    remindersByMatchId = remindersByMatchId,
-                    onOpenReminder = onOpenReminder,
-                    onToggleCheckIn = onToggleCheckIn,
-                    onVotePrediction = onVotePrediction,
-                    onOpenDispute = onOpenDispute,
-                    onPlayerClick = onPlayerClick,
-                    showFilters = true,
-                    maxVisibleRows = 12
+                SectionTitle(title = "إحصائيات البطولة وأفضل اللاعبين")
+            }
+
+            item {
+                val stats = uiState.overviewStats
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        StatHighlightCard(
+                            icon = Icons.Default.SportsScore,
+                            label = if (scoreUnit == "هدف") "إجمالي الأهداف" else "إجمالي ($scoreUnit)",
+                            value = stats.totalGoals.toString(),
+                            subtext = "في ${stats.completedMatches} / ${stats.totalMatches} مباراة",
+                            accent = CyberSky,
+                            modifier = Modifier.weight(1f)
+                        )
+                        StatHighlightCard(
+                            icon = Icons.Default.Star,
+                            label = if (scoreUnit == "هدف") "هداف البطولة" else "الأعلى تسجيلاً",
+                            value = stats.topScorer?.player?.name ?: "—",
+                            subtext = stats.topScorer?.let { "${it.goalsScored} $scoreUnit" } ?: "بانتظار المباريات",
+                            accent = ChampionshipGold,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        StatHighlightCard(
+                            icon = Icons.Default.Shield,
+                            label = "أقوى دفاع",
+                            value = stats.bestDefense?.player?.name ?: "—",
+                            subtext = stats.bestDefense?.let { "استقبل ${it.goalsConceded} • شباك نظيفة ${it.cleanSheets}" }
+                                ?: "بانتظار المباريات",
+                            accent = EmeraldWin,
+                            modifier = Modifier.weight(1f)
+                        )
+                        StatHighlightCard(
+                            icon = Icons.AutoMirrored.Filled.TrendingUp,
+                            label = "أعلى نسبة فوز",
+                            value = stats.highestWinRate?.player?.name ?: "—",
+                            subtext = stats.highestWinRate?.let { "${it.winRatePercent}% (${it.wins} فوز)" }
+                                ?: "بانتظار المباريات",
+                            accent = RoyalViolet,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
+            val topPlayers = uiState.playerStats.filter { it.matchesPlayed > 0 }.take(5)
+            if (topPlayers.isNotEmpty()) {
+                items(topPlayers, key = { "top_${it.player.id}" }) { stat ->
+                    TopPlayerRow(
+                        stat = stat,
+                        scoreUnitLabel = scoreUnit,
+                        onClick = if (onPlayerClick != null) {
+                            { onPlayerClick(stat.player) }
+                        } else null
+                    )
+                }
+            }
+
+            // Live & Recent Matches
+            item {
+                SectionTitle(title = "جدول المباريات والنتائج المباشرة")
+            }
+
+            if (uiState.allMatches.isEmpty()) {
+                item {
+                    EmptyStatePanel(
+                        icon = Icons.Default.SportsScore,
+                        title = "لم تبدأ القرعة بعد",
+                        subtitle = "عند اعتماد اللاعبين وإجراء القرعة من لوحة المشرف، ستظهر جميع المباريات والنتائج المباشرة هنا."
+                    )
+                }
+            } else {
+                val orderedMatches = uiState.allMatches.sortedWith(
+                    compareBy<MatchEntity> { it.isCompleted }
+                        .thenByDescending { it.stage.order }
+                        .thenBy { it.roundNumber }
                 )
+                item {
+                    MatchResultsTableCard(
+                        matches = orderedMatches,
+                        playersById = playersById,
+                        canEdit = canEditScores,
+                        onQuickUpdateGoals = onQuickUpdateGoals,
+                        onOpenDetailedEditor = onEditMatch,
+                        remindersByMatchId = remindersByMatchId,
+                        onOpenReminder = onOpenReminder,
+                        onToggleCheckIn = onToggleCheckIn,
+                        onVotePrediction = onVotePrediction,
+                        onOpenDispute = onOpenDispute,
+                        onPlayerClick = onPlayerClick,
+                        showFilters = true,
+                        maxVisibleRows = 12
+                    )
+                }
             }
         }
 

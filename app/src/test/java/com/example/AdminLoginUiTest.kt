@@ -68,8 +68,8 @@ class AdminLoginUiTest {
         composeRule.onNodeWithTag("setup_admin_submit").performScrollTo().assertIsEnabled().performClick()
         composeRule.waitForIdle()
 
-        assertEquals("admin", setupUser)
-        assertEquals("المشرف الرئيسي", setupDisplay)
+        assertEquals("Djilali", setupUser)
+        assertEquals("Djilali", setupDisplay)
         assertEquals("123489", setupPin)
         assertTrue(setupKeep)
     }

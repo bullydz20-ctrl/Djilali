@@ -24,15 +24,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SportsScore
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -51,6 +54,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +64,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.example.api.RaceEntry
 import com.example.data.local.AdminAccountEntity
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
@@ -67,16 +72,19 @@ import com.example.data.local.TournamentEntity
 import com.example.data.model.AdminRole
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
+import com.example.data.model.RaceStage
 import com.example.security.AdminPermission
 import com.example.security.PinSecurityManager
 import com.example.security.hasPermission
 import com.example.ui.components.EmptyStatePanel
 import com.example.ui.components.SixDigitPinInputField
+import com.example.ui.theme.AmberDraw
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CrimsonLoss
 import com.example.ui.theme.CyberSky
 import com.example.ui.theme.ElectricCobalt
+import com.example.ui.theme.EmeraldWin
 import com.example.ui.theme.MidnightSurface
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -88,7 +96,8 @@ private enum class AdminSection(val titleAr: String, val icon: ImageVector) {
     DRAW("القرعة", Icons.Default.Casino),
     MATCHES("المباريات", Icons.Default.SportsScore),
     SUB_ADMINS("المشرفون", Icons.Default.ManageAccounts),
-    CHAMPION("التتويج", Icons.Default.EmojiEvents)
+    CHAMPION("التتويج", Icons.Default.EmojiEvents),
+    AUDIT("السجل", Icons.Default.History)
 }
 
 @Composable
@@ -103,6 +112,7 @@ fun AdminScreen(
     onCreateFreshTournament: (TournamentEntity) -> Unit,
     onDeleteTournament: () -> Unit,
     onAdminAddPlayer: (String, String, String?, PlayerLevel, Int, String, Boolean, () -> Unit) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onBulkImport: (String, PlayerStatus, () -> Unit) -> Unit = { _, _, _ -> },
     onUpdatePlayerStatus: (PlayerEntity, PlayerStatus) -> Unit,
     onUpdatePlayerDetails: (PlayerEntity) -> Unit,
     onDeletePlayer: (PlayerEntity) -> Unit,
@@ -110,6 +120,11 @@ fun AdminScreen(
     onGenerateKnockoutFromStandings: () -> Unit,
     onEditMatch: (MatchEntity) -> Unit,
     onQuickUpdateGoals: (MatchEntity, Int, Int) -> Unit = { _, _, _ -> },
+    onAutoSchedule: (Long, Int, Boolean, () -> Unit) -> Unit = { _, _, _, _ -> },
+    onToggleCheckIn: (MatchEntity, Int) -> Unit = { _, _ -> },
+    onOpenDispute: ((MatchEntity) -> Unit)? = null,
+    onOpenReminder: ((MatchEntity) -> Unit)? = null,
+    onPlayerClick: ((PlayerEntity) -> Unit)? = null,
     onUpdateOwnProfile: (String, String?, () -> Unit) -> Unit = { _, _, _ -> },
     onChangeOwnPin: (String, String) -> Unit,
     onCreateSubAdmin: (String, String, String, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
@@ -119,6 +134,10 @@ fun AdminScreen(
     onOpenExportShare: () -> Unit = {},
     onRetryConnection: () -> Unit = {},
     onConfigureServerUrl: () -> Unit = {},
+    onCreateRace: (String, RaceStage, String) -> Unit = { _, _, _ -> },
+    onEditRaceResults: (RaceEntry) -> Unit = {},
+    onGenerateFinalRace: () -> Unit = {},
+    onDeleteRace: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val currentAdmin = uiState.currentAdmin
@@ -143,6 +162,7 @@ fun AdminScreen(
             onLogin = onLogin,
             defaultUsername = uiState.sessionState.lastUsername,
             defaultKeepSignedIn = uiState.sessionState.keepSignedIn,
+            persistence = uiState.persistence,
             modifier = modifier
         )
         return
@@ -156,11 +176,19 @@ fun AdminScreen(
             if (currentAdmin.hasPermission(AdminPermission.EDIT_SCORES)) add(AdminSection.MATCHES)
             if (currentAdmin.role == AdminRole.HEAD_ADMIN) add(AdminSection.SUB_ADMINS)
             if (currentAdmin.hasPermission(AdminPermission.CROWN_CHAMPION)) add(AdminSection.CHAMPION)
+            if (currentAdmin.role == AdminRole.HEAD_ADMIN) add(AdminSection.AUDIT)
         }
     }
 
-    var selectedSection by remember(allowedSections) {
+    var selectedSection by remember(currentAdmin.id) {
         mutableStateOf(allowedSections.firstOrNull())
+    }
+    LaunchedEffect(currentAdmin.id, allowedSections) {
+        if (allowedSections.isEmpty()) {
+            selectedSection = null
+        } else if (selectedSection == null || selectedSection !in allowedSections) {
+            selectedSection = allowedSections.firstOrNull()
+        }
     }
     var showOwnAccountDialog by remember { mutableStateOf(false) }
 
@@ -256,6 +284,12 @@ fun AdminScreen(
                             Icon(sec.icon, contentDescription = null, modifier = Modifier.size(16.dp))
                         },
                         label = {
+                            val isRacing = uiState.tournament?.format?.isRacing == true
+                            val baseTitle = when (sec) {
+                                AdminSection.DRAW -> if (isRacing) "التأهل والسباقات" else sec.titleAr
+                                AdminSection.MATCHES -> if (isRacing) "السباقات" else sec.titleAr
+                                else -> sec.titleAr
+                            }
                             val badge = when (sec) {
                                 AdminSection.PLAYERS -> if (uiState.pendingPlayers.isNotEmpty()) " (${uiState.pendingPlayers.size})" else ""
                                 AdminSection.SUB_ADMINS -> {
@@ -264,7 +298,7 @@ fun AdminScreen(
                                 }
                                 else -> ""
                             }
-                            Text("${sec.titleAr}$badge")
+                            Text("$baseTitle$badge")
                         },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = ElectricCobalt,
@@ -281,6 +315,60 @@ fun AdminScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                val persistence = uiState.persistence
+                if (currentAdmin.role == AdminRole.HEAD_ADMIN && persistence != null) {
+                    item {
+                        val accent = when (persistence.mode) {
+                            "ephemeral" -> AmberDraw
+                            "postgres" -> EmeraldWin
+                            else -> CyberSky
+                        }
+                        Surface(
+                            color = accent.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, accent.copy(alpha = 0.55f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("admin_persistence_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (persistence.mode == "ephemeral") Icons.Default.Warning else Icons.Default.CloudDone,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = persistence.labelAr.ifBlank {
+                                            if (persistence.isDurable) "تخزين سحابي دائم" else "تخزين مؤقت"
+                                        },
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = accent
+                                    )
+                                    val detail = buildString {
+                                        if (persistence.detailAr.isNotBlank()) append(persistence.detailAr)
+                                        if (!persistence.cloudError.isNullOrBlank()) {
+                                            if (isNotEmpty()) append(" • ")
+                                            append(persistence.cloudError)
+                                        }
+                                    }
+                                    if (detail.isNotBlank()) {
+                                        Text(
+                                            text = detail,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 item {
                     when (selectedSection) {
                         AdminSection.TOURNAMENT -> AdminTournamentSettingsTab(
@@ -305,6 +393,7 @@ fun AdminScreen(
                                 uiState = uiState,
                                 onImportAvatar = onImportAvatar,
                                 onAdminAddPlayer = onAdminAddPlayer,
+                                onBulkImport = onBulkImport,
                                 onStatusChange = onUpdatePlayerStatus,
                                 onUpdateDetails = onUpdatePlayerDetails,
                                 onDeletePlayer = onDeletePlayer
@@ -324,7 +413,8 @@ fun AdminScreen(
                             AdminDrawTab(
                                 uiState = uiState,
                                 onRunDraw = onRunDraw,
-                                onGenerateKnockoutFromStandings = onGenerateKnockoutFromStandings
+                                onGenerateKnockoutFromStandings = onGenerateKnockoutFromStandings,
+                                onGenerateFinalRace = onGenerateFinalRace
                             )
                         }
                         AdminSection.MATCHES -> if (uiState.tournament == null) {
@@ -341,7 +431,16 @@ fun AdminScreen(
                             AdminMatchesTab(
                                 uiState = uiState,
                                 onEditMatch = onEditMatch,
-                                onQuickUpdateGoals = onQuickUpdateGoals
+                                onQuickUpdateGoals = onQuickUpdateGoals,
+                                onAutoSchedule = onAutoSchedule,
+                                onToggleCheckIn = onToggleCheckIn,
+                                onOpenDispute = onOpenDispute,
+                                onOpenReminder = onOpenReminder,
+                                onPlayerClick = onPlayerClick,
+                                onCreateRace = onCreateRace,
+                                onEditRaceResults = onEditRaceResults,
+                                onGenerateFinalRace = onGenerateFinalRace,
+                                onDeleteRace = onDeleteRace
                             )
                         }
                         AdminSection.SUB_ADMINS -> AdminSubAdminsTab(
@@ -368,6 +467,7 @@ fun AdminScreen(
                                 onOpenExportShare = onOpenExportShare
                             )
                         }
+                        AdminSection.AUDIT -> AdminAuditLogTab(uiState = uiState)
                         null -> Spacer(modifier = Modifier)
                     }
                 }

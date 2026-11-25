@@ -4,6 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,6 +24,8 @@ import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -59,11 +63,13 @@ import com.example.ui.theme.MidnightSurface
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ScoreEntryDialog(
     match: MatchEntity,
     player1: PlayerEntity,
     player2: PlayerEntity,
+    bestOf: Int = 1,
     onDismiss: () -> Unit,
     onSave: (leg1S1: Int?, leg1S2: Int?, leg2S1: Int?, leg2S2: Int?, pen1: Int?, pen2: Int?) -> Unit,
     onWalkover: ((winnerSlot: Int, reason: String) -> Unit)? = null,
@@ -171,8 +177,52 @@ fun ScoreEntryDialog(
                     }
                 }
 
+                if (bestOf > 1) {
+                    Surface(
+                        color = ElectricCobalt.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, CyberSky.copy(alpha = 0.55f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "نظام السلسلة: Best of $bestOf (الفائز من يحسم ${(bestOf / 2) + 1} جولات)",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = ChampionshipGold
+                            )
+                            val presets = if (bestOf == 3) {
+                                listOf(2 to 0, 2 to 1, 0 to 2, 1 to 2)
+                            } else {
+                                listOf(3 to 0, 3 to 1, 3 to 2, 0 to 3, 1 to 3, 2 to 3)
+                            }
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                presets.forEach { (a, b) ->
+                                    FilterChip(
+                                        selected = l1s1 == a.toString() && l1s2 == b.toString(),
+                                        onClick = {
+                                            l1s1 = a.toString()
+                                            l1s2 = b.toString()
+                                        },
+                                        label = { Text("$a - $b", style = MaterialTheme.typography.labelSmall) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = ElectricCobalt,
+                                            selectedLabelColor = ChampionshipGold
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Text(
-                    text = if (match.isTwoLegged) "مباراة الذهاب" else "النتيجة النهائية",
+                    text = if (match.isTwoLegged) "مباراة الذهاب" else if (bestOf > 1) "نتيجة الجولات (Best of $bestOf)" else "النتيجة النهائية",
                     style = MaterialTheme.typography.labelLarge,
                     color = CyberSky
                 )

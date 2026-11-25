@@ -3,6 +3,7 @@ package com.example.domain
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
 import com.example.data.model.MatchStage
+import com.example.data.model.PlayMode
 import com.example.ui.viewmodel.TournamentUiState
 
 object TournamentExportFormatter {
@@ -47,15 +48,28 @@ object TournamentExportFormatter {
             appendLine("اللعبة: $gameTitle (${t?.gameCategory ?: "ألعاب إلكترونية"})")
             appendLine("المجتمع: COMMUNITY PS4 JAILBREAK ONLINE")
             if (t != null) {
-                appendLine("النظام: ${t.format.labelAr}")
+                val playModeDesc = if (t.playMode == PlayMode.TEAMS) {
+                    "${t.playMode.labelAr} (${t.teamSize} لاعبين)"
+                } else {
+                    t.playMode.labelAr
+                }
+                appendLine("النظام: ${t.format.labelAr} • $playModeDesc")
+                if (t.bestOf > 1) {
+                    appendLine("صيغة السلسلة: Best of ${t.bestOf}")
+                }
                 appendLine("الحالة: ${t.status.labelAr}")
                 appendLine("المشاركون المعتمدون: ${uiState.approvedPlayers.size} / ${t.maxParticipants}")
             }
-            appendLine("تقدم المباريات: ${stats.completedMatches} / ${stats.totalMatches} مكتملة")
-            if (scoreUnit == "هدف") {
-                appendLine("إجمالي الأهداف المسجلة: ${stats.totalGoals}")
+            if (t?.format?.isRacing == true) {
+                val completedRaces = uiState.races.count { it.isCompleted }
+                appendLine("السباقات المكتملة: $completedRaces / ${uiState.races.size}")
             } else {
-                appendLine("إجمالي النقاط ($scoreUnit): ${stats.totalGoals}")
+                appendLine("تقدم المباريات: ${stats.completedMatches} / ${stats.totalMatches} مكتملة")
+                if (scoreUnit == "هدف") {
+                    appendLine("إجمالي الأهداف المسجلة: ${stats.totalGoals}")
+                } else {
+                    appendLine("إجمالي النقاط ($scoreUnit): ${stats.totalGoals}")
+                }
             }
             appendLine()
 
@@ -85,7 +99,24 @@ object TournamentExportFormatter {
                 "• أعلى نسبة فوز: " + (stats.highestWinRate?.let { "${it.player.name} (${it.winRatePercent}% - ${it.wins} فوز)" } ?: "لم يتحدد بعد")
             )
 
-            if (uiState.groupsWithStandings.isNotEmpty()) {
+            if (t?.format?.isRacing == true && uiState.racingStandings.isNotEmpty()) {
+                appendLine()
+                appendLine("── ترتيب المتسابقين والنقاط ──")
+                uiState.racingStandings.forEach { row ->
+                    val qualBadge = if (row.isQualified) " ✓ متأهل للنهائي" else ""
+                    val bestStr = row.bestPosition?.let { " | أفضل مركز #$it" } ?: ""
+                    appendLine("  ${row.rank}. ${row.player.name} — ${row.totalPoints} ن (سباقات ${row.racesEntered} | فوز ${row.wins} | منصة ${row.podiums}$bestStr)$qualBadge")
+                }
+                if (uiState.races.isNotEmpty()) {
+                    appendLine()
+                    appendLine("── سجل السباقات ──")
+                    uiState.races.forEach { race ->
+                        val trackSuffix = if (race.trackName.isNotBlank()) " — ${race.trackName}" else ""
+                        val statusTag = if (race.isCompleted) "مكتمل" else "بانتظار النتائج"
+                        appendLine("  • ${race.title} (${race.stage.labelAr}$trackSuffix) [$statusTag]")
+                    }
+                }
+            } else if (uiState.groupsWithStandings.isNotEmpty()) {
                 appendLine()
                 appendLine("── ترتيب المجموعات ──")
                 uiState.groupsWithStandings.forEach { groupData ->
@@ -164,6 +195,12 @@ object TournamentExportFormatter {
                 appendLine("👑 البطل المتوج: ${resolvedChampion.name} (${resolvedChampion.elysiumNetId})")
                 if (runnerUp != null) appendLine("🥈 الوصيف: ${runnerUp.name}")
                 if (thirdPlacePlayer != null) appendLine("🥉 المركز الثالث: ${thirdPlacePlayer.name}")
+            } else if (t?.format?.isRacing == true) {
+                val completedRaces = uiState.races.count { it.isCompleted }
+                appendLine("🏎️ الحالة: ${t.status.labelAr} ($completedRaces/${uiState.races.size} سباقات)")
+                uiState.racingStandings.take(3).forEach { row ->
+                    appendLine("  ${row.rank}. ${row.player.name}: ${row.totalPoints} نقطة")
+                }
             } else {
                 appendLine("📊 الحالة: ${t?.status?.labelAr ?: "جارية"} (${stats.completedMatches}/${stats.totalMatches} مباراة)")
             }

@@ -9,13 +9,18 @@ import com.example.data.local.PlayerEntity
 import com.example.data.local.TournamentEntity
 import com.example.data.local.TournamentGroupEntity
 import com.example.data.model.AdminRole
+import com.example.data.model.DEFAULT_RACING_POINTS_JSON
 import com.example.data.model.DrawMode
 import com.example.data.model.KnockoutTieRule
 import com.example.data.model.MatchStage
+import com.example.data.model.PlayMode
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
+import com.example.data.model.RaceStage
 import com.example.data.model.TournamentFormat
 import com.example.data.model.TournamentStatus
+import com.example.data.model.formatRacingPointsConfig
+import com.example.data.model.parseRacingPointsConfig
 import com.example.domain.GroupStandingRow
 import com.example.domain.PlayerStats
 import com.example.domain.TournamentOverviewStats
@@ -61,6 +66,8 @@ data class RemoteArenaState(
     val leagueMatches: List<MatchEntity>,
     val knockoutMatches: List<MatchEntity>,
     val allMatches: List<MatchEntity>,
+    val races: List<RaceEntry> = emptyList(),
+    val racingStandings: List<RacingStandingRow> = emptyList(),
     val matchReminders: List<MatchReminderEntity>,
     val playerStats: List<PlayerStats>,
     val overviewStats: TournamentOverviewStats,
@@ -74,7 +81,58 @@ data class RemoteArenaState(
     val adminAccounts: List<AdminAccountEntity>,
     val currentAdmin: AdminAccountEntity?,
     val keepSignedIn: Boolean,
-    val lockoutState: LockoutState
+    val lockoutState: LockoutState,
+    val persistence: PersistenceInfo? = null
+)
+
+data class RaceResultEntry(
+    val id: Long = 0L,
+    val raceId: Long = 0L,
+    val tournamentId: Long = 0L,
+    val playerId: Long,
+    val position: Int?,
+    val pointsAwarded: Int = 0,
+    val bestLapOrTime: String = "",
+    val dnf: Boolean = false
+)
+
+data class RaceEntry(
+    val id: Long,
+    val tournamentId: Long,
+    val raceNumber: Int,
+    val title: String,
+    val stage: RaceStage,
+    val trackName: String = "",
+    val isCompleted: Boolean = false,
+    val createdAt: Long = 0L,
+    val results: List<RaceResultEntry> = emptyList()
+)
+
+data class RacingStandingRow(
+    val rank: Int,
+    val player: PlayerEntity,
+    val racesEntered: Int,
+    val wins: Int,
+    val podiums: Int,
+    val totalPoints: Int,
+    val bestPosition: Int?,
+    val lastPosition: Int?,
+    val isQualified: Boolean = false
+)
+
+data class RaceResultDraft(
+    val playerId: Long,
+    val position: Int?,
+    val bestLapOrTime: String = "",
+    val dnf: Boolean = false
+)
+
+data class PersistenceInfo(
+    val mode: String = "local",
+    val isDurable: Boolean = true,
+    val labelAr: String = "",
+    val detailAr: String = "",
+    val cloudError: String? = null
 )
 
 data class SeasonLeaderboardEntry(
@@ -142,7 +200,8 @@ data class AuthPayload(
 data class HealthCheckResult(
     val ok: Boolean,
     val service: String,
-    val timestamp: Long
+    val timestamp: Long,
+    val persistence: PersistenceInfo? = null
 )
 
 data class ServerConnectionCheck(
@@ -169,9 +228,9 @@ class ApiService(
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
-            .writeTimeout(25, TimeUnit.SECONDS)
+            .connectTimeout(45, TimeUnit.SECONDS)
+            .readTimeout(50, TimeUnit.SECONDS)
+            .writeTimeout(50, TimeUnit.SECONDS)
             .build()
 
         fun normalizeBaseUrl(rawUrl: String?): String {
@@ -267,14 +326,15 @@ class ApiService(
             HealthCheckResult(
                 ok = json.optBoolean("ok", false),
                 service = json.optString("service", ""),
-                timestamp = json.optLong("ts", 0L)
+                timestamp = json.optLong("ts", 0L),
+                persistence = json.optJSONObject("persistence")?.let(::parsePersistence)
             )
         }
     }
 
     /**
      * Tests connectivity against `<baseUrl>/api/health` on startup or after changing URL.
-     * Distinguishes 404 (undeployed/wrong Render URL), 502/503 (Render cold-start), timeouts, and DNS errors.
+     * Automatically retries once on transient Render cold-start 502/503/504 or timeout errors.
      */
     suspend fun testStartupConnection(overrideBaseUrl: String? = null): ServerConnectionCheck {
         val rawCandidate = overrideBaseUrl ?: getBaseUrl()
@@ -286,7 +346,12 @@ class ApiService(
             )
         }
         val targetBase = normalizeBaseUrl(rawCandidate)
-        return when (val res = checkHealth(targetBase)) {
+        var lastResult = checkHealth(targetBase)
+        if (lastResult is ApiResult.Error && lastResult.statusCode in listOf(0, 502, 503, 504)) {
+            kotlinx.coroutines.delay(1_200L)
+            lastResult = checkHealth(targetBase)
+        }
+        return when (val res = lastResult) {
             is ApiResult.Success -> {
                 if (res.data.ok) {
                     ServerConnectionCheck(
@@ -314,12 +379,20 @@ class ApiService(
         }
     }
 
-    suspend fun fetchArenaState(tournamentId: Long? = null): ApiResult<RemoteArenaState> {
-        val query = if (tournamentId != null && tournamentId > 0L) {
-            "?tournamentId=${URLEncoder.encode(tournamentId.toString(), "UTF-8")}"
-        } else {
-            ""
+    suspend fun fetchArenaState(
+        tournamentId: Long? = null,
+        lastUsername: String? = null
+    ): ApiResult<RemoteArenaState> {
+        val params = buildList {
+            if (tournamentId != null && tournamentId > 0L) {
+                add("tournamentId=${URLEncoder.encode(tournamentId.toString(), "UTF-8")}")
+            }
+            val cleanUser = lastUsername?.trim()?.takeIf { it.isNotEmpty() }
+            if (cleanUser != null) {
+                add("username=${URLEncoder.encode(cleanUser, "UTF-8")}")
+            }
         }
+        val query = if (params.isNotEmpty()) "?${params.joinToString("&")}" else ""
         return executeJsonRequest(
             method = "GET",
             path = "/api/state$query",
@@ -581,14 +654,77 @@ class ApiService(
         return executeJsonRequest("POST", "/api/tournaments/$tournamentId/champion", body) { Unit }
     }
 
+    suspend fun createRace(
+        tournamentId: Long,
+        title: String? = null,
+        stage: RaceStage = RaceStage.REGULAR,
+        trackName: String? = null
+    ): ApiResult<RaceEntry?> {
+        val body = JSONObject()
+            .put("stage", stage.name)
+            .apply {
+                if (!title.isNullOrBlank()) put("title", title.trim())
+                if (!trackName.isNullOrBlank()) put("trackName", trackName.trim())
+            }
+        return executeJsonRequest("POST", "/api/tournaments/$tournamentId/races", body) { json ->
+            json.optJSONObject("race")?.let(::parseRace)
+        }
+    }
+
+    suspend fun saveRaceResults(
+        raceId: Long,
+        entries: List<RaceResultDraft>,
+        title: String? = null,
+        trackName: String? = null
+    ): ApiResult<Unit> {
+        val entriesArr = JSONArray().apply {
+            entries.forEach { e ->
+                put(
+                    JSONObject()
+                        .put("playerId", e.playerId)
+                        .put("position", e.position ?: JSONObject.NULL)
+                        .put("bestLapOrTime", e.bestLapOrTime.trim())
+                        .put("dnf", e.dnf)
+                )
+            }
+        }
+        val body = JSONObject()
+            .put("entries", entriesArr)
+            .apply {
+                if (title != null) put("title", title.trim())
+                if (trackName != null) put("trackName", trackName.trim())
+            }
+        return executeJsonRequest("PUT", "/api/races/$raceId/results", body) { Unit }
+    }
+
+    suspend fun generateFinalRaceFromStandings(
+        tournamentId: Long,
+        qualifiersCount: Int? = null,
+        title: String? = null,
+        trackName: String? = null
+    ): ApiResult<RaceEntry?> {
+        val body = JSONObject().apply {
+            if (qualifiersCount != null) put("qualifiersCount", qualifiersCount)
+            if (!title.isNullOrBlank()) put("title", title.trim())
+            if (!trackName.isNullOrBlank()) put("trackName", trackName.trim())
+        }
+        return executeJsonRequest("POST", "/api/tournaments/$tournamentId/races/generate-final", body) { json ->
+            json.optJSONObject("race")?.let(::parseRace)
+        }
+    }
+
+    suspend fun deleteRace(raceId: Long): ApiResult<Unit> {
+        return executeJsonRequest("DELETE", "/api/races/$raceId", null) { Unit }
+    }
+
     suspend fun toggleMatchCheckIn(
         matchId: Long,
         playerSlot: Int,
         checkedIn: Boolean? = null
     ): ApiResult<Unit> {
-        val body = JSONObject().put("playerSlot", playerSlot)
+        val body = JSONObject().put("slot", playerSlot)
         if (checkedIn != null) body.put("checkedIn", checkedIn)
-        return executeJsonRequest("POST", "/api/matches/$matchId/checkin", body, includeAuth = false) { Unit }
+        return executeJsonRequest("POST", "/api/matches/$matchId/check-in", body, includeAuth = false) { Unit }
     }
 
     suspend fun voteMatchPrediction(
@@ -598,8 +734,8 @@ class ApiService(
     ): ApiResult<Unit> {
         val body = JSONObject()
             .put("voterKey", voterKey)
-            .put("pickedSlot", pickedSlot)
-        return executeJsonRequest("POST", "/api/matches/$matchId/predict", body, includeAuth = false) { Unit }
+            .put("slot", pickedSlot)
+        return executeJsonRequest("POST", "/api/matches/$matchId/vote", body, includeAuth = false) { Unit }
     }
 
     suspend fun submitMatchDispute(
@@ -644,8 +780,9 @@ class ApiService(
             .put("linesText", linesText)
             .put("status", status.name)
         return executeJsonRequest("POST", "/api/tournaments/$tournamentId/players/bulk", body) { json ->
+            val imported = if (json.has("importedCount")) json.optInt("importedCount", 0) else json.optInt("addedCount", 0)
             BulkImportResult(
-                addedCount = json.optInt("addedCount", 0),
+                addedCount = imported,
                 skippedCount = json.optInt("skippedCount", 0)
             )
         }
@@ -661,7 +798,7 @@ class ApiService(
             .put("startAtMillis", startAtMillis)
             .put("intervalMinutes", intervalMinutes)
             .put("onlyUnscheduled", onlyUnscheduled)
-        return executeJsonRequest("POST", "/api/tournaments/$tournamentId/schedule-matches", body) { json ->
+        return executeJsonRequest("POST", "/api/tournaments/$tournamentId/auto-schedule", body) { json ->
             AutoScheduleResult(
                 scheduledCount = json.optInt("scheduledCount", 0)
             )
@@ -750,24 +887,33 @@ class ApiService(
         return Closeable { call.cancel() }
     }
 
-    private fun tournamentPayload(t: TournamentEntity): JSONObject = JSONObject()
-        .put("name", t.name)
-        .put("gameTitle", t.gameTitle)
-        .put("gameCategory", t.gameCategory)
-        .put("scoreUnitLabel", t.scoreUnitLabel)
-        .put("description", t.description)
-        .put("bannerUrl", toServerMediaPath(t.bannerUri) ?: JSONObject.NULL)
-        .put("startDateTime", t.startDateTime)
-        .put("maxParticipants", t.maxParticipants)
-        .put("format", t.format.name)
-        .put("groupCount", t.groupCount)
-        .put("qualifiersPerGroup", t.qualifiersPerGroup)
-        .put("drawMode", t.drawMode.name)
-        .put("knockoutTieRule", t.knockoutTieRule.name)
-        .put("matchDurationMinutes", t.matchDurationMinutes)
-        .put("targetGoalsRule", t.targetGoalsRule)
-        .put("isRegistrationClosedManual", t.isRegistrationClosedManual)
-        .put("isThirdPlaceEnabled", t.isThirdPlaceEnabled)
+    private fun tournamentPayload(t: TournamentEntity): JSONObject {
+        val pointsArr = JSONArray().apply {
+            parseRacingPointsConfig(t.racingPointsConfig).forEach { put(it) }
+        }
+        return JSONObject()
+            .put("name", t.name)
+            .put("gameTitle", t.gameTitle)
+            .put("gameCategory", t.gameCategory)
+            .put("scoreUnitLabel", t.scoreUnitLabel)
+            .put("description", t.description)
+            .put("bannerUrl", toServerMediaPath(t.bannerUri) ?: JSONObject.NULL)
+            .put("startDateTime", t.startDateTime)
+            .put("maxParticipants", t.maxParticipants)
+            .put("format", t.format.name)
+            .put("playMode", t.playMode.name)
+            .put("teamSize", t.teamSize)
+            .put("bestOf", t.bestOf)
+            .put("racingPointsConfig", pointsArr)
+            .put("groupCount", t.groupCount)
+            .put("qualifiersPerGroup", t.qualifiersPerGroup)
+            .put("drawMode", t.drawMode.name)
+            .put("knockoutTieRule", t.knockoutTieRule.name)
+            .put("matchDurationMinutes", t.matchDurationMinutes)
+            .put("targetGoalsRule", t.targetGoalsRule)
+            .put("isRegistrationClosedManual", t.isRegistrationClosedManual)
+            .put("isThirdPlaceEnabled", t.isThirdPlaceEnabled)
+    }
 
     private suspend fun <T> executeJsonRequest(
         method: String,
@@ -892,6 +1038,8 @@ class ApiService(
         val leagueMatches = parseArray(json.optJSONArray("leagueMatches"), ::parseMatch)
         val knockoutMatches = parseArray(json.optJSONArray("knockoutMatches"), ::parseMatch)
         val allMatches = parseArray(json.optJSONArray("allMatches"), ::parseMatch)
+        val races = parseArray(json.optJSONArray("races"), ::parseRace)
+        val racingStandings = parseArray(json.optJSONArray("racingStandings"), ::parseRacingStandingRow)
         val matchReminders = parseArray(json.optJSONArray("matchReminders"), ::parseReminder)
         val playerStats = parseArray(json.optJSONArray("playerStats"), ::parsePlayerStats)
         val overviewStats = parseOverviewStats(json.optJSONObject("overviewStats"))
@@ -903,6 +1051,7 @@ class ApiService(
         val adminAccounts = parseArray(json.optJSONArray("adminAccounts"), ::parseAdmin)
         val currentAdmin = json.optJSONObject("currentAdmin")?.let(::parseAdmin)
         val lockoutState = json.optJSONObject("lockoutState")?.let(::parseLockout) ?: LockoutState()
+        val persistence = json.optJSONObject("persistence")?.let(::parsePersistence)
 
         return RemoteArenaState(
             tournaments = tournaments,
@@ -916,6 +1065,8 @@ class ApiService(
             leagueMatches = leagueMatches,
             knockoutMatches = knockoutMatches,
             allMatches = allMatches,
+            races = races,
+            racingStandings = racingStandings,
             matchReminders = matchReminders,
             playerStats = playerStats,
             overviewStats = overviewStats,
@@ -929,7 +1080,8 @@ class ApiService(
             adminAccounts = adminAccounts,
             currentAdmin = currentAdmin,
             keepSignedIn = json.optBoolean("keepSignedIn", true),
-            lockoutState = lockoutState
+            lockoutState = lockoutState,
+            persistence = persistence
         )
     }
 
@@ -942,28 +1094,83 @@ class ApiService(
         }
     }
 
-    private fun parseTournament(obj: JSONObject): TournamentEntity = TournamentEntity(
+    private fun parseTournament(obj: JSONObject): TournamentEntity {
+        val pointsArr = obj.optJSONArray("racingPointsConfig")
+        val racingPointsStr = if (pointsArr != null && pointsArr.length() > 0) {
+            val list = buildList {
+                for (i in 0 until pointsArr.length()) {
+                    val v = pointsArr.optInt(i, -1)
+                    if (v >= 0) add(v)
+                }
+            }
+            formatRacingPointsConfig(list)
+        } else {
+            obj.optNullableString("racingPointsConfig")
+                ?.let { formatRacingPointsConfig(parseRacingPointsConfig(it)) }
+                ?: DEFAULT_RACING_POINTS_JSON
+        }
+        return TournamentEntity(
+            id = obj.optLong("id", 0L),
+            name = obj.optString("name", ""),
+            gameTitle = obj.optString("gameTitle", "FIFA 22"),
+            gameCategory = obj.optString("gameCategory", "كرة قدم"),
+            scoreUnitLabel = obj.optString("scoreUnitLabel", "هدف"),
+            description = obj.optString("description", ""),
+            bannerUri = resolveMediaUrl(obj.optNullableString("bannerUrl")),
+            startDateTime = obj.optString("startDateTime", ""),
+            maxParticipants = obj.optInt("maxParticipants", 16),
+            format = enumOrDefault(obj.optString("format"), TournamentFormat.GROUPS_KNOCKOUT),
+            playMode = enumOrDefault(obj.optString("playMode"), PlayMode.SOLO_1V1),
+            teamSize = obj.optInt("teamSize", 1).coerceIn(1, 16),
+            bestOf = obj.optInt("bestOf", 1).let { if (it in listOf(1, 3, 5)) it else 1 },
+            racingPointsConfig = racingPointsStr,
+            groupCount = obj.optInt("groupCount", 4),
+            qualifiersPerGroup = obj.optInt("qualifiersPerGroup", 2),
+            drawMode = enumOrDefault(obj.optString("drawMode"), DrawMode.RANDOM),
+            knockoutTieRule = enumOrDefault(obj.optString("knockoutTieRule"), KnockoutTieRule.SINGLE_MATCH_PENALTIES),
+            matchDurationMinutes = obj.optInt("matchDurationMinutes", 12),
+            targetGoalsRule = obj.optString("targetGoalsRule", ""),
+            isRegistrationClosedManual = obj.optBoolean("isRegistrationClosedManual", false),
+            isThirdPlaceEnabled = obj.optBoolean("isThirdPlaceEnabled", true),
+            status = enumOrDefault(obj.optString("status"), TournamentStatus.REGISTRATION_OPEN),
+            championPlayerId = obj.optNullableLong("championPlayerId"),
+            createdAt = obj.optLong("createdAt", 0L)
+        )
+    }
+
+    private fun parseRaceResult(obj: JSONObject): RaceResultEntry = RaceResultEntry(
         id = obj.optLong("id", 0L),
-        name = obj.optString("name", ""),
-        gameTitle = obj.optString("gameTitle", "FIFA 22"),
-        gameCategory = obj.optString("gameCategory", "كرة قدم"),
-        scoreUnitLabel = obj.optString("scoreUnitLabel", "هدف"),
-        description = obj.optString("description", ""),
-        bannerUri = resolveMediaUrl(obj.optNullableString("bannerUrl")),
-        startDateTime = obj.optString("startDateTime", ""),
-        maxParticipants = obj.optInt("maxParticipants", 16),
-        format = enumOrDefault(obj.optString("format"), TournamentFormat.GROUPS_KNOCKOUT),
-        groupCount = obj.optInt("groupCount", 4),
-        qualifiersPerGroup = obj.optInt("qualifiersPerGroup", 2),
-        drawMode = enumOrDefault(obj.optString("drawMode"), DrawMode.RANDOM),
-        knockoutTieRule = enumOrDefault(obj.optString("knockoutTieRule"), KnockoutTieRule.SINGLE_MATCH_PENALTIES),
-        matchDurationMinutes = obj.optInt("matchDurationMinutes", 12),
-        targetGoalsRule = obj.optString("targetGoalsRule", ""),
-        isRegistrationClosedManual = obj.optBoolean("isRegistrationClosedManual", false),
-        isThirdPlaceEnabled = obj.optBoolean("isThirdPlaceEnabled", false),
-        status = enumOrDefault(obj.optString("status"), TournamentStatus.REGISTRATION_OPEN),
-        championPlayerId = obj.optNullableLong("championPlayerId"),
-        createdAt = obj.optLong("createdAt", 0L)
+        raceId = obj.optLong("raceId", 0L),
+        tournamentId = obj.optLong("tournamentId", 0L),
+        playerId = obj.optLong("playerId", 0L),
+        position = obj.optNullableInt("position"),
+        pointsAwarded = obj.optInt("pointsAwarded", 0),
+        bestLapOrTime = obj.optString("bestLapOrTime", ""),
+        dnf = obj.optBoolean("dnf", false)
+    )
+
+    private fun parseRace(obj: JSONObject): RaceEntry = RaceEntry(
+        id = obj.optLong("id", 0L),
+        tournamentId = obj.optLong("tournamentId", 0L),
+        raceNumber = obj.optInt("raceNumber", 1),
+        title = obj.optString("title", ""),
+        stage = enumOrDefault(obj.optString("stage"), RaceStage.REGULAR),
+        trackName = obj.optString("trackName", ""),
+        isCompleted = obj.optBoolean("isCompleted", false),
+        createdAt = obj.optLong("createdAt", 0L),
+        results = parseArray(obj.optJSONArray("results"), ::parseRaceResult)
+    )
+
+    private fun parseRacingStandingRow(obj: JSONObject): RacingStandingRow = RacingStandingRow(
+        rank = obj.optInt("rank", 0),
+        player = parsePlayer(obj.getJSONObject("player")),
+        racesEntered = obj.optInt("racesEntered", 0),
+        wins = obj.optInt("wins", 0),
+        podiums = obj.optInt("podiums", 0),
+        totalPoints = obj.optInt("totalPoints", 0),
+        bestPosition = obj.optNullableInt("bestPosition"),
+        lastPosition = obj.optNullableInt("lastPosition"),
+        isQualified = obj.optBoolean("isQualified", false)
     )
 
     private fun parsePlayer(obj: JSONObject): PlayerEntity = PlayerEntity(
@@ -1101,6 +1308,14 @@ class ApiService(
     private fun parseLockout(obj: JSONObject): LockoutState = LockoutState(
         failedAttempts = obj.optInt("failedAttempts", 0),
         lockedUntilMillis = obj.optLong("lockedUntilMillis", 0L)
+    )
+
+    private fun parsePersistence(obj: JSONObject): PersistenceInfo = PersistenceInfo(
+        mode = obj.optString("mode", "local"),
+        isDurable = obj.optBoolean("isDurable", true),
+        labelAr = obj.optString("labelAr", ""),
+        detailAr = obj.optString("detailAr", ""),
+        cloudError = obj.optNullableString("cloudError")
     )
 
     private fun parseSeasonLeaderboardEntry(obj: JSONObject): SeasonLeaderboardEntry = SeasonLeaderboardEntry(

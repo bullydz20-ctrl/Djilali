@@ -1,5 +1,6 @@
 import {
   AdminRole,
+  DEFAULT_RACING_POINTS,
   DrawMode,
   GAME_CATALOG,
   KnockoutTieRule,
@@ -7,8 +8,10 @@ import {
   MatchStage,
   PLAYER_LEVEL_META,
   PLAYER_STATUS_META,
+  PlayMode,
   PlayerLevel,
   PlayerStatus,
+  RaceStage,
   TournamentFormat,
   TournamentStatus
 } from './constants.js';
@@ -17,6 +20,7 @@ import {
   buildHallOfFame,
   buildKnockoutSeedPairsFromGroups,
   buildKnockoutTreeDrafts,
+  computeRacingStandings,
   computeSeasonLeaderboard,
   computeStandings,
   computeTournamentStats,
@@ -24,6 +28,7 @@ import {
   generateRoundRobinMatches,
   groupDisplayName,
   nextPowerOfTwo,
+  parseRacingPointsConfig,
   resolveMatchResult,
   shuffleArray
 } from './engine.js';
@@ -68,9 +73,105 @@ function mapTournament(row) {
     targetGoalsRule: row.target_goals_rule,
     isRegistrationClosedManual: Boolean(row.is_registration_closed_manual),
     isThirdPlaceEnabled: row.is_third_place_enabled === undefined ? true : Boolean(row.is_third_place_enabled),
+    playMode: row.play_mode || PlayMode.SOLO_1V1,
+    teamSize: Math.max(1, Number(row.team_size) || 1),
+    bestOf: [1, 3, 5].includes(Number(row.best_of)) ? Number(row.best_of) : 1,
+    racingPointsConfig: parseRacingPointsConfig(row.racing_points_config),
     status: row.status,
     championPlayerId: row.champion_player_id ?? null,
     createdAt: row.created_at
+  };
+}
+
+function mapRaceResult(row) {
+  return {
+    id: row.id,
+    raceId: row.race_id,
+    tournamentId: row.tournament_id,
+    playerId: row.player_id,
+    position: row.position,
+    pointsAwarded: Number(row.points_awarded) || 0,
+    bestLapOrTime: row.best_lap_or_time || '',
+    dnf: Boolean(row.dnf)
+  };
+}
+
+function mapRace(row, results = []) {
+  return {
+    id: row.id,
+    tournamentId: row.tournament_id,
+    raceNumber: row.race_number,
+    title: row.title,
+    stage: row.stage || RaceStage.REGULAR,
+    trackName: row.track_name || '',
+    isCompleted: Boolean(row.is_completed),
+    createdAt: row.created_at,
+    results
+  };
+}
+
+function resolveGamePreset(gameTitle) {
+  const clean = String(gameTitle || '').trim().toLowerCase();
+  return GAME_CATALOG.find((g) => g.id.toLowerCase() === clean) || null;
+}
+
+function resolveTournamentGameRules(payload, fallbackCurrent = null) {
+  const gameTitle = String(payload.gameTitle ?? fallbackCurrent?.gameTitle ?? 'FIFA 22').trim() || 'FIFA 22';
+  const preset = resolveGamePreset(gameTitle);
+
+  let gameCategory = String(payload.gameCategory ?? fallbackCurrent?.gameCategory ?? preset?.categoryAr ?? 'ألعاب إلكترونية').trim() || 'ألعاب إلكترونية';
+  let scoreUnitLabel = String(payload.scoreUnitLabel ?? fallbackCurrent?.scoreUnitLabel ?? preset?.scoreUnitLabel ?? 'هدف').trim() || 'هدف';
+  let format = Object.values(TournamentFormat).includes(payload.format)
+    ? payload.format
+    : (fallbackCurrent?.format ?? preset?.defaultFormat ?? TournamentFormat.GROUPS_KNOCKOUT);
+  let playMode = Object.values(PlayMode).includes(payload.playMode)
+    ? payload.playMode
+    : (fallbackCurrent?.playMode ?? preset?.defaultPlayMode ?? PlayMode.SOLO_1V1);
+  let teamSize = Math.max(1, Math.min(11, Number(payload.teamSize ?? fallbackCurrent?.teamSize ?? preset?.defaultTeamSize ?? 1) || 1));
+  let bestOfRaw = Number(payload.bestOf ?? fallbackCurrent?.bestOf ?? preset?.defaultBestOf ?? 1);
+  let bestOf = [1, 3, 5].includes(bestOfRaw) ? bestOfRaw : 1;
+  let racingPointsConfig = parseRacingPointsConfig(
+    payload.racingPointsConfig ?? fallbackCurrent?.racingPointsConfig ?? DEFAULT_RACING_POINTS
+  );
+
+  if (preset) {
+    gameCategory = String(payload.gameCategory ?? preset.categoryAr).trim() || preset.categoryAr;
+    scoreUnitLabel = String(payload.scoreUnitLabel ?? preset.scoreUnitLabel).trim() || preset.scoreUnitLabel;
+    if (!preset.supportedFormats.includes(format)) {
+      format = preset.defaultFormat;
+    }
+    if (!preset.supportedPlayModes.includes(playMode)) {
+      playMode = preset.defaultPlayMode;
+    }
+    if (preset.categoryType === 'RACING') {
+      playMode = PlayMode.RACE_POINTS;
+      teamSize = 1;
+      bestOf = 1;
+      scoreUnitLabel = 'نقطة';
+    } else if (preset.categoryType === 'FIGHTING') {
+      playMode = PlayMode.SOLO_1V1;
+      teamSize = 1;
+    } else if (!preset.supportsTeamSize || playMode !== PlayMode.TEAMS) {
+      teamSize = 1;
+    } else {
+      teamSize = Math.max(2, Math.min(11, teamSize));
+    }
+    if (!preset.supportsBestOf) {
+      bestOf = 1;
+    }
+  } else if (playMode !== PlayMode.TEAMS) {
+    teamSize = 1;
+  }
+
+  return {
+    gameTitle,
+    gameCategory,
+    scoreUnitLabel,
+    format,
+    playMode,
+    teamSize,
+    bestOf,
+    racingPointsConfig
   };
 }
 
@@ -981,9 +1082,31 @@ export class ArenaService {
       ? this.db.prepare('SELECT * FROM match_reminders WHERE tournament_id = ? ORDER BY remind_at_millis ASC').all(tournament.id).map(mapReminder)
       : [];
 
+    const raceRows = tournament
+      ? this.db.prepare('SELECT * FROM races WHERE tournament_id = ? ORDER BY race_number ASC, id ASC').all(tournament.id)
+      : [];
+    const raceResultRows = tournament
+      ? this.db.prepare('SELECT * FROM race_results WHERE tournament_id = ? ORDER BY position ASC, id ASC').all(tournament.id)
+      : [];
+    const resultsByRaceId = new Map();
+    for (const rr of raceResultRows) {
+      const mapped = mapRaceResult(rr);
+      if (!resultsByRaceId.has(mapped.raceId)) resultsByRaceId.set(mapped.raceId, []);
+      resultsByRaceId.get(mapped.raceId).push(mapped);
+    }
+    const races = raceRows.map((r) => mapRace(r, resultsByRaceId.get(r.id) || []));
+
     const approvedPlayers = players.filter((p) => p.status === PlayerStatus.APPROVED);
     const pendingPlayers = players.filter((p) => p.status === PlayerStatus.PENDING);
     const rejectedPlayers = players.filter((p) => p.status === PlayerStatus.REJECTED);
+
+    const isRacingFormat =
+      tournament &&
+      (tournament.format === TournamentFormat.RACE_POINTS || tournament.format === TournamentFormat.RACE_QUALIFIERS_FINAL);
+    const racingStandings =
+      isRacingFormat || races.length > 0
+        ? computeRacingStandings(approvedPlayers, races, tournament?.qualifiersPerGroup || 4)
+        : [];
 
     const groupsWithStandings =
       tournament && tournament.format === TournamentFormat.GROUPS_KNOCKOUT
@@ -1049,6 +1172,8 @@ export class ArenaService {
       leagueMatches,
       knockoutMatches,
       allMatches,
+      races,
+      racingStandings,
       matchReminders,
       playerStats,
       overviewStats,
@@ -1083,17 +1208,12 @@ export class ArenaService {
     const name = String(payload.name || '').trim();
     if (!name) return { ok: false, status: 400, error: 'يرجى إدخال اسم البطولة.' };
 
-    const gameTitle = String(payload.gameTitle || 'FIFA 22').trim() || 'FIFA 22';
-    const gameCategory = String(payload.gameCategory || 'ألعاب إلكترونية').trim() || 'ألعاب إلكترونية';
-    const scoreUnitLabel = String(payload.scoreUnitLabel || 'هدف').trim() || 'هدف';
+    const rules = resolveTournamentGameRules(payload, null);
     const description =
       String(payload.description || '').trim() ||
-      `بطولة ${gameTitle} الرسمية لمجتمع CP4 ARENA على منصة COMMUNITY PS4 & GAMING ONLINE.`;
+      `بطولة ${rules.gameTitle} الرسمية لمجتمع CP4 ARENA على منصة COMMUNITY PS4 & GAMING ONLINE.`;
     const startDateTime = String(payload.startDateTime || '').trim() || 'يُحدد لاحقاً';
     const maxParticipants = Math.max(2, Math.min(64, Number(payload.maxParticipants) || 16));
-    const format = Object.values(TournamentFormat).includes(payload.format)
-      ? payload.format
-      : TournamentFormat.GROUPS_KNOCKOUT;
     const groupCount = Math.max(1, Math.min(8, Number(payload.groupCount) || 4));
     const qualifiersPerGroup = Math.max(1, Math.min(16, Number(payload.qualifiersPerGroup) || 2));
     const drawMode = Object.values(DrawMode).includes(payload.drawMode) ? payload.drawMode : DrawMode.RANDOM;
@@ -1113,19 +1233,20 @@ export class ArenaService {
           banner_url, start_date_time, max_participants, format, group_count,
           qualifiers_per_group, draw_mode, knockout_tie_rule, match_duration_minutes,
           target_goals_rule, is_registration_closed_manual, is_third_place_enabled,
+          play_mode, team_size, best_of, racing_points_config,
           status, champion_player_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, ?)
       `)
       .run(
         name,
-        gameTitle,
-        gameCategory,
-        scoreUnitLabel,
+        rules.gameTitle,
+        rules.gameCategory,
+        rules.scoreUnitLabel,
         description,
         bannerUrl,
         startDateTime,
         maxParticipants,
-        format,
+        rules.format,
         groupCount,
         qualifiersPerGroup,
         drawMode,
@@ -1133,6 +1254,10 @@ export class ArenaService {
         matchDurationMinutes,
         targetGoalsRule,
         isThirdPlaceEnabled ? 1 : 0,
+        rules.playMode,
+        rules.teamSize,
+        rules.bestOf,
+        JSON.stringify(rules.racingPointsConfig),
         TournamentStatus.REGISTRATION_OPEN,
         now
       );
@@ -1153,8 +1278,8 @@ export class ArenaService {
     const name = String(payload.name ?? current.name).trim();
     if (!name) return { ok: false, status: 400, error: 'يرجى إدخال اسم البطولة.' };
 
+    const rules = resolveTournamentGameRules(payload, current);
     const maxParticipants = Math.max(2, Math.min(64, Number(payload.maxParticipants ?? current.maxParticipants)));
-    const format = Object.values(TournamentFormat).includes(payload.format) ? payload.format : current.format;
     const groupCount = Math.max(1, Math.min(8, Number(payload.groupCount ?? current.groupCount)));
     const qualifiersPerGroup = Math.max(1, Math.min(16, Number(payload.qualifiersPerGroup ?? current.qualifiersPerGroup)));
     const drawMode = Object.values(DrawMode).includes(payload.drawMode) ? payload.drawMode : current.drawMode;
@@ -1191,19 +1316,21 @@ export class ArenaService {
           description = ?, banner_url = ?, start_date_time = ?, max_participants = ?,
           format = ?, group_count = ?, qualifiers_per_group = ?, draw_mode = ?,
           knockout_tie_rule = ?, match_duration_minutes = ?, target_goals_rule = ?,
-          is_registration_closed_manual = ?, is_third_place_enabled = ?, status = ?
+          is_registration_closed_manual = ?, is_third_place_enabled = ?,
+          play_mode = ?, team_size = ?, best_of = ?, racing_points_config = ?,
+          status = ?
         WHERE id = ?
       `)
       .run(
         name,
-        String(payload.gameTitle ?? current.gameTitle).trim() || 'FIFA 22',
-        String(payload.gameCategory ?? current.gameCategory).trim() || 'ألعاب إلكترونية',
-        String(payload.scoreUnitLabel ?? current.scoreUnitLabel).trim() || 'نقطة',
+        rules.gameTitle,
+        rules.gameCategory,
+        rules.scoreUnitLabel,
         String(payload.description ?? current.description).trim(),
         payload.bannerUrl !== undefined ? payload.bannerUrl : current.bannerUrl,
         String(payload.startDateTime ?? current.startDateTime).trim() || 'يُحدد لاحقاً',
         maxParticipants,
-        format,
+        rules.format,
         groupCount,
         qualifiersPerGroup,
         drawMode,
@@ -1212,6 +1339,10 @@ export class ArenaService {
         String(payload.targetGoalsRule ?? current.targetGoalsRule).trim() || 'المباراة الكاملة',
         manualClosed ? 1 : 0,
         isThirdPlaceEnabled ? 1 : 0,
+        rules.playMode,
+        rules.teamSize,
+        rules.bestOf,
+        JSON.stringify(rules.racingPointsConfig),
         status,
         current.id
       );
@@ -1683,6 +1814,26 @@ export class ArenaService {
       this.db.prepare('DELETE FROM match_reminders WHERE tournament_id = ?').run(tournament.id);
       this.db.prepare('DELETE FROM matches WHERE tournament_id = ?').run(tournament.id);
       this.db.prepare('DELETE FROM tournament_groups WHERE tournament_id = ?').run(tournament.id);
+      this.db.prepare('DELETE FROM race_results WHERE tournament_id = ?').run(tournament.id);
+      this.db.prepare('DELETE FROM races WHERE tournament_id = ?').run(tournament.id);
+
+      if (
+        tournament.format === TournamentFormat.RACE_POINTS ||
+        tournament.format === TournamentFormat.RACE_QUALIFIERS_FINAL
+      ) {
+        const stage =
+          tournament.format === TournamentFormat.RACE_QUALIFIERS_FINAL ? RaceStage.QUALIFIER : RaceStage.REGULAR;
+        const firstTitle =
+          tournament.format === TournamentFormat.RACE_QUALIFIERS_FINAL ? 'سباق التصفيات 1' : 'السباق 1';
+        this.db
+          .prepare('INSERT INTO races (tournament_id, race_number, title, stage, track_name, is_completed, created_at) VALUES (?, 1, ?, ?, ?, 0, ?)')
+          .run(tournament.id, firstTitle, stage, '', Date.now());
+        this.db
+          .prepare('UPDATE tournaments SET status = ?, is_registration_closed_manual = 1, champion_player_id = NULL WHERE id = ?')
+          .run(TournamentStatus.GROUP_STAGE, tournament.id);
+        this.logAudit(auth.session.rawAdmin, tournament.id, 'RUN_DRAW', `بدء بطولة السباقات وتجهيز ${firstTitle}`);
+        return { ok: true, status: 200, messageAr: `تم اعتماد المتسابقين وفتح ${firstTitle} بنجاح!` };
+      }
 
       if (tournament.format === TournamentFormat.GROUPS_KNOCKOUT) {
         const gCount = Math.max(1, Math.min(tournament.groupCount, approved.length));
@@ -2309,6 +2460,255 @@ export class ArenaService {
     };
   }
 
+  createRace(rawToken, tournamentId, { title, stage, trackName = '' } = {}) {
+    const auth = this.requirePermission(rawToken, null);
+    if (!auth.ok) return auth;
+    if (!hasPermission(auth.session.rawAdmin, 'EDIT_SCORES') && !hasPermission(auth.session.rawAdmin, 'RUN_DRAW')) {
+      return { ok: false, status: 403, error: 'ليس لديك صلاحية إضافة سباقات.' };
+    }
+
+    const res = this.withTx(() => {
+      const tournament = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(Number(tournamentId)));
+      if (!tournament) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
+
+      const maxNum = this.db
+        .prepare('SELECT COALESCE(MAX(race_number), 0) AS m FROM races WHERE tournament_id = ?')
+        .get(tournament.id).m;
+      const raceNumber = Number(maxNum) + 1;
+      const safeStage = Object.values(RaceStage).includes(stage)
+        ? stage
+        : tournament.format === TournamentFormat.RACE_QUALIFIERS_FINAL
+          ? RaceStage.QUALIFIER
+          : RaceStage.REGULAR;
+      const cleanTitle =
+        String(title || '').trim().slice(0, 80) ||
+        (safeStage === RaceStage.FINAL
+          ? 'السباق النهائي'
+          : safeStage === RaceStage.QUALIFIER
+            ? `سباق التصفيات ${raceNumber}`
+            : `السباق ${raceNumber}`);
+      const cleanTrack = String(trackName || '').trim().slice(0, 80);
+
+      const info = this.db
+        .prepare(`
+          INSERT INTO races (tournament_id, race_number, title, stage, track_name, is_completed, created_at)
+          VALUES (?, ?, ?, ?, ?, 0, ?)
+        `)
+        .run(tournament.id, raceNumber, cleanTitle, safeStage, cleanTrack, Date.now());
+
+      if (safeStage === RaceStage.FINAL) {
+        this.db
+          .prepare('UPDATE tournaments SET status = ?, is_registration_closed_manual = 1 WHERE id = ?')
+          .run(TournamentStatus.KNOCKOUT_STAGE, tournament.id);
+      } else if (
+        tournament.status === TournamentStatus.REGISTRATION_OPEN ||
+        tournament.status === TournamentStatus.REGISTRATION_CLOSED
+      ) {
+        this.db
+          .prepare('UPDATE tournaments SET status = ?, is_registration_closed_manual = 1 WHERE id = ?')
+          .run(TournamentStatus.GROUP_STAGE, tournament.id);
+      }
+
+      const createdRow = this.db.prepare('SELECT * FROM races WHERE id = ?').get(info.lastInsertRowid);
+      const race = mapRace(createdRow, []);
+      this.logAudit(auth.session.rawAdmin, tournament.id, 'CREATE_RACE', `إضافة سباق: ${cleanTitle}`);
+      return { ok: true, status: 201, race, messageAr: `تمت إضافة (${cleanTitle}) بنجاح.` };
+    });
+
+    if (res.ok) this.emitChange('race_updated');
+    return res;
+  }
+
+  saveRaceResults(rawToken, raceId, { entries = [], trackName, title } = {}) {
+    const auth = this.requirePermission(rawToken, 'EDIT_SCORES');
+    if (!auth.ok) return auth;
+
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return { ok: false, status: 400, error: 'يرجى إدخال نتائج المتسابقين للسباق.' };
+    }
+
+    const res = this.withTx(() => {
+      const raceRow = this.db.prepare('SELECT * FROM races WHERE id = ?').get(Number(raceId));
+      if (!raceRow) return { ok: false, status: 404, error: 'السباق غير موجود.' };
+
+      const tournament = mapTournament(
+        this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(raceRow.tournament_id)
+      );
+      if (!tournament) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
+
+      const approvedIds = new Set(
+        this.db
+          .prepare('SELECT id FROM players WHERE tournament_id = ? AND status = ?')
+          .all(tournament.id, PlayerStatus.APPROVED)
+          .map((p) => p.id)
+      );
+
+      const pointsConfig = parseRacingPointsConfig(tournament.racingPointsConfig);
+      const seenPlayers = new Set();
+      const cleaned = [];
+
+      for (const item of entries) {
+        const pid = Number(item.playerId);
+        const pos = Number(item.position);
+        const dnf = Boolean(item.dnf);
+        if (!approvedIds.has(pid)) {
+          return { ok: false, status: 400, error: 'أحد المتسابقين غير معتمد في هذه البطولة.' };
+        }
+        if (seenPlayers.has(pid)) {
+          return { ok: false, status: 400, error: 'لا يمكن تكرار المتسابق في نفس السباق.' };
+        }
+        if (!Number.isInteger(pos) || pos < 1) {
+          return { ok: false, status: 400, error: 'ترتيب المراكز يجب أن يكون رقماً صحيحاً يبدأ من 1.' };
+        }
+        seenPlayers.add(pid);
+        const pointsAwarded = dnf ? 0 : (pointsConfig[pos - 1] ?? 0);
+        cleaned.push({
+          playerId: pid,
+          position: pos,
+          pointsAwarded,
+          bestLapOrTime: String(item.bestLapOrTime || '').trim().slice(0, 40),
+          dnf: dnf ? 1 : 0
+        });
+      }
+
+      this.db.prepare('DELETE FROM race_results WHERE race_id = ?').run(raceRow.id);
+      const insertStmt = this.db.prepare(`
+        INSERT INTO race_results (race_id, tournament_id, player_id, position, points_awarded, best_lap_or_time, dnf)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const row of cleaned) {
+        insertStmt.run(
+          raceRow.id,
+          tournament.id,
+          row.playerId,
+          row.position,
+          row.pointsAwarded,
+          row.bestLapOrTime,
+          row.dnf
+        );
+      }
+
+      const nextTitle = title !== undefined && String(title).trim() ? String(title).trim().slice(0, 80) : raceRow.title;
+      const nextTrack = trackName !== undefined ? String(trackName).trim().slice(0, 80) : raceRow.track_name;
+      this.db
+        .prepare('UPDATE races SET title = ?, track_name = ?, is_completed = 1 WHERE id = ?')
+        .run(nextTitle, nextTrack, raceRow.id);
+
+      const resultRows = this.db
+        .prepare('SELECT * FROM race_results WHERE race_id = ? ORDER BY position ASC, id ASC')
+        .all(raceRow.id)
+        .map(mapRaceResult);
+      const updatedRace = mapRace(
+        this.db.prepare('SELECT * FROM races WHERE id = ?').get(raceRow.id),
+        resultRows
+      );
+
+      this.logAudit(
+        auth.session.rawAdmin,
+        tournament.id,
+        'SAVE_RACE_RESULTS',
+        `حفظ نتائج ${nextTitle} وتحديث ترتيب النقاط (${cleaned.length} متسابق)`
+      );
+      return { ok: true, status: 200, race: updatedRace, messageAr: 'تم حفظ نتائج السباق وتحديث ترتيب المتسابقين!' };
+    });
+
+    if (res.ok) this.emitChange('race_updated');
+    return res;
+  }
+
+  generateFinalRaceFromStandings(rawToken, tournamentId, { title, trackName = '', qualifiersCount } = {}) {
+    const auth = this.requirePermission(rawToken, 'RUN_DRAW');
+    if (!auth.ok) return auth;
+
+    const res = this.withTx(() => {
+      const state = this.getPublicState(Number(tournamentId));
+      const tournament = state.tournament;
+      if (!tournament) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
+
+      const count = Math.max(2, Math.min(32, Number(qualifiersCount ?? tournament.qualifiersPerGroup) || 4));
+      const qualified = (state.racingStandings || []).slice(0, count);
+      if (qualified.length < 2) {
+        return { ok: false, status: 400, error: 'يلزم وجود متسابقين اثنين على الأقل لتوليد السباق النهائي.' };
+      }
+
+      // Remove previous incomplete FINAL race if regenerating
+      const oldFinals = this.db
+        .prepare('SELECT id FROM races WHERE tournament_id = ? AND stage = ?')
+        .all(tournament.id, RaceStage.FINAL);
+      for (const f of oldFinals) {
+        this.db.prepare('DELETE FROM races WHERE id = ?').run(f.id);
+      }
+
+      const maxNum = this.db
+        .prepare('SELECT COALESCE(MAX(race_number), 0) AS m FROM races WHERE tournament_id = ?')
+        .get(tournament.id).m;
+      const raceNumber = Number(maxNum) + 1;
+      const cleanTitle = String(title || '').trim().slice(0, 80) || 'السباق النهائي';
+      const cleanTrack = String(trackName || '').trim().slice(0, 80);
+
+      const info = this.db
+        .prepare(`
+          INSERT INTO races (tournament_id, race_number, title, stage, track_name, is_completed, created_at)
+          VALUES (?, ?, ?, ?, ?, 0, ?)
+        `)
+        .run(tournament.id, raceNumber, cleanTitle, RaceStage.FINAL, cleanTrack, Date.now());
+      const raceId = Number(info.lastInsertRowid);
+
+      const insertStmt = this.db.prepare(`
+        INSERT INTO race_results (race_id, tournament_id, player_id, position, points_awarded, best_lap_or_time, dnf)
+        VALUES (?, ?, ?, ?, 0, '', 0)
+      `);
+      qualified.forEach((row, idx) => {
+        insertStmt.run(raceId, tournament.id, row.player.id, idx + 1);
+      });
+
+      this.db
+        .prepare('UPDATE tournaments SET status = ?, champion_player_id = NULL WHERE id = ?')
+        .run(TournamentStatus.KNOCKOUT_STAGE, tournament.id);
+
+      const results = this.db
+        .prepare('SELECT * FROM race_results WHERE race_id = ? ORDER BY position ASC')
+        .all(raceId)
+        .map(mapRaceResult);
+      const race = mapRace(this.db.prepare('SELECT * FROM races WHERE id = ?').get(raceId), results);
+
+      this.logAudit(
+        auth.session.rawAdmin,
+        tournament.id,
+        'GENERATE_FINAL_RACE',
+        `تأهيل أفضل ${qualified.length} متسابقين إلى ${cleanTitle}`
+      );
+      return {
+        ok: true,
+        status: 201,
+        race,
+        messageAr: `تم تأهيل أفضل ${qualified.length} متسابقين وإنشاء ${cleanTitle} بنجاح!`
+      };
+    });
+
+    if (res.ok) this.emitChange('race_updated');
+    return res;
+  }
+
+  deleteRace(rawToken, raceId) {
+    const auth = this.requirePermission(rawToken, null);
+    if (!auth.ok) return auth;
+    if (
+      !hasPermission(auth.session.rawAdmin, 'EDIT_SCORES') &&
+      !hasPermission(auth.session.rawAdmin, 'MANAGE_TOURNAMENT')
+    ) {
+      return { ok: false, status: 403, error: 'ليس لديك صلاحية حذف السباق.' };
+    }
+
+    const row = this.db.prepare('SELECT * FROM races WHERE id = ?').get(Number(raceId));
+    if (!row) return { ok: false, status: 404, error: 'السباق غير موجود.' };
+
+    this.db.prepare('DELETE FROM races WHERE id = ?').run(row.id);
+    this.logAudit(auth.session.rawAdmin, row.tournament_id, 'DELETE_RACE', `حذف السباق: ${row.title}`);
+    this.emitChange('race_updated');
+    return { ok: true, status: 200, messageAr: 'تم حذف السباق وتحديث الترتيب.' };
+  }
+
   scheduleReminder({ matchId, matchTitle, scheduledAtMillis, leadMinutes = 15 }) {
     const matchRow = this.db.prepare('SELECT * FROM matches WHERE id = ?').get(Number(matchId));
     if (!matchRow) return { ok: false, status: 404, error: 'المباراة غير موجودة.' };
@@ -2380,6 +2780,8 @@ export class ArenaService {
     const tournamentGroups = this.db.prepare('SELECT * FROM tournament_groups ORDER BY id ASC').all();
     const players = this.db.prepare('SELECT * FROM players ORDER BY id ASC').all();
     const matches = this.db.prepare('SELECT * FROM matches ORDER BY id ASC').all();
+    const races = this.db.prepare('SELECT * FROM races ORDER BY id ASC').all();
+    const raceResults = this.db.prepare('SELECT * FROM race_results ORDER BY id ASC').all();
     const matchReminders = this.db.prepare('SELECT * FROM match_reminders ORDER BY id ASC').all();
     const adminAccounts = this.db.prepare('SELECT * FROM admin_accounts ORDER BY id ASC').all();
     const revokedAdmins = this.db.prepare('SELECT * FROM revoked_admins ORDER BY revoked_at ASC').all();
@@ -2392,13 +2794,15 @@ export class ArenaService {
       ok: true,
       status: 200,
       backup: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         app: 'CP4_ARENA',
         exportedAt: Date.now(),
         tournaments,
         tournamentGroups,
         players,
         matches,
+        races,
+        raceResults,
         matchReminders,
         adminAccounts,
         revokedAdmins,
@@ -2428,6 +2832,8 @@ export class ArenaService {
     }
 
     const tournamentGroups = Array.isArray(backup.tournamentGroups) ? backup.tournamentGroups : [];
+    const races = Array.isArray(backup.races) ? backup.races : [];
+    const raceResults = Array.isArray(backup.raceResults) ? backup.raceResults : [];
     const matchReminders = Array.isArray(backup.matchReminders) ? backup.matchReminders : [];
     const adminAccounts = Array.isArray(backup.adminAccounts) ? backup.adminAccounts : [];
     const revokedAdmins = Array.isArray(backup.revokedAdmins) ? backup.revokedAdmins : [];
@@ -2436,6 +2842,8 @@ export class ArenaService {
     const subAdminsRestoredCount = adminAccounts.filter((a) => a.role === AdminRole.SUB_ADMIN).length;
 
     this.withTx(() => {
+      this.db.prepare('DELETE FROM race_results').run();
+      this.db.prepare('DELETE FROM races').run();
       this.db.prepare('DELETE FROM match_reminders').run();
       this.db.prepare('DELETE FROM matches').run();
       this.db.prepare('DELETE FROM players').run();
@@ -2453,8 +2861,9 @@ export class ArenaService {
           banner_url, start_date_time, max_participants, format, group_count,
           qualifiers_per_group, draw_mode, knockout_tie_rule, match_duration_minutes,
           target_goals_rule, is_registration_closed_manual, is_third_place_enabled,
+          play_mode, team_size, best_of, racing_points_config,
           status, champion_player_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const t of backup.tournaments) {
         insertTournament.run(
@@ -2476,6 +2885,12 @@ export class ArenaService {
           String(t.target_goals_rule || ''),
           t.is_registration_closed_manual ? 1 : 0,
           t.is_third_place_enabled === undefined ? 1 : t.is_third_place_enabled ? 1 : 0,
+          String(t.play_mode || PlayMode.SOLO_1V1),
+          Math.max(1, Number(t.team_size) || 1),
+          [1, 3, 5].includes(Number(t.best_of)) ? Number(t.best_of) : 1,
+          typeof t.racing_points_config === 'string' && t.racing_points_config.trim()
+            ? t.racing_points_config
+            : JSON.stringify(parseRacingPointsConfig(t.racing_points_config)),
           String(t.status || TournamentStatus.REGISTRATION_OPEN),
           t.champion_player_id != null ? Number(t.champion_player_id) : null,
           Number(t.created_at) || Date.now()
@@ -2557,6 +2972,42 @@ export class ArenaService {
           m.dispute_submitted_by ?? null,
           m.dispute_screenshot_url ?? null,
           m.dispute_resolution_note ?? null
+        );
+      }
+
+      const insertRace = this.db.prepare(`
+        INSERT INTO races (
+          id, tournament_id, race_number, title, stage, track_name, is_completed, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const r of races) {
+        insertRace.run(
+          Number(r.id),
+          Number(r.tournament_id),
+          Number(r.race_number) || 1,
+          String(r.title || 'سباق'),
+          String(r.stage || RaceStage.REGULAR),
+          String(r.track_name || ''),
+          r.is_completed ? 1 : 0,
+          Number(r.created_at) || Date.now()
+        );
+      }
+
+      const insertRaceResult = this.db.prepare(`
+        INSERT INTO race_results (
+          id, race_id, tournament_id, player_id, position, points_awarded, best_lap_or_time, dnf
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const rr of raceResults) {
+        insertRaceResult.run(
+          Number(rr.id),
+          Number(rr.race_id),
+          Number(rr.tournament_id),
+          Number(rr.player_id),
+          Number(rr.position) || 1,
+          Number(rr.points_awarded) || 0,
+          String(rr.best_lap_or_time || ''),
+          rr.dnf ? 1 : 0
         );
       }
 
@@ -2675,6 +3126,8 @@ export class ArenaService {
         'tournament_groups',
         'players',
         'matches',
+        'races',
+        'race_results',
         'match_reminders',
         'admin_accounts',
         'admin_audit_logs'

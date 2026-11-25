@@ -5,6 +5,7 @@ import com.example.data.model.AdminRole
 import com.example.data.model.DrawMode
 import com.example.data.model.KnockoutTieRule
 import com.example.data.model.MatchStage
+import com.example.data.model.PlayMode
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
 import com.example.data.model.TournamentFormat
@@ -12,7 +13,12 @@ import com.example.data.model.TournamentStatus
 
 class Converters {
     @TypeConverter fun fromTournamentFormat(v: TournamentFormat): String = v.name
-    @TypeConverter fun toTournamentFormat(v: String): TournamentFormat = TournamentFormat.valueOf(v)
+    @TypeConverter fun toTournamentFormat(v: String): TournamentFormat =
+        runCatching { TournamentFormat.valueOf(v) }.getOrDefault(TournamentFormat.GROUPS_KNOCKOUT)
+
+    @TypeConverter fun fromPlayMode(v: PlayMode): String = v.name
+    @TypeConverter fun toPlayMode(v: String): PlayMode =
+        runCatching { PlayMode.valueOf(v) }.getOrDefault(PlayMode.SOLO_1V1)
 
     @TypeConverter fun fromDrawMode(v: DrawMode): String = v.name
     @TypeConverter fun toDrawMode(v: String): DrawMode = DrawMode.valueOf(v)

@@ -1,8 +1,9 @@
 import { LayoutGrid } from 'lucide-react';
 import { EmptyStatePanel, PlayerAvatar } from '../components/PlayerAvatar';
 import { MatchResultsTable } from '../components/MatchResultsTable';
+import { RacingOverviewPanel, isRacingFormat } from '../components/RacingSection';
 import { adminHasPermission } from '../types';
-import type { ArenaState, GroupStandingRow, Match, Player } from '../types';
+import type { ArenaState, GroupStandingRow, Match, Player, RaceEntry, RaceStage } from '../types';
 
 export function GroupsScreen({
   state,
@@ -11,7 +12,11 @@ export function GroupsScreen({
   onOpenReminder,
   onToggleCheckIn,
   onVotePrediction,
-  onOpenDispute
+  onOpenDispute,
+  onCreateRace,
+  onEditRace,
+  onGenerateFinalRace,
+  onDeleteRace
 }: {
   state: ArenaState;
   onEditMatch: (m: Match) => void;
@@ -20,14 +25,33 @@ export function GroupsScreen({
   onToggleCheckIn: (m: Match, slot: 1 | 2) => void;
   onVotePrediction: (m: Match, slot: 1 | 2) => void;
   onOpenDispute: (m: Match) => void;
+  onCreateRace?: (payload: { title?: string; stage?: RaceStage; trackName?: string }) => Promise<void>;
+  onEditRace?: (race: RaceEntry) => void;
+  onGenerateFinalRace?: (payload?: { title?: string; trackName?: string; qualifiersCount?: number }) => Promise<void>;
+  onDeleteRace?: (raceId: number) => Promise<void>;
 }) {
   const t = state.tournament;
   const playersById = new Map<number, Player>(state.players.map((p) => [p.id, p]));
   const remindersByMatchId = new Map(state.matchReminders.map((r) => [r.matchId, r]));
   const canEditScores = adminHasPermission(state.currentAdmin, 'EDIT_SCORES');
+  const canRunDraw = adminHasPermission(state.currentAdmin, 'RUN_DRAW');
   const unit = t?.scoreUnitLabel || 'نقطة';
 
   if (!t) return null;
+
+  if (isRacingFormat(t.format)) {
+    return (
+      <RacingOverviewPanel
+        state={state}
+        canEdit={canEditScores}
+        canRunDraw={canRunDraw}
+        onCreateRace={onCreateRace}
+        onEditRace={onEditRace}
+        onGenerateFinalRace={onGenerateFinalRace}
+        onDeleteRace={onDeleteRace}
+      />
+    );
+  }
 
   if (t.format === 'DIRECT_KNOCKOUT') {
     return (

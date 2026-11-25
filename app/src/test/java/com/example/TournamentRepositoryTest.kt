@@ -3,21 +3,35 @@ package com.example
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.api.RaceEntry
+import com.example.api.RaceResultEntry
+import com.example.api.RacingStandingRow
 import com.example.data.local.AppDatabase
+import com.example.data.local.PlayerEntity
 import com.example.data.local.SessionPreferences
 import com.example.data.local.TournamentEntity
+import com.example.data.model.GAME_CATALOG
 import com.example.data.model.MatchStage
+import com.example.data.model.OnlineCompatibilityStatus
+import com.example.data.model.PlayMode
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
+import com.example.data.model.RaceStage
 import com.example.data.model.TournamentFormat
 import com.example.data.model.TournamentStatus
+import com.example.data.model.findApprovedGamePreset
+import com.example.data.model.formatRacingPointsConfig
+import com.example.data.model.parseRacingPointsConfig
 import com.example.data.repository.RepoResult
 import com.example.data.repository.TournamentRepository
 import com.example.domain.TournamentEngine
+import com.example.domain.TournamentExportFormatter
+import com.example.ui.viewmodel.TournamentUiState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -199,18 +213,20 @@ class TournamentRepositoryTest {
         assertTrue(repo.allTournaments.first().isEmpty())
         assertNull(repo.latestTournament.first())
 
-        // Create multiple tournaments for different games (Tekken 8 + Call of Duty)
+        // Create multiple tournaments for different games (Tekken 7 + Call of Duty)
         assertTrue(
             repo.createFreshTournament(
                 TournamentEntity(
-                    name = "بطولة Tekken 8",
-                    gameTitle = "Tekken 8",
-                    gameCategory = "قتال",
+                    name = "بطولة Tekken 7",
+                    gameTitle = "Tekken 7",
+                    gameCategory = "ألعاب قتال — 1 ضد 1",
                     scoreUnitLabel = "جولة",
                     description = "بطولة قتال",
                     startDateTime = "السبت",
                     maxParticipants = 8,
-                    format = TournamentFormat.DIRECT_KNOCKOUT
+                    format = TournamentFormat.DIRECT_KNOCKOUT,
+                    playMode = PlayMode.SOLO_1V1,
+                    bestOf = 3
                 )
             ) is RepoResult.Success
         )
@@ -219,11 +235,14 @@ class TournamentRepositoryTest {
                 TournamentEntity(
                     name = "بطولة Call of Duty",
                     gameTitle = "Call of Duty",
-                    gameCategory = "شوتر",
+                    gameCategory = "أكشن وتصويب",
                     scoreUnitLabel = "نقطة",
                     description = "بطولة شوتر",
                     startDateTime = "الأحد",
-                    maxParticipants = 16
+                    maxParticipants = 16,
+                    playMode = PlayMode.TEAMS,
+                    teamSize = 4,
+                    bestOf = 5
                 )
             ) is RepoResult.Success
         )
@@ -232,13 +251,14 @@ class TournamentRepositoryTest {
         assertEquals(2, all.size)
         assertEquals("Call of Duty", repo.latestTournament.first()?.gameTitle)
 
-        val tekken = all.first { it.gameTitle == "Tekken 8" }
+        val tekken = all.first { it.gameTitle == "Tekken 7" }
         val cod = all.first { it.gameTitle == "Call of Duty" }
         repo.selectTournament(tekken.id)
-        assertEquals("Tekken 8", repo.latestTournament.first()?.gameTitle)
+        assertEquals("Tekken 7", repo.latestTournament.first()?.gameTitle)
         assertEquals("جولة", repo.latestTournament.first()?.scoreUnitLabel)
+        assertEquals(3, repo.latestTournament.first()?.bestOf)
 
-        // Delete Tekken 8 -> must switch cleanly to Call of Duty without deleting it
+        // Delete Tekken 7 -> must switch cleanly to Call of Duty without deleting it
         assertTrue(repo.deleteCurrentTournament(tekken.id) is RepoResult.Success)
         assertEquals(1, repo.allTournaments.first().size)
         assertEquals(cod.id, repo.latestTournament.first()?.id)
@@ -247,5 +267,104 @@ class TournamentRepositoryTest {
         assertTrue(repo.deleteCurrentTournament(cod.id) is RepoResult.Success)
         assertTrue(repo.allTournaments.first().isEmpty())
         assertNull(repo.latestTournament.first())
+    }
+
+    @Test
+    fun approvedGameCatalogContainsExact7GamesWithHonestCompatibilityAndRacingExport() {
+        val expectedGames = listOf(
+            "FIFA 22",
+            "JUMP FORCE",
+            "Tekken 7",
+            "Mortal Kombat 11",
+            "RIDE 4",
+            "DriveClub",
+            "Call of Duty"
+        )
+        assertEquals(expectedGames, GAME_CATALOG.map { it.label })
+
+        val deletedGames = listOf("FIFA 16", "EA SPORTS FC 25", "eFootball PES", "NBA 2K", "PUBG", "Tekken 8", "Co-op")
+        deletedGames.forEach { removed ->
+            assertNull("Removed game should not be in catalog: $removed", findApprovedGamePreset(removed))
+        }
+
+        // Verify online compatibility honesty
+        assertEquals(OnlineCompatibilityStatus.LOCAL_OR_LAN_ONLY, findApprovedGamePreset("FIFA 22")?.onlineStatus)
+        assertEquals(OnlineCompatibilityStatus.LOCAL_OR_LAN_ONLY, findApprovedGamePreset("JUMP FORCE")?.onlineStatus)
+        assertEquals(OnlineCompatibilityStatus.LOCAL_OR_LAN_ONLY, findApprovedGamePreset("DriveClub")?.onlineStatus)
+        assertEquals(OnlineCompatibilityStatus.VERIFY_REQUIRED, findApprovedGamePreset("Tekken 7")?.onlineStatus)
+        assertEquals(OnlineCompatibilityStatus.VERIFY_REQUIRED, findApprovedGamePreset("Mortal Kombat 11")?.onlineStatus)
+        assertEquals(OnlineCompatibilityStatus.VERIFY_REQUIRED, findApprovedGamePreset("RIDE 4")?.onlineStatus)
+        assertEquals(OnlineCompatibilityStatus.VERIFY_REQUIRED, findApprovedGamePreset("Call of Duty")?.onlineStatus)
+        assertFalse(GAME_CATALOG.any { it.onlineStatus == OnlineCompatibilityStatus.OFFICIAL_ONLINE })
+
+        // Verify racing points parsing & export formatting
+        val customPts = parseRacingPointsConfig("30, 20, 15, 10")
+        assertEquals(listOf(30, 20, 15, 10), customPts)
+        assertEquals("[30,20,15,10]", formatRacingPointsConfig(customPts))
+
+        val raceTournament = TournamentEntity(
+            id = 99L,
+            name = "بطولة RIDE 4 الرسمية",
+            gameTitle = "RIDE 4",
+            gameCategory = "ألعاب سباق",
+            scoreUnitLabel = "نقطة",
+            description = "سباقات الدراجات",
+            startDateTime = "السبت 20:00",
+            maxParticipants = 12,
+            format = TournamentFormat.RACE_QUALIFIERS_FINAL,
+            playMode = PlayMode.RACE_POINTS,
+            qualifiersPerGroup = 4,
+            racingPointsConfig = "[30,20,15,10]"
+        )
+        val p1 = PlayerEntity(id = 1L, tournamentId = 99L, name = "أمين", elysiumNetId = "AM-01")
+        val standings = listOf(
+            RacingStandingRow(
+                rank = 1,
+                player = p1,
+                racesEntered = 1,
+                wins = 1,
+                podiums = 1,
+                totalPoints = 30,
+                bestPosition = 1,
+                lastPosition = 1,
+                isQualified = true
+            )
+        )
+        val races = listOf(
+            RaceEntry(
+                id = 5L,
+                tournamentId = 99L,
+                raceNumber = 1,
+                title = "تصفيات 1",
+                stage = RaceStage.QUALIFIER,
+                trackName = "Mugello",
+                isCompleted = true,
+                results = listOf(RaceResultEntry(playerId = 1L, position = 1, pointsAwarded = 30))
+            )
+        )
+        val fullSummary = TournamentExportFormatter.buildFullSummaryText(
+            TournamentUiState(
+                tournament = raceTournament,
+                players = listOf(p1),
+                approvedPlayers = listOf(p1),
+                racingStandings = standings,
+                races = races
+            )
+        )
+        assertTrue(fullSummary.contains("RIDE 4"))
+        assertTrue(fullSummary.contains("أمين"))
+        assertTrue(fullSummary.contains("30 ن"))
+        assertTrue(fullSummary.contains("Mugello"))
+
+        val socialPost = TournamentExportFormatter.buildSocialPostText(
+            TournamentUiState(
+                tournament = raceTournament,
+                players = listOf(p1),
+                approvedPlayers = listOf(p1),
+                racingStandings = standings,
+                races = races
+            )
+        )
+        assertTrue(socialPost.contains("30 نقطة"))
     }
 }

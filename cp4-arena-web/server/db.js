@@ -4,8 +4,10 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   AdminRole,
+  DEFAULT_RACING_POINTS,
   DrawMode,
   KnockoutTieRule,
+  PlayMode,
   TournamentFormat,
   TournamentStatus
 } from './constants.js';
@@ -51,6 +53,10 @@ export function openDatabase(customPath) {
       target_goals_rule TEXT NOT NULL DEFAULT 'المباراة الكاملة (6 دقائق لكل شوط)',
       is_registration_closed_manual INTEGER NOT NULL DEFAULT 0,
       is_third_place_enabled INTEGER NOT NULL DEFAULT 1,
+      play_mode TEXT NOT NULL DEFAULT '${PlayMode.SOLO_1V1}',
+      team_size INTEGER NOT NULL DEFAULT 1,
+      best_of INTEGER NOT NULL DEFAULT 1,
+      racing_points_config TEXT NOT NULL DEFAULT '${JSON.stringify(DEFAULT_RACING_POINTS)}',
       status TEXT NOT NULL DEFAULT '${TournamentStatus.REGISTRATION_OPEN}',
       champion_player_id INTEGER,
       created_at INTEGER NOT NULL
@@ -185,6 +191,29 @@ export function openDatabase(customPath) {
       summary_ar TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS races (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      race_number INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      stage TEXT NOT NULL DEFAULT 'REGULAR',
+      track_name TEXT NOT NULL DEFAULT '',
+      is_completed INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS race_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      race_id INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+      tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      points_awarded INTEGER NOT NULL DEFAULT 0,
+      best_lap_or_time TEXT NOT NULL DEFAULT '',
+      dnf INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(race_id, player_id)
+    );
   `);
 
   ensureSchemaMigrations(db);
@@ -201,6 +230,15 @@ function ensureColumn(db, tableName, columnName, alterSql) {
 
 function ensureSchemaMigrations(db) {
   ensureColumn(db, 'tournaments', 'is_third_place_enabled', 'is_third_place_enabled INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'tournaments', 'play_mode', `play_mode TEXT NOT NULL DEFAULT '${PlayMode.SOLO_1V1}'`);
+  ensureColumn(db, 'tournaments', 'team_size', 'team_size INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'tournaments', 'best_of', 'best_of INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(
+    db,
+    'tournaments',
+    'racing_points_config',
+    `racing_points_config TEXT NOT NULL DEFAULT '${JSON.stringify(DEFAULT_RACING_POINTS)}'`
+  );
   ensureColumn(db, 'matches', 'p1_checked_in', 'p1_checked_in INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'matches', 'p2_checked_in', 'p2_checked_in INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'matches', 'votes_p1', 'votes_p1 INTEGER NOT NULL DEFAULT 0');

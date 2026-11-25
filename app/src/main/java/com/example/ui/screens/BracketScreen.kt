@@ -26,6 +26,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -44,10 +48,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
 import com.example.data.model.MatchStage
+import com.example.data.model.RaceStage
 import com.example.security.AdminPermission
 import com.example.security.hasPermission
 import com.example.ui.components.BracketConnectorCanvas
@@ -56,12 +62,15 @@ import com.example.ui.components.BracketMatchWinnerDialog
 import com.example.ui.components.BracketStagePillsBar
 import com.example.ui.components.ChampionPedestalNode
 import com.example.ui.components.EmptyStatePanel
+import com.example.ui.components.PlayerAvatar
 import com.example.ui.components.drawChampionConnectorLine
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
+import com.example.ui.theme.CrimsonLoss
 import com.example.ui.theme.CyberSky
 import com.example.ui.theme.ElectricCobalt
 import com.example.ui.theme.ElevatedNavy
+import com.example.ui.theme.EmeraldWin
 import com.example.ui.theme.MidnightSurface
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -74,9 +83,217 @@ fun BracketScreen(
     onSelectWinner: (match: MatchEntity, winnerPlayerId: Long?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
+    val tournament = uiState.tournament
     val knockoutMatches = uiState.knockoutMatches
     val playersById = uiState.players.associateBy { it.id }
     val canEditScores = uiState.currentAdmin?.hasPermission(AdminPermission.EDIT_SCORES) == true
+
+    if (tournament?.format?.isRacing == true) {
+        val finalRaces = uiState.races.filter { it.stage == RaceStage.FINAL }
+        if (uiState.races.isEmpty() && uiState.racingStandings.isEmpty()) {
+            Column(
+                modifier = modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+            ) {
+                EmptyStatePanel(
+                    icon = Icons.Default.EmojiEvents,
+                    title = "منصة التتويج والسباق النهائي",
+                    subtitle = "هذه البطولة بنظام السباقات؛ ستظهر منصة التتويج والسباق النهائي هنا بمجرد إضافة السباقات وتسجيل المراكز من تبويب السباقات."
+                )
+            }
+            return
+        }
+
+        LazyColumn(
+            modifier = modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+                    border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = ChampionshipGold)
+                            Column {
+                                Text(
+                                    text = "منصة التتويج والسباق النهائي",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = ChampionshipGold,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "${tournament.gameTitle} • ${tournament.format.labelAr}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = CyberSky
+                                )
+                            }
+                        }
+                        if (uiState.championPlayer != null) {
+                            ChampionPedestalNode(
+                                champion = uiState.championPlayer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(160.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (finalRaces.isNotEmpty()) {
+                items(finalRaces, key = { "final_race_${it.id}" }) { finalRace ->
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+                        border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.7f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Icon(Icons.Default.Flag, contentDescription = null, tint = ChampionshipGold, modifier = Modifier.size(18.dp))
+                                    Text(
+                                        text = finalRace.title.ifBlank { "السباق النهائي" },
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = ChampionshipGold,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Text(
+                                    text = if (finalRace.isCompleted) "مكتمل" else "بانتظار النتائج",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (finalRace.isCompleted) EmeraldWin else CyberSky
+                                )
+                            }
+                            if (finalRace.trackName.isNotBlank()) {
+                                Text("الحلبة: ${finalRace.trackName}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                            }
+                            if (finalRace.results.isEmpty()) {
+                                Text("لم تُسجل مراكز السباق النهائي بعد.", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                            } else {
+                                finalRace.results.sortedWith(
+                                    compareBy<com.example.api.RaceResultEntry> { it.dnf }
+                                        .thenBy { it.position ?: Int.MAX_VALUE }
+                                ).forEach { res ->
+                                    val p = playersById[res.playerId]
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${if (res.dnf) "DNF" else "#${res.position ?: "-"} "} ${p?.name ?: "متسابق #${res.playerId}"}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (res.dnf) CrimsonLoss else TextPrimary
+                                        )
+                                        Text(
+                                            text = "+${res.pointsAwarded} ن",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = ChampionshipGold,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (uiState.racingStandings.isNotEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+                        border = BorderStroke(1.dp, CardBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "ترتيب المتسابقين النهائي (${uiState.racingStandings.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = CyberSky,
+                                fontWeight = FontWeight.Bold
+                            )
+                            uiState.racingStandings.forEachIndexed { idx, row ->
+                                if (idx > 0) HorizontalDivider(color = CardBorder.copy(alpha = 0.4f))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = "#${row.rank}",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (row.rank == 1) ChampionshipGold else CyberSky,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        PlayerAvatar(row.player.avatarUri, row.player.name, size = 30.dp)
+                                        Column {
+                                            Text(
+                                                text = row.player.name,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "سباقات: ${row.racesEntered} • فوز: ${row.wins} • منصة: ${row.podiums}" +
+                                                    if (row.isQualified) " • متأهل" else "",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (row.isQualified) EmeraldWin else TextSecondary
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        color = ElevatedNavy,
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.4f))
+                                    ) {
+                                        Text(
+                                            text = "${row.totalPoints} ن",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = ChampionshipGold,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
 
     if (knockoutMatches.isEmpty()) {
         Column(
@@ -142,15 +359,16 @@ fun BracketScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
+                            val boTag = if ((tournament?.bestOf ?: 1) > 1) " • Best of ${tournament?.bestOf}" else ""
                             Text(
-                                text = "مخطط الأدوار الإقصائية التفاعلي",
+                                text = "مخطط الأدوار الإقصائية التفاعلي$boTag",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = ChampionshipGold,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = if (canEditScores) {
-                                    "اضغط على أي مواجهة لتحديث الفائز أو تسجيل الأهداف"
+                                    "اضغط على أي مواجهة لتحديث الفائز أو تسجيل النتيجة"
                                 } else {
                                     "اسحب للتنقل أو اختر المرحلة من الشريط أدناه"
                                 },

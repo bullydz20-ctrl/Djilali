@@ -440,6 +440,35 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null 
     res.status(out.status).json(out);
   });
 
+  // Racing tournament endpoints (RIDE 4, DriveClub)
+  app.post('/api/tournaments/:id/races', async (req, res) => {
+    const out = service.createRace(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.put('/api/races/:id/results', async (req, res) => {
+    const out = service.saveRaceResults(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/tournaments/:id/races/generate-final', async (req, res) => {
+    const out = service.generateFinalRaceFromStandings(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.delete('/api/races/:id', async (req, res) => {
+    const out = service.deleteRace(getBearerToken(req), Number(req.params.id));
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
   // Production SPA static serving
   const resolvedDistDir = path.resolve(distDir || path.resolve(process.cwd(), 'dist'));
   if (fs.existsSync(resolvedDistDir)) {

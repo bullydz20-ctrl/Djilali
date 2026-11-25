@@ -499,6 +499,17 @@ class TournamentRepository(
                     )
                     RepoResult.Success(Unit, "تم إنشاء مخطط الأدوار الإقصائية المباشرة!")
                 }
+
+                TournamentFormat.RACE_POINTS, TournamentFormat.RACE_QUALIFIERS_FINAL -> {
+                    tournamentDao.updateTournament(
+                        tournament.copy(
+                            status = TournamentStatus.GROUP_STAGE,
+                            isRegistrationClosedManual = true,
+                            championPlayerId = null
+                        )
+                    )
+                    RepoResult.Success(Unit, "تم اعتماد المتسابقين للبطولة بنظام السباقات والنقاط!")
+                }
             }
         }
     }
@@ -532,8 +543,10 @@ class TournamentRepository(
                 }
                 paired
             }
-            TournamentFormat.DIRECT_KNOCKOUT -> {
-                return RepoResult.Error("البطولة بنظام الإقصائيات المباشرة بالفعل.")
+            TournamentFormat.DIRECT_KNOCKOUT,
+            TournamentFormat.RACE_POINTS,
+            TournamentFormat.RACE_QUALIFIERS_FINAL -> {
+                return RepoResult.Error("هذا النظام لا يستخدم تأهل المجموعات أو الدوري التقليدي.")
             }
         }
 

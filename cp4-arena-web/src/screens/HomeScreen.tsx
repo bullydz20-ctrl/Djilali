@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Award,
   Bell,
   Clock,
@@ -8,6 +9,7 @@ import {
   Medal,
   Share2,
   Shield,
+  ShieldCheck,
   Sparkles,
   Star,
   Trash2,
@@ -18,13 +20,15 @@ import {
 } from 'lucide-react';
 import { EmptyStatePanel, PlayerAvatar, StatusPill } from '../components/PlayerAvatar';
 import { MatchResultsTable } from '../components/MatchResultsTable';
+import { RacingOverviewPanel, isRacingFormat } from '../components/RacingSection';
 import {
   FORMAT_LABELS,
+  PLAY_MODE_LABELS,
   STATUS_LABELS,
   TIE_RULE_LABELS,
   adminHasPermission
 } from '../types';
-import type { ArenaState, Match, Player } from '../types';
+import type { ArenaState, Match, Player, RaceEntry, RaceStage } from '../types';
 
 export function HomeScreen({
   state,
@@ -39,7 +43,11 @@ export function HomeScreen({
   onOpenDispute,
   onOpenPlayerProfile,
   onCelebrateChampion,
-  onOpenAdmin
+  onOpenAdmin,
+  onCreateRace,
+  onEditRace,
+  onGenerateFinalRace,
+  onDeleteRace
 }: {
   state: ArenaState;
   onOpenRegister: () => void;
@@ -54,11 +62,16 @@ export function HomeScreen({
   onOpenPlayerProfile: (player: Player) => void;
   onCelebrateChampion: () => void;
   onOpenAdmin?: () => void;
+  onCreateRace?: (payload: { title?: string; stage?: RaceStage; trackName?: string }) => Promise<void>;
+  onEditRace?: (race: RaceEntry) => void;
+  onGenerateFinalRace?: (payload?: { title?: string; trackName?: string; qualifiersCount?: number }) => Promise<void>;
+  onDeleteRace?: (raceId: number) => Promise<void>;
 }) {
   const t = state.tournament;
   const playersById = new Map<number, Player>(state.players.map((p) => [p.id, p]));
   const remindersByMatchId = new Map(state.matchReminders.map((r) => [r.matchId, r]));
   const canEditScores = adminHasPermission(state.currentAdmin, 'EDIT_SCORES');
+  const canRunDraw = adminHasPermission(state.currentAdmin, 'RUN_DRAW');
 
   if (!t) {
     return (
@@ -290,17 +303,79 @@ export function HomeScreen({
       )}
 
       {/* Rules Card */}
-      <div className="arena-card stack-col" style={{ gap: 10 }}>
-        <div style={{ fontWeight: 800, color: 'var(--championship-gold)', fontSize: '1rem' }}>
-          قوانين ونظام البطولة ({t.gameTitle})
-        </div>
-        <div className="grid-2">
-          <RuleItem icon={<Clock size={15} />} title="مدة المواجهة" value={`${t.matchDurationMinutes} دقيقة`} />
-          <RuleItem icon={<Award size={15} />} title="نظام الحسم واللعب" value={t.targetGoalsRule} />
-          <RuleItem icon={<Trophy size={15} />} title="الأدوار الإقصائية" value={TIE_RULE_LABELS[t.knockoutTieRule].short} />
-          <RuleItem icon={<Users size={15} />} title="التأهل" value={`${t.qualifiersPerGroup} متأهل`} />
-        </div>
-      </div>
+      {(() => {
+        const gamePreset = (state.gameCatalog || []).find(
+          (g) => g.label.toLowerCase() === t.gameTitle.trim().toLowerCase()
+        );
+        const isRacing = isRacingFormat(t.format);
+        const modeText =
+          t.playMode === 'TEAMS'
+            ? `${PLAY_MODE_LABELS.TEAMS} (${t.teamSize} ضد ${t.teamSize})`
+            : PLAY_MODE_LABELS[t.playMode || 'SOLO_1V1'];
+
+        return (
+          <div className="arena-card stack-col" style={{ gap: 10 }}>
+            <div style={{ fontWeight: 800, color: 'var(--championship-gold)', fontSize: '1rem' }}>
+              قوانين ونظام البطولة ({t.gameTitle})
+            </div>
+            <div className="grid-2">
+              <RuleItem icon={<Users size={15} />} title="نمط اللعب" value={modeText} />
+              <RuleItem icon={<Award size={15} />} title="نظام الحسم واللعب" value={t.targetGoalsRule} />
+              {isRacing ? (
+                <RuleItem
+                  icon={<Clock size={15} />}
+                  title="نظام السباقات"
+                  value={t.format === 'RACE_QUALIFIERS_FINAL' ? `تصفيات ثم نهائي (${t.qualifiersPerGroup})` : 'نقاط وترتيب'}
+                />
+              ) : (
+                <RuleItem
+                  icon={<Trophy size={15} />}
+                  title={t.bestOf > 1 ? 'نظام المواجهة' : 'الأدوار الإقصائية'}
+                  value={t.bestOf > 1 ? `Best of ${t.bestOf}` : TIE_RULE_LABELS[t.knockoutTieRule].short}
+                />
+              )}
+              <RuleItem icon={<Clock size={15} />} title="مدة الجلسة" value={`${t.matchDurationMinutes} دقيقة`} />
+            </div>
+
+            {gamePreset && (
+              <div
+                className="arena-subcard stack-col"
+                style={{
+                  gap: 4,
+                  borderColor:
+                    gamePreset.onlineStatus === 'LOCAL_OR_LAN_ONLY'
+                      ? 'rgba(245, 184, 46, 0.55)'
+                      : 'rgba(56, 189, 248, 0.45)'
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: '0.78rem',
+                    fontWeight: 800,
+                    color:
+                      gamePreset.onlineStatus === 'LOCAL_OR_LAN_ONLY'
+                        ? 'var(--championship-gold)'
+                        : 'var(--cyber-sky)'
+                  }}
+                >
+                  {gamePreset.onlineStatus === 'LOCAL_OR_LAN_ONLY' ? (
+                    <AlertTriangle size={14} />
+                  ) : (
+                    <ShieldCheck size={14} />
+                  )}
+                  <span>{gamePreset.onlineStatusLabelAr}</span>
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  {gamePreset.compatibilityNoteAr}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Overview Statistics */}
       <div style={{ fontWeight: 800, fontSize: '1.08rem' }}>إحصائيات البطولة وأفضل اللاعبين</div>
@@ -384,29 +459,43 @@ export function HomeScreen({
         </div>
       )}
 
-      {/* Live Match Results */}
-      <div style={{ fontWeight: 800, fontSize: '1.08rem' }}>جدول المباريات والنتائج المباشرة</div>
-      {state.allMatches.length === 0 ? (
-        <EmptyStatePanel
-          icon={<Gamepad2 size={28} />}
-          title="لم تبدأ القرعة بعد"
-          subtitle="عند اعتماد اللاعبين وإجراء القرعة من لوحة المشرف، ستظهر جميع المباريات والنتائج المباشرة هنا لجميع الأجهزة."
+      {/* Live Match Results or Racing Standings */}
+      {isRacingFormat(t.format) ? (
+        <RacingOverviewPanel
+          state={state}
+          canEdit={canEditScores}
+          canRunDraw={canRunDraw}
+          onCreateRace={onCreateRace}
+          onEditRace={onEditRace}
+          onGenerateFinalRace={onGenerateFinalRace}
+          onDeleteRace={onDeleteRace}
         />
       ) : (
-        <MatchResultsTable
-          matches={orderedMatches}
-          playersById={playersById}
-          canEdit={canEditScores}
-          scoreUnitLabel={unit}
-          remindersByMatchId={remindersByMatchId}
-          onQuickUpdateGoals={onQuickUpdateGoals}
-          onOpenDetailedEditor={onEditMatch}
-          onOpenReminder={onOpenReminder}
-          onToggleCheckIn={onToggleCheckIn}
-          onVotePrediction={onVotePrediction}
-          onOpenDispute={onOpenDispute}
-          maxVisibleRows={12}
-        />
+        <>
+          <div style={{ fontWeight: 800, fontSize: '1.08rem' }}>جدول المباريات والنتائج المباشرة</div>
+          {state.allMatches.length === 0 ? (
+            <EmptyStatePanel
+              icon={<Gamepad2 size={28} />}
+              title="لم تبدأ القرعة بعد"
+              subtitle="عند اعتماد اللاعبين وإجراء القرعة من لوحة المشرف، ستظهر جميع المباريات والنتائج المباشرة هنا لجميع الأجهزة."
+            />
+          ) : (
+            <MatchResultsTable
+              matches={orderedMatches}
+              playersById={playersById}
+              canEdit={canEditScores}
+              scoreUnitLabel={unit}
+              remindersByMatchId={remindersByMatchId}
+              onQuickUpdateGoals={onQuickUpdateGoals}
+              onOpenDetailedEditor={onEditMatch}
+              onOpenReminder={onOpenReminder}
+              onToggleCheckIn={onToggleCheckIn}
+              onVotePrediction={onVotePrediction}
+              onOpenDispute={onOpenDispute}
+              maxVisibleRows={12}
+            />
+          )}
+        </>
       )}
 
       {/* Season Leaderboard */}

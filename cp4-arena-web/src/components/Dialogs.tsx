@@ -15,13 +15,14 @@ import {
   X
 } from 'lucide-react';
 import { uploadImageFileApi } from '../api';
-import { LEVEL_LABELS, STAGE_LABELS } from '../types';
+import { LEVEL_LABELS, RACE_STAGE_LABELS, STAGE_LABELS } from '../types';
 import type {
   Match,
   MatchReminder,
   Player,
   PlayerLevel,
   PlayerStats,
+  RaceEntry,
   SeasonLeaderboardEntry
 } from '../types';
 import { PlayerAvatar } from './PlayerAvatar';
@@ -193,6 +194,7 @@ export function ScoreEntryModal({
   player1,
   player2,
   scoreUnitLabel,
+  bestOf = 1,
   onClose,
   onSave,
   onWalkover,
@@ -202,6 +204,7 @@ export function ScoreEntryModal({
   player1: Player;
   player2: Player;
   scoreUnitLabel: string;
+  bestOf?: 1 | 3 | 5;
   onClose: () => void;
   onSave: (payload: {
     leg1Score1: number | null;
@@ -282,10 +285,58 @@ export function ScoreEntryModal({
         </div>
 
         <div className="field-group">
-          <label className="field-label" style={{ color: 'var(--cyber-sky)' }}>
-            {match.isTwoLegged ? 'مباراة الذهاب' : 'النتيجة النهائية'}
-          </label>
-          <div className="grid-2">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <label className="field-label" style={{ color: 'var(--cyber-sky)', margin: 0 }}>
+              {match.isTwoLegged ? 'مباراة الذهاب' : 'النتيجة النهائية'}
+            </label>
+            {bestOf > 1 && (
+              <span
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: 6,
+                  background: 'rgba(245,184,46,0.16)',
+                  color: 'var(--championship-gold)',
+                  fontSize: '0.74rem',
+                  fontWeight: 800
+                }}
+              >
+                نظام Best of {bestOf} (الفوز بـ {Math.ceil(bestOf / 2)} جولات)
+              </span>
+            )}
+          </div>
+          {bestOf > 1 && !match.isTwoLegged && (
+            <div className="chip-row" style={{ marginTop: 6 }}>
+              {(bestOf === 3
+                ? [
+                    [2, 0],
+                    [2, 1],
+                    [1, 2],
+                    [0, 2]
+                  ]
+                : [
+                    [3, 0],
+                    [3, 1],
+                    [3, 2],
+                    [2, 3],
+                    [1, 3],
+                    [0, 3]
+                  ]
+              ).map(([a, b]) => (
+                <button
+                  key={`${a}-${b}`}
+                  type="button"
+                  className={`chip ${l1s1 === String(a) && l1s2 === String(b) ? 'selected-gold' : ''}`}
+                  onClick={() => {
+                    setL1s1(String(a));
+                    setL1s2(String(b));
+                  }}
+                >
+                  {a} - {b}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="grid-2" style={{ marginTop: 6 }}>
             <div>
               <div className="field-label" style={{ marginBottom: 4 }}>{player1.name}</div>
               <input className="input score-num" type="number" min={0} max={999} value={l1s1} onChange={(e) => setL1s1(e.target.value)} />
@@ -990,6 +1041,169 @@ export function DisputeMatchModal({
           </button>
           <button type="button" className="btn btn-outline" onClick={onClose}>
             إغلاق
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function RaceResultsModal({
+  race,
+  approvedPlayers,
+  pointsConfig,
+  onClose,
+  onSave
+}: {
+  race: RaceEntry;
+  approvedPlayers: Player[];
+  pointsConfig: number[];
+  onClose: () => void;
+  onSave: (payload: {
+    title?: string;
+    trackName?: string;
+    entries: Array<{ playerId: number; position: number; bestLapOrTime?: string; dnf?: boolean }>;
+  }) => Promise<void>;
+}) {
+  const existingMap = new Map(race.results.map((r) => [r.playerId, r]));
+  const roster =
+    race.stage === 'FINAL' && race.results.length > 0
+      ? approvedPlayers.filter((p) => existingMap.has(p.id))
+      : approvedPlayers;
+  const playersList = roster.length > 0 ? roster : approvedPlayers;
+
+  const [title, setTitle] = useState(race.title);
+  const [trackName, setTrackName] = useState(race.trackName || '');
+  const [rows, setRows] = useState(() =>
+    playersList.map((p, idx) => {
+      const existing = existingMap.get(p.id);
+      return {
+        playerId: p.id,
+        name: p.name,
+        avatarUrl: p.avatarUrl,
+        position: existing?.position ?? idx + 1,
+        bestLapOrTime: existing?.bestLapOrTime ?? '',
+        dnf: existing?.dnf ?? false
+      };
+    })
+  );
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.08rem' }}>
+              تسجيل مراكز السباق — {RACE_STAGE_LABELS[race.stage]?.label}
+            </h2>
+            <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+              تُحسب النقاط تلقائياً حسب جدول المراكز المعتمد
+            </div>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="grid-2">
+          <div className="field-group">
+            <label className="field-label">اسم السباق</label>
+            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+          </div>
+          <div className="field-group">
+            <label className="field-label">الحلبة / المسار</label>
+            <input className="input" value={trackName} onChange={(e) => setTrackName(e.target.value)} placeholder="اختياري" />
+          </div>
+        </div>
+
+        <div className="stack-col" style={{ gap: 8 }}>
+          {rows.map((row, idx) => {
+            const pts = row.dnf ? 0 : (pointsConfig[row.position - 1] ?? 0);
+            return (
+              <div key={row.playerId} className="arena-subcard stack-col" style={{ gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <PlayerAvatar avatarUrl={row.avatarUrl} name={row.name} size={30} />
+                    <span style={{ fontWeight: 700, fontSize: '0.88rem' }}>{row.name}</span>
+                  </div>
+                  <span className="score-num" style={{ color: 'var(--championship-gold)', fontWeight: 800 }}>
+                    +{pts} نقطة
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr auto', gap: 8, alignItems: 'center' }}>
+                  <input
+                    className="input score-num"
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={row.position}
+                    onChange={(e) => {
+                      const nextPos = Math.max(1, Number(e.target.value) || 1);
+                      setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, position: nextPos } : r)));
+                    }}
+                    aria-label={`مركز ${row.name}`}
+                  />
+                  <input
+                    className="input"
+                    value={row.bestLapOrTime}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, bestLapOrTime: val } : r)));
+                    }}
+                    placeholder="أفضل لفة / التوقيت (اختياري)"
+                  />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.78rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={row.dnf}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, dnf: checked } : r)));
+                      }}
+                    />
+                    <span>DNF</span>
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {err && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>}
+
+        <div className="grid-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={saving || rows.length === 0}
+            onClick={async () => {
+              setSaving(true);
+              setErr('');
+              try {
+                await onSave({
+                  title: title.trim() || race.title,
+                  trackName: trackName.trim(),
+                  entries: rows.map((r) => ({
+                    playerId: r.playerId,
+                    position: r.position,
+                    bestLapOrTime: r.bestLapOrTime.trim(),
+                    dnf: r.dnf
+                  }))
+                });
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : 'تعذر حفظ نتائج السباق.');
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? 'جاري الحفظ...' : 'حفظ نتائج السباق وتحديث الترتيب'}
+          </button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            إلغاء
           </button>
         </div>
       </div>

@@ -112,6 +112,7 @@ export function HomeScreen({
           <img
             src={t.bannerUrl || '/images/default-banner.jpg'}
             alt={t.name}
+            decoding="async"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
           <div

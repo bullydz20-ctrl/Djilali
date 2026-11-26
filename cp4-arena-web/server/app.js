@@ -760,6 +760,16 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
   // Production SPA static serving
   const resolvedDistDir = path.resolve(distDir || path.resolve(process.cwd(), 'dist'));
   if (fs.existsSync(resolvedDistDir)) {
+    const distAssetsDir = path.join(resolvedDistDir, 'assets');
+    if (fs.existsSync(distAssetsDir)) {
+      app.use(
+        '/assets',
+        express.static(distAssetsDir, {
+          maxAge: '1y',
+          immutable: true
+        })
+      );
+    }
     app.use(express.static(resolvedDistDir, { index: false }));
     app.get(/^\/(?!api|uploads).*/, (_req, res) => {
       res.sendFile(path.join(resolvedDistDir, 'index.html'));

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GitBranch, Home, LayoutGrid, Shield, Users } from 'lucide-react';
 import {
   adminAddPlayerApi,
@@ -48,23 +48,39 @@ import {
   voteMatchPredictionApi,
   walkoverMatchApi
 } from './api';
-import {
-  DisputeMatchModal,
-  ExportShareModal,
-  InstallPwaModal,
-  MatchReminderModal,
-  PlayerProfileModal,
-  RaceResultsModal,
-  RegisterPlayerModal,
-  ScoreEntryModal
-} from './components/Dialogs';
 import { TopHeader } from './components/TopHeader';
-import { AdminScreen } from './screens/AdminScreen';
-import { BracketScreen } from './screens/BracketScreen';
-import { GroupsScreen } from './screens/GroupsScreen';
 import { HomeScreen } from './screens/HomeScreen';
-import { PlayersScreen } from './screens/PlayersScreen';
 import type { ArenaState, Match, Player, PlayerLevel, PlayerStatus, RaceEntry } from './types';
+
+const PlayersScreen = lazy(() => import('./screens/PlayersScreen').then((m) => ({ default: m.PlayersScreen })));
+const GroupsScreen = lazy(() => import('./screens/GroupsScreen').then((m) => ({ default: m.GroupsScreen })));
+const BracketScreen = lazy(() => import('./screens/BracketScreen').then((m) => ({ default: m.BracketScreen })));
+const AdminScreen = lazy(() => import('./screens/AdminScreen').then((m) => ({ default: m.AdminScreen })));
+
+const DisputeMatchModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.DisputeMatchModal }))
+);
+const ExportShareModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.ExportShareModal }))
+);
+const InstallPwaModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.InstallPwaModal }))
+);
+const MatchReminderModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.MatchReminderModal }))
+);
+const PlayerProfileModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.PlayerProfileModal }))
+);
+const RaceResultsModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.RaceResultsModal }))
+);
+const RegisterPlayerModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.RegisterPlayerModal }))
+);
+const ScoreEntryModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.ScoreEntryModal }))
+);
 
 type TabKey = 'HOME' | 'PLAYERS' | 'GROUPS' | 'BRACKET' | 'ADMIN';
 
@@ -111,6 +127,11 @@ export default function App() {
   const activeTidRef = useRef<number | null>(selectedTournamentId);
   activeTidRef.current = selectedTournamentId;
 
+  const refreshInFlightRef = useRef(false);
+  const pendingRefreshRef = useRef<{ queued: boolean; overrideTid?: number | null }>({ queued: false });
+  const lastAutoBackupAtRef = useRef(0);
+  const autoBackupTimerRef = useRef<number | null>(null);
+
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
@@ -118,6 +139,11 @@ export default function App() {
   }, []);
 
   const refreshState = useCallback(async (overrideTid?: number | null) => {
+    if (refreshInFlightRef.current) {
+      pendingRefreshRef.current = { queued: true, overrideTid };
+      return;
+    }
+    refreshInFlightRef.current = true;
     try {
       const tid = overrideTid !== undefined ? overrideTid : activeTidRef.current;
       let savedUsername = getLastAdminUsername().trim();
@@ -144,8 +170,13 @@ export default function App() {
           next.players.length > 0 ||
           next.allMatches.length > 0 ||
           next.tournaments.length > 1;
-        if (hasMeaningfulData) {
-          fetchBackupJsonApi().then(saveHeadAutoBackup).catch(() => undefined);
+        const now = Date.now();
+        if (hasMeaningfulData && now - lastAutoBackupAtRef.current >= 180_000) {
+          lastAutoBackupAtRef.current = now;
+          if (autoBackupTimerRef.current) window.clearTimeout(autoBackupTimerRef.current);
+          autoBackupTimerRef.current = window.setTimeout(() => {
+            fetchBackupJsonApi().then(saveHeadAutoBackup).catch(() => undefined);
+          }, 800);
         }
       }
       if (next.tournament && next.tournament.id !== tid) {
@@ -157,27 +188,47 @@ export default function App() {
       setLoadError(err instanceof Error ? err.message : 'تعذر تحميل بيانات البطولة.');
     } finally {
       setLoading(false);
+      refreshInFlightRef.current = false;
+      if (pendingRefreshRef.current.queued) {
+        const queued = pendingRefreshRef.current;
+        pendingRefreshRef.current = { queued: false };
+        void refreshState(queued.overrideTid);
+      }
     }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+      if (autoBackupTimerRef.current) window.clearTimeout(autoBackupTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
     refreshState(selectedTournamentId);
   }, [selectedTournamentId, refreshState]);
 
-  // Cross-device real-time synchronization via Server-Sent Events
+  // Cross-device real-time synchronization via Server-Sent Events (debounced to coalesce bursts)
   useEffect(() => {
     const es = new EventSource('/api/events');
+    let debounceTimer: number | null = null;
     es.onmessage = (ev) => {
       try {
         const parsed = JSON.parse(ev.data);
         if (parsed.type && parsed.type !== 'connected') {
-          refreshState();
+          if (debounceTimer) window.clearTimeout(debounceTimer);
+          debounceTimer = window.setTimeout(() => {
+            refreshState();
+          }, 220);
         }
       } catch {
         // ignore malformed heartbeat
       }
     };
-    return () => es.close();
+    return () => {
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+      es.close();
+    };
   }, [refreshState]);
 
   // Listen for Discord OAuth callback popup completion
@@ -268,8 +319,14 @@ export default function App() {
     }
   }
 
-  const playersById = new Map((state?.players || []).map((p) => [p.id, p]));
-  const remindersByMatchId = new Map((state?.matchReminders || []).map((r) => [r.matchId, r]));
+  const playersById = useMemo(
+    () => new Map((state?.players || []).map((p) => [p.id, p])),
+    [state?.players]
+  );
+  const remindersByMatchId = useMemo(
+    () => new Map((state?.matchReminders || []).map((r) => [r.matchId, r])),
+    [state?.matchReminders]
+  );
 
   return (
     <div className="app-shell">
@@ -369,13 +426,20 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'PLAYERS' && (
-                <PlayersScreen
-                  state={state}
-                  onOpenRegister={() => setShowRegisterModal(true)}
-                  onOpenPlayerProfile={(p) => setProfilePlayer(p)}
-                />
-              )}
+              <Suspense
+                fallback={
+                  <div className="arena-card" style={{ textAlign: 'center', padding: 28, color: 'var(--text-secondary)' }}>
+                    جاري تحميل القسم...
+                  </div>
+                }
+              >
+                {activeTab === 'PLAYERS' && (
+                  <PlayersScreen
+                    state={state}
+                    onOpenRegister={() => setShowRegisterModal(true)}
+                    onOpenPlayerProfile={(p) => setProfilePlayer(p)}
+                  />
+                )}
 
               {activeTab === 'GROUPS' && (
                 <GroupsScreen
@@ -571,6 +635,7 @@ export default function App() {
                   onNotify={showToast}
                 />
               )}
+              </Suspense>
             </div>
           ) : null}
         </main>
@@ -595,7 +660,8 @@ export default function App() {
       </nav>
 
       {/* Modals */}
-      {showRegisterModal && state?.tournament && (
+      <Suspense fallback={null}>
+        {showRegisterModal && state?.tournament && (
         <RegisterPlayerModal
           gameTitle={state.tournament.gameTitle}
           tournamentName={state.tournament.name}
@@ -725,6 +791,7 @@ export default function App() {
           onClose={() => setShowInstallModal(false)}
         />
       )}
+      </Suspense>
 
       {toast && (
         <div className="toast-banner" role="status" aria-live="polite">

@@ -444,10 +444,30 @@ function SymmetricalBracketViewport({
   const naturalHeight = HEADER_OFFSET + centerHeight + thirdPlaceExtra + 44;
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const spacerRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const zoomLabelRef = useRef<HTMLSpanElement | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 960, height: 560 });
   const [scale, setScale] = useState(1);
   const scaleRef = useRef(1);
   scaleRef.current = scale;
+
+  const applyVisualZoomDom = (nextScale: number) => {
+    if (spacerRef.current) {
+      spacerRef.current.style.width = `${naturalWidth * nextScale}px`;
+      spacerRef.current.style.height = `${naturalHeight * nextScale}px`;
+    }
+    if (stageRef.current) {
+      stageRef.current.style.transform = `scale(${nextScale})`;
+    }
+    if (zoomLabelRef.current) {
+      zoomLabelRef.current.textContent = `${Math.round(nextScale * 100)}%`;
+    }
+  };
+
+  useEffect(() => {
+    applyVisualZoomDom(scale);
+  }, [scale, naturalWidth, naturalHeight]);
 
   const exactFitScale = useMemo(() => {
     const w = Math.max(260, viewportSize.width);
@@ -488,6 +508,7 @@ function SymmetricalBracketViewport({
   useEffect(() => {
     scaleRef.current = 1;
     setScale(1);
+    applyVisualZoomDom(1);
     const raf = requestAnimationFrame(() => scrollToDefaultAnchor(1));
     return () => cancelAnimationFrame(raf);
   }, [wingFilter, stageCount]);
@@ -503,8 +524,9 @@ function SymmetricalBracketViewport({
   }>({ active: false, startX: 0, startY: 0, origLeft: 0, origTop: 0, moved: false });
   const pinchDistRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
+  const wheelCommitTimerRef = useRef<number | null>(null);
 
-  const applyFocalZoom = (nextScaleRaw: number, focalClientX: number, focalClientY: number) => {
+  const applyFocalZoomDom = (nextScaleRaw: number, focalClientX: number, focalClientY: number) => {
     const el = viewportRef.current;
     const prevScale = scaleRef.current;
     const nextScale = Math.max(minZoomScale, Math.min(1.85, nextScaleRaw));
@@ -517,13 +539,9 @@ function SymmetricalBracketViewport({
     const contentY = (el.scrollTop + viewY) / prevScale;
 
     scaleRef.current = nextScale;
-    setScale(nextScale);
-    requestAnimationFrame(() => {
-      const target = viewportRef.current;
-      if (!target) return;
-      target.scrollLeft = Math.max(0, contentX * nextScale - viewX);
-      target.scrollTop = Math.max(0, contentY * nextScale - viewY);
-    });
+    applyVisualZoomDom(nextScale);
+    el.scrollLeft = Math.max(0, contentX * nextScale - viewX);
+    el.scrollTop = Math.max(0, contentY * nextScale - viewY);
   };
 
   useEffect(() => {
@@ -554,13 +572,16 @@ function SymmetricalBracketViewport({
         pinchDistRef.current = dist;
         const midX = (t0.clientX + t1.clientX) / 2;
         const midY = (t0.clientY + t1.clientY) / 2;
-        applyFocalZoom(scaleRef.current * ratio, midX, midY);
+        applyFocalZoomDom(scaleRef.current * ratio, midX, midY);
       }
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
       if (e.touches.length < 2) {
-        pinchDistRef.current = null;
+        if (pinchDistRef.current !== null) {
+          pinchDistRef.current = null;
+          setScale(scaleRef.current);
+        }
       }
     };
 
@@ -568,7 +589,12 @@ function SymmetricalBracketViewport({
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const factor = e.deltaY < 0 ? 1.08 : 0.92;
-        applyFocalZoom(scaleRef.current * factor, e.clientX, e.clientY);
+        applyFocalZoomDom(scaleRef.current * factor, e.clientX, e.clientY);
+        if (wheelCommitTimerRef.current !== null) window.clearTimeout(wheelCommitTimerRef.current);
+        wheelCommitTimerRef.current = window.setTimeout(() => {
+          wheelCommitTimerRef.current = null;
+          setScale(scaleRef.current);
+        }, 120);
       }
     };
 
@@ -579,6 +605,7 @@ function SymmetricalBracketViewport({
     el.addEventListener('wheel', handleWheel, { passive: false });
 
     return () => {
+      if (wheelCommitTimerRef.current !== null) window.clearTimeout(wheelCommitTimerRef.current);
       el.removeEventListener('touchstart', handleTouchStart);
       el.removeEventListener('touchmove', handleTouchMove);
       el.removeEventListener('touchend', handleTouchEnd);
@@ -647,6 +674,7 @@ function SymmetricalBracketViewport({
           }}
         >
           <div
+            ref={spacerRef}
             style={{
               position: 'relative',
               width: naturalWidth * scale,
@@ -655,6 +683,7 @@ function SymmetricalBracketViewport({
             }}
           >
             <div
+              ref={stageRef}
               className="bracket-stage-surface"
               style={{
                 width: naturalWidth,
@@ -923,7 +952,11 @@ function SymmetricalBracketViewport({
           <Minus size={15} />
         </button>
 
-        <span className="score-num" style={{ color: 'var(--championship-gold)', fontSize: '0.82rem', padding: '0 4px' }}>
+        <span
+          ref={zoomLabelRef}
+          className="score-num"
+          style={{ color: 'var(--championship-gold)', fontSize: '0.82rem', padding: '0 4px' }}
+        >
           {Math.round(scale * 100)}%
         </span>
 

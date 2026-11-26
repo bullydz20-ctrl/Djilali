@@ -100,9 +100,6 @@ export function openDatabase(customPath) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_players_elysium_unique
       ON players(tournament_id, LOWER(elysium_net_id));
 
-    CREATE INDEX IF NOT EXISTS idx_players_profile_id
-      ON players(profile_id);
-
     CREATE TABLE IF NOT EXISTS matches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { createArenaApp } from '../server/app.js';
 import { backfillPlayerProfiles, openDatabase } from '../server/db.js';
 import { createSignedOAuthState } from '../server/discord.js';
@@ -365,6 +366,99 @@ test('Stage 1 Bot guild-members returns 503 when Discord Bot credentials are not
     assert.equal(oauthRes.json.code, 'DISCORD_OAUTH_UNCONFIGURED');
   } finally {
     await srv.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Stage 1 openDatabase upgrades legacy pre-Stage-1 SQLite snapshot without ERR_SQLITE_ERROR', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-legacy-upgrade-'));
+  const dbPath = path.join(tmpDir, 'legacy.db');
+
+  // Create a pre-Stage-1 database where players has no profile_id or xemonet_id columns
+  // and player_profiles table does not exist yet (matching live Render snapshots).
+  const legacyDb = new DatabaseSync(dbPath);
+  legacyDb.exec(`
+    CREATE TABLE tournaments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      game_title TEXT NOT NULL DEFAULT 'FIFA 22',
+      game_category TEXT NOT NULL DEFAULT 'كرة قدم',
+      score_unit_label TEXT NOT NULL DEFAULT 'هدف',
+      description TEXT NOT NULL,
+      banner_url TEXT,
+      start_date_time TEXT NOT NULL,
+      max_participants INTEGER NOT NULL DEFAULT 16,
+      format TEXT NOT NULL DEFAULT 'DIRECT_KNOCKOUT',
+      group_count INTEGER NOT NULL DEFAULT 4,
+      qualifiers_per_group INTEGER NOT NULL DEFAULT 2,
+      draw_mode TEXT NOT NULL DEFAULT 'RANDOM',
+      knockout_tie_rule TEXT NOT NULL DEFAULT 'SINGLE_MATCH_PENALTIES',
+      match_duration_minutes INTEGER NOT NULL DEFAULT 12,
+      target_goals_rule TEXT NOT NULL DEFAULT '',
+      is_registration_closed_manual INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'REGISTRATION_OPEN',
+      champion_player_id INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE players (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tournament_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      elysium_net_id TEXT NOT NULL,
+      avatar_url TEXT,
+      level TEXT NOT NULL DEFAULT 'INTERMEDIATE',
+      ovr_rating INTEGER NOT NULL DEFAULT 81,
+      club_name TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'APPROVED',
+      group_id INTEGER,
+      seed_order INTEGER NOT NULL DEFAULT 0,
+      registered_at INTEGER NOT NULL
+    );
+    CREATE TABLE matches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tournament_id INTEGER NOT NULL,
+      stage TEXT NOT NULL,
+      group_id INTEGER,
+      round_number INTEGER NOT NULL,
+      bracket_index INTEGER NOT NULL,
+      player1_id INTEGER,
+      player2_id INTEGER,
+      leg1_score1 INTEGER,
+      leg1_score2 INTEGER,
+      leg2_score1 INTEGER,
+      leg2_score2 INTEGER,
+      penalty_score1 INTEGER,
+      penalty_score2 INTEGER,
+      is_two_legged INTEGER NOT NULL DEFAULT 0,
+      is_completed INTEGER NOT NULL DEFAULT 0,
+      winner_id INTEGER,
+      next_match_id INTEGER,
+      next_match_slot INTEGER NOT NULL DEFAULT 1,
+      scheduled_label TEXT NOT NULL DEFAULT '',
+      scheduled_at_millis INTEGER
+    );
+  `);
+  legacyDb.prepare(`
+    INSERT INTO tournaments (name, description, start_date_time, created_at)
+    VALUES ('بطولة JUMP FORCE', '', '', 1000)
+  `).run();
+  legacyDb.prepare(`
+    INSERT INTO players (tournament_id, name, elysium_net_id, registered_at)
+    VALUES (1, 'لاعب قديم', 'ely_legacy_1', 1001)
+  `).run();
+  legacyDb.close();
+
+  const upgraded = openDatabase(dbPath);
+  try {
+    const player = upgraded.prepare('SELECT id, profile_id, xemonet_id FROM players WHERE id = 1').get();
+    assert.ok(player.profile_id);
+    assert.equal(player.xemonet_id, '');
+    const profile = upgraded.prepare('SELECT cp4_id, name, elysium_net_id FROM player_profiles WHERE id = ?').get(player.profile_id);
+    assert.equal(profile.cp4_id, 'CP4-000001');
+    assert.equal(profile.name, 'لاعب قديم');
+    assert.equal(profile.elysium_net_id, 'ely_legacy_1');
+  } finally {
+    upgraded.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

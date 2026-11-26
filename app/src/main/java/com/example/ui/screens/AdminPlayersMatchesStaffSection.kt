@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -63,6 +64,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.example.api.PlayerProfileDto
 import com.example.api.RaceEntry
 import com.example.data.local.AdminAccountEntity
 import com.example.data.local.MatchEntity
@@ -72,6 +74,7 @@ import com.example.data.model.MatchStage
 import com.example.data.model.PlayerLevel
 import com.example.data.model.PlayerStatus
 import com.example.data.model.RaceStage
+import com.example.ui.components.EmptyStatePanel
 import com.example.ui.components.MatchResultsTableCard
 import com.example.ui.components.PlayerAvatar
 import com.example.ui.components.RacingOverviewSection
@@ -98,121 +101,187 @@ import java.util.Locale
 fun AdminPlayersTab(
     uiState: TournamentUiState,
     onImportAvatar: (Uri, (String) -> Unit) -> Unit = { _, _ -> },
-    onAdminAddPlayer: (String, String, String?, PlayerLevel, Int, String, Boolean, () -> Unit) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onAdminAddPlayer: (String, String, String?, PlayerLevel, Int, String, Boolean, Long?, String, String?, () -> Unit) -> Unit = { _, _, _, _, _, _, _, _, _, _, _ -> },
     onBulkImport: (linesText: String, status: PlayerStatus, onSuccess: () -> Unit) -> Unit = { _, _, _ -> },
     onStatusChange: (PlayerEntity, PlayerStatus) -> Unit,
     onUpdateDetails: (PlayerEntity) -> Unit,
-    onDeletePlayer: (PlayerEntity) -> Unit
+    onDeletePlayer: (PlayerEntity) -> Unit,
+    onStartDiscordOAuth: () -> Unit = {},
+    onLoadDiscordGuildMembers: () -> Unit = {},
+    onCreatePlayerProfile: (
+        name: String,
+        avatarUri: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?,
+        onSuccess: (PlayerProfileDto) -> Unit,
+        onDuplicate: (PlayerProfileDto) -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onUpdatePlayerProfile: (
+        id: Long,
+        name: String,
+        avatarUri: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?,
+        onSuccess: (PlayerProfileDto) -> Unit,
+        onDuplicate: (PlayerProfileDto) -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onMergePlayerProfiles: (
+        sourceId: Long,
+        targetId: Long,
+        confirmIdentity: Boolean,
+        onSuccess: (PlayerProfileDto) -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit = { _, _, _, _, _ -> },
+    onNavigateToTournamentTab: (() -> Unit)? = null
 ) {
     var editingPlayer by remember { mutableStateOf<PlayerEntity?>(null) }
     var showAddPlayerDialog by remember { mutableStateOf(false) }
+    var prefillProfile by remember { mutableStateOf<PlayerProfileDto?>(null) }
     var showBulkImportDialog by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // Pending queue + direct add / bulk import CTAs
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = "طلبات التسجيل الجديدة (${uiState.pendingPlayers.size})",
-                style = MaterialTheme.typography.titleMedium,
-                color = ChampionshipGold
+        UnifiedPlayerProfilesSection(
+            uiState = uiState,
+            onImportAvatar = onImportAvatar,
+            onStartDiscordOAuth = onStartDiscordOAuth,
+            onLoadDiscordGuildMembers = onLoadDiscordGuildMembers,
+            onCreatePlayerProfile = onCreatePlayerProfile,
+            onUpdatePlayerProfile = onUpdatePlayerProfile,
+            onMergePlayerProfiles = onMergePlayerProfiles,
+            onAddProfileToTournament = if (uiState.tournament != null) {
+                { profile ->
+                    prefillProfile = profile
+                    showAddPlayerDialog = true
+                }
+            } else null
+        )
+
+        if (uiState.tournament == null) {
+            EmptyStatePanel(
+                icon = Icons.Default.SportsEsports,
+                title = "لا توجد بطولة نشطة حالياً",
+                subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» لإدارة المشاركين في البطولة.",
+                actionLabel = if (onNavigateToTournamentTab != null) "الانتقال لإنشاء بطولة" else null,
+                onAction = onNavigateToTournamentTab
             )
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        } else {
+            // Pending queue + direct add / bulk import CTAs
+            Column(
+                modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(
-                    onClick = { showAddPlayerDialog = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.testTag("admin_add_player_button")
-                ) {
-                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("إضافة لاعب مباشرة", style = MaterialTheme.typography.labelMedium)
-                }
-                OutlinedButton(
-                    onClick = { showBulkImportDialog = true },
-                    border = BorderStroke(1.dp, CyberSky.copy(alpha = 0.7f)),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.testTag("admin_bulk_import_button")
-                ) {
-                    Icon(Icons.Default.CloudUpload, contentDescription = null, tint = CyberSky, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("استيراد دفعة", style = MaterialTheme.typography.labelMedium, color = CyberSky)
-                }
-            }
-        }
-
-        if (uiState.pendingPlayers.isEmpty()) {
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MidnightSurface),
-                border = BorderStroke(1.dp, CardBorder),
-                modifier = Modifier.fillMaxWidth()
-            ) {
                 Text(
-                    text = "لا توجد طلبات بانتظار المراجعة حالياً.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
-                    modifier = Modifier.padding(16.dp)
+                    text = "طلبات التسجيل الجديدة (${uiState.pendingPlayers.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = ChampionshipGold
                 )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            prefillProfile = null
+                            showAddPlayerDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCobalt),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("admin_add_player_button")
+                    ) {
+                        Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("إضافة لاعب مباشرة", style = MaterialTheme.typography.labelMedium)
+                    }
+                    OutlinedButton(
+                        onClick = { showBulkImportDialog = true },
+                        border = BorderStroke(1.dp, CyberSky.copy(alpha = 0.7f)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("admin_bulk_import_button")
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = CyberSky, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("استيراد دفعة", style = MaterialTheme.typography.labelMedium, color = CyberSky)
+                    }
+                }
             }
-        } else {
-            uiState.pendingPlayers.forEach { player ->
+
+            if (uiState.pendingPlayers.isEmpty()) {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MidnightSurface),
+                    border = BorderStroke(1.dp, CardBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "لا توجد طلبات بانتظار المراجعة حالياً.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            } else {
+                uiState.pendingPlayers.forEach { player ->
+                    AdminPlayerRow(
+                        player = player,
+                        onApprove = { onStatusChange(player, PlayerStatus.APPROVED) },
+                        onReject = { onStatusChange(player, PlayerStatus.REJECTED) },
+                        onEdit = { editingPlayer = player },
+                        onDelete = { onDeletePlayer(player) }
+                    )
+                }
+            }
+
+            // Approved players
+            Text(
+                text = "اللاعبون المعتمدون (${uiState.approvedPlayers.size})",
+                style = MaterialTheme.typography.titleMedium,
+                color = EmeraldWin
+            )
+            uiState.approvedPlayers.forEach { player ->
                 AdminPlayerRow(
                     player = player,
-                    onApprove = { onStatusChange(player, PlayerStatus.APPROVED) },
+                    onApprove = null,
                     onReject = { onStatusChange(player, PlayerStatus.REJECTED) },
                     onEdit = { editingPlayer = player },
                     onDelete = { onDeletePlayer(player) }
                 )
             }
-        }
 
-        // Approved players
-        Text(
-            text = "اللاعبون المعتمدون (${uiState.approvedPlayers.size})",
-            style = MaterialTheme.typography.titleMedium,
-            color = EmeraldWin
-        )
-        uiState.approvedPlayers.forEach { player ->
-            AdminPlayerRow(
-                player = player,
-                onApprove = null,
-                onReject = { onStatusChange(player, PlayerStatus.REJECTED) },
-                onEdit = { editingPlayer = player },
-                onDelete = { onDeletePlayer(player) }
-            )
-        }
-
-        if (uiState.rejectedPlayers.isNotEmpty()) {
-            Text(
-                text = "المرفوضون (${uiState.rejectedPlayers.size})",
-                style = MaterialTheme.typography.titleMedium,
-                color = CrimsonLoss
-            )
-            uiState.rejectedPlayers.forEach { player ->
-                AdminPlayerRow(
-                    player = player,
-                    onApprove = { onStatusChange(player, PlayerStatus.APPROVED) },
-                    onReject = null,
-                    onEdit = { editingPlayer = player },
-                    onDelete = { onDeletePlayer(player) }
+            if (uiState.rejectedPlayers.isNotEmpty()) {
+                Text(
+                    text = "المرفوضون (${uiState.rejectedPlayers.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = CrimsonLoss
                 )
+                uiState.rejectedPlayers.forEach { player ->
+                    AdminPlayerRow(
+                        player = player,
+                        onApprove = { onStatusChange(player, PlayerStatus.APPROVED) },
+                        onReject = null,
+                        onEdit = { editingPlayer = player },
+                        onDelete = { onDeletePlayer(player) }
+                    )
+                }
             }
         }
     }
 
     if (showAddPlayerDialog) {
         AdminAddPlayerDialog(
-            onDismiss = { showAddPlayerDialog = false },
+            initialProfile = prefillProfile,
+            onDismiss = {
+                showAddPlayerDialog = false
+                prefillProfile = null
+            },
             onImportAvatar = onImportAvatar,
-            onAdd = { name, elysiumId, avatarUri, level, ovr, club, autoApprove ->
-                onAdminAddPlayer(name, elysiumId, avatarUri, level, ovr, club, autoApprove) {
+            onAdd = { name, elysiumId, xeMoNetId, avatarUri, level, ovr, club, autoApprove, profileId, discordId ->
+                onAdminAddPlayer(name, elysiumId, avatarUri, level, ovr, club, autoApprove, profileId, xeMoNetId, discordId) {
                     showAddPlayerDialog = false
+                    prefillProfile = null
                 }
             }
         )
@@ -333,9 +402,29 @@ private fun AdminPlayerRow(
                 PlayerAvatar(avatarUri = player.avatarUri, playerName = player.name, size = 40.dp)
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
-                    Text(player.name, style = MaterialTheme.typography.titleSmall, color = TextPrimary)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(player.name, style = MaterialTheme.typography.titleSmall, color = TextPrimary)
+                        player.cp4Id?.takeIf { it.isNotBlank() }?.let { cp4 ->
+                            Surface(
+                                color = ChampionshipGold.copy(alpha = 0.14f),
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = cp4,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ChampionshipGold,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                    val xemoSuffix = if (player.xeMoNetId.isNotBlank()) " • ${player.xeMoNetId}" else ""
                     Text(
-                        text = "${player.elysiumNetId} • ${player.level.labelAr} (${player.ovrRating})",
+                        text = "${player.elysiumNetId}$xemoSuffix • ${player.level.labelAr} (${player.ovrRating})",
                         style = MaterialTheme.typography.bodySmall,
                         color = CyberSky
                     )
@@ -365,16 +454,18 @@ private fun AdminPlayerRow(
 
 @Composable
 private fun AdminAddPlayerDialog(
+    initialProfile: PlayerProfileDto? = null,
     onDismiss: () -> Unit,
     onImportAvatar: (Uri, (String) -> Unit) -> Unit,
-    onAdd: (String, String, String?, PlayerLevel, Int, String, Boolean) -> Unit
+    onAdd: (String, String, String, String?, PlayerLevel, Int, String, Boolean, Long?, String?) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    var elysiumId by remember { mutableStateOf("") }
+    var name by remember(initialProfile) { mutableStateOf(initialProfile?.name.orEmpty()) }
+    var elysiumId by remember(initialProfile) { mutableStateOf(initialProfile?.elysiumNetId.orEmpty()) }
+    var xeMoNetId by remember(initialProfile) { mutableStateOf(initialProfile?.xeMoNetId.orEmpty()) }
     var club by remember { mutableStateOf("") }
     var level by remember { mutableStateOf(PlayerLevel.INTERMEDIATE) }
     var ovr by remember { mutableStateOf(PlayerLevel.INTERMEDIATE.defaultOvr.toString()) }
-    var avatarUri by remember { mutableStateOf<String?>(null) }
+    var avatarUri by remember(initialProfile) { mutableStateOf(initialProfile?.avatarUrl) }
     var autoApprove by remember { mutableStateOf(true) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -388,7 +479,12 @@ private fun AdminAddPlayerDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MidnightSurface,
-        title = { Text("إضافة لاعب مباشرة للبطولة", color = ChampionshipGold) },
+        title = {
+            Text(
+                text = if (initialProfile != null) "تسجيل ${initialProfile.name} (${initialProfile.cp4Id}) في البطولة" else "إضافة لاعب مباشرة للبطولة",
+                color = ChampionshipGold
+            )
+        },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -420,7 +516,8 @@ private fun AdminAddPlayerDialog(
                     }
                 }
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("اسم اللاعب *") }, singleLine = true)
-                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("معرف اللاعب في ElysiumNet/ XeMoNat *") }, singleLine = true)
+                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("ElysiumNet ID *") }, singleLine = true)
+                OutlinedTextField(value = xeMoNetId, onValueChange = { xeMoNetId = it }, label = { Text("XeMoNet ID (اختياري)") }, singleLine = true)
                 OutlinedTextField(value = club, onValueChange = { club = it }, label = { Text("النادي / الشخصية المفضلة") }, singleLine = true)
                 OutlinedTextField(
                     value = ovr,
@@ -451,11 +548,14 @@ private fun AdminAddPlayerDialog(
                     onAdd(
                         name.trim(),
                         elysiumId.trim(),
+                        xeMoNetId.trim(),
                         avatarUri,
                         level,
                         (ovr.toIntOrNull() ?: level.defaultOvr).coerceIn(60, 99),
                         club.trim(),
-                        autoApprove
+                        autoApprove,
+                        initialProfile?.id,
+                        initialProfile?.discordUserId
                     )
                 },
                 enabled = name.isNotBlank() && elysiumId.isNotBlank(),
@@ -475,6 +575,7 @@ private fun EditPlayerDialog(
 ) {
     var name by remember(player.id) { mutableStateOf(player.name) }
     var elysiumId by remember(player.id) { mutableStateOf(player.elysiumNetId) }
+    var xeMoNetId by remember(player.id) { mutableStateOf(player.xeMoNetId) }
     var club by remember(player.id) { mutableStateOf(player.clubName) }
     var level by remember(player.id) { mutableStateOf(player.level) }
     var ovr by remember(player.id) { mutableStateOf(player.ovrRating.toString()) }
@@ -523,7 +624,8 @@ private fun EditPlayerDialog(
                     }
                 }
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("الاسم") }, singleLine = true)
-                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("معرف اللاعب في ElysiumNet/ XeMoNat") }, singleLine = true)
+                OutlinedTextField(value = elysiumId, onValueChange = { elysiumId = it }, label = { Text("ElysiumNet ID") }, singleLine = true)
+                OutlinedTextField(value = xeMoNetId, onValueChange = { xeMoNetId = it }, label = { Text("XeMoNet ID") }, singleLine = true)
                 OutlinedTextField(value = club, onValueChange = { club = it }, label = { Text("النادي") }, singleLine = true)
                 OutlinedTextField(
                     value = ovr,
@@ -554,6 +656,7 @@ private fun EditPlayerDialog(
                         player.copy(
                             name = name.trim(),
                             elysiumNetId = elysiumId.trim(),
+                            xeMoNetId = xeMoNetId.trim(),
                             avatarUri = avatarUri,
                             clubName = club.trim(),
                             level = level,

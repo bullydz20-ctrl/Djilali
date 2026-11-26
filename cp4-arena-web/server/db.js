@@ -69,11 +69,24 @@ export function openDatabase(customPath) {
       display_order INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS player_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cp4_id TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      avatar_url TEXT,
+      elysium_net_id TEXT NOT NULL DEFAULT '',
+      xemonet_id TEXT NOT NULL DEFAULT '',
+      discord_user_id TEXT UNIQUE,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS players (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      profile_id INTEGER,
       name TEXT NOT NULL,
       elysium_net_id TEXT NOT NULL,
+      xemonet_id TEXT NOT NULL DEFAULT '',
       avatar_url TEXT,
       level TEXT NOT NULL DEFAULT 'INTERMEDIATE',
       ovr_rating INTEGER NOT NULL DEFAULT 81,
@@ -86,6 +99,9 @@ export function openDatabase(customPath) {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_players_elysium_unique
       ON players(tournament_id, LOWER(elysium_net_id));
+
+    CREATE INDEX IF NOT EXISTS idx_players_profile_id
+      ON players(profile_id);
 
     CREATE TABLE IF NOT EXISTS matches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,6 +266,87 @@ function ensureSchemaMigrations(db) {
   ensureColumn(db, 'matches', 'dispute_submitted_by', 'dispute_submitted_by TEXT');
   ensureColumn(db, 'matches', 'dispute_screenshot_url', 'dispute_screenshot_url TEXT');
   ensureColumn(db, 'matches', 'dispute_resolution_note', 'dispute_resolution_note TEXT');
+  ensureColumn(db, 'players', 'profile_id', 'profile_id INTEGER');
+  ensureColumn(db, 'players', 'xemonet_id', "xemonet_id TEXT NOT NULL DEFAULT ''");
+  db.exec('CREATE INDEX IF NOT EXISTS idx_players_profile_id ON players(profile_id)');
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    syncCp4ProfileSequence(db);
+    backfillPlayerProfiles(db);
+    db.exec('COMMIT');
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // ignore rollback error
+    }
+    throw err;
+  }
+}
+
+export function formatCp4Id(seq) {
+  return `CP4-${String(Math.max(1, Number(seq) || 1)).padStart(6, '0')}`;
+}
+
+export function syncCp4ProfileSequence(db) {
+  const metaRow = db.prepare("SELECT value FROM app_meta WHERE key = 'cp4_profile_seq'").get();
+  const metaSeq = Number.parseInt(String(metaRow?.value || '0'), 10) || 0;
+  const maxRow = db
+    .prepare("SELECT COALESCE(MAX(CAST(SUBSTR(cp4_id, 5) AS INTEGER)), 0) AS max_seq FROM player_profiles WHERE cp4_id LIKE 'CP4-%'")
+    .get();
+  const maxDbSeq = Number(maxRow?.max_seq || 0) || 0;
+  const effective = Math.max(metaSeq, maxDbSeq);
+  db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('cp4_profile_seq', ?)").run(String(effective));
+  return effective;
+}
+
+export function allocateNextCp4Id(db) {
+  const current = syncCp4ProfileSequence(db);
+  const nextSeq = current + 1;
+  db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('cp4_profile_seq', ?)").run(String(nextSeq));
+  return formatCp4Id(nextSeq);
+}
+
+export function backfillPlayerProfiles(db) {
+  const unlinked = db
+    .prepare('SELECT * FROM players WHERE profile_id IS NULL ORDER BY registered_at ASC, id ASC')
+    .all();
+  if (unlinked.length === 0) return 0;
+
+  const findByElysium = db.prepare(
+    "SELECT * FROM player_profiles WHERE elysium_net_id != '' AND LOWER(elysium_net_id) = LOWER(?) ORDER BY id ASC LIMIT 1"
+  );
+  const insertProfile = db.prepare(`
+    INSERT INTO player_profiles (
+      cp4_id, name, avatar_url, elysium_net_id, xemonet_id, discord_user_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, NULL, ?)
+  `);
+  const linkPlayer = db.prepare('UPDATE players SET profile_id = ? WHERE id = ?');
+
+  let linkedCount = 0;
+  for (const row of unlinked) {
+    const cleanElysium = String(row.elysium_net_id || '').trim();
+    const matched = cleanElysium ? findByElysium.get(cleanElysium) : null;
+    if (matched) {
+      linkPlayer.run(matched.id, row.id);
+      linkedCount += 1;
+      continue;
+    }
+
+    const cp4Id = allocateNextCp4Id(db);
+    const info = insertProfile.run(
+      cp4Id,
+      String(row.name || 'لاعب').trim() || 'لاعب',
+      row.avatar_url ?? null,
+      cleanElysium,
+      String(row.xemonet_id || '').trim(),
+      Number(row.registered_at) || Date.now()
+    );
+    linkPlayer.run(Number(info.lastInsertRowid), row.id);
+    linkedCount += 1;
+  }
+  return linkedCount;
 }
 
 function ensureSeedData(db) {

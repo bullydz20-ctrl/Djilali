@@ -97,11 +97,43 @@ export interface RacingStandingRow {
   isQualified: boolean;
 }
 
+export interface PlayerProfile {
+  id: number;
+  cp4Id: string;
+  name: string;
+  avatarUrl: string | null;
+  elysiumNetId: string;
+  xeMoNetId: string;
+  discordUserId: string | null;
+  createdAt: number;
+  updatedAt?: number;
+  tournamentsCount?: number;
+}
+
+export interface DiscordGuildMember {
+  discordUserId: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+  linkedProfileId: number | null;
+  linkedCp4Id: string | null;
+}
+
+export interface DiscordStatus {
+  oauthConfigured: boolean;
+  botConfigured: boolean;
+  guildIdConfigured: boolean;
+}
+
 export interface Player {
   id: number;
   tournamentId: number;
+  profileId?: number | null;
+  cp4Id?: string | null;
   name: string;
   elysiumNetId: string;
+  xeMoNetId?: string;
+  discordUserId?: string | null;
   avatarUrl: string | null;
   level: PlayerLevel;
   ovrRating: number;
@@ -344,6 +376,8 @@ export interface ArenaState {
   lockoutState: LockoutState;
   gameCatalog: GameCatalogItem[];
   persistence?: PersistenceInfo;
+  playerProfiles?: PlayerProfile[];
+  discordStatus?: DiscordStatus;
 }
 
 export const FORMAT_LABELS: Record<TournamentFormat, string> = {

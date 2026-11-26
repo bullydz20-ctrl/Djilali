@@ -64,6 +64,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.example.api.PlayerProfileDto
 import com.example.api.RaceEntry
 import com.example.data.local.AdminAccountEntity
 import com.example.data.local.MatchEntity
@@ -112,10 +113,43 @@ fun AdminScreen(
     onCreateFreshTournament: (TournamentEntity) -> Unit,
     onDeleteTournament: () -> Unit,
     onAdminAddPlayer: (String, String, String?, PlayerLevel, Int, String, Boolean, () -> Unit) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onAdminAddPlayerWithProfile: (String, String, String?, PlayerLevel, Int, String, Boolean, Long?, String, String?, () -> Unit) -> Unit = { name, elysium, avatar, level, ovr, club, autoApprove, _, _, _, cb ->
+        onAdminAddPlayer(name, elysium, avatar, level, ovr, club, autoApprove, cb)
+    },
     onBulkImport: (String, PlayerStatus, () -> Unit) -> Unit = { _, _, _ -> },
     onUpdatePlayerStatus: (PlayerEntity, PlayerStatus) -> Unit,
     onUpdatePlayerDetails: (PlayerEntity) -> Unit,
     onDeletePlayer: (PlayerEntity) -> Unit,
+    onStartDiscordOAuth: () -> Unit = {},
+    onLoadDiscordGuildMembers: () -> Unit = {},
+    onCreatePlayerProfile: (
+        name: String,
+        avatarUri: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?,
+        onSuccess: (PlayerProfileDto) -> Unit,
+        onDuplicate: (PlayerProfileDto) -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onUpdatePlayerProfile: (
+        id: Long,
+        name: String,
+        avatarUri: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?,
+        onSuccess: (PlayerProfileDto) -> Unit,
+        onDuplicate: (PlayerProfileDto) -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onMergePlayerProfiles: (
+        sourceId: Long,
+        targetId: Long,
+        confirmIdentity: Boolean,
+        onSuccess: (PlayerProfileDto) -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit = { _, _, _, _, _ -> },
     onRunDraw: (Map<Long, Int>, List<Long>) -> Unit,
     onGenerateKnockoutFromStandings: () -> Unit,
     onEditMatch: (MatchEntity) -> Unit,
@@ -378,27 +412,23 @@ fun AdminScreen(
                             onCreateFresh = onCreateFreshTournament,
                             onDeleteTournament = onDeleteTournament
                         )
-                        AdminSection.PLAYERS -> if (uiState.tournament == null) {
-                            EmptyStatePanel(
-                                icon = Icons.Default.SportsEsports,
-                                title = "لا توجد بطولة نشطة حالياً",
-                                subtitle = "أنشئ بطولة جديدة من تبويب «البطولة» أولاً لإدارة المشاركين.",
-                                actionLabel = if (AdminSection.TOURNAMENT in allowedSections) "الانتقال لإنشاء بطولة" else null,
-                                onAction = if (AdminSection.TOURNAMENT in allowedSections) {
-                                    { selectedSection = AdminSection.TOURNAMENT }
-                                } else null
-                            )
-                        } else {
-                            AdminPlayersTab(
-                                uiState = uiState,
-                                onImportAvatar = onImportAvatar,
-                                onAdminAddPlayer = onAdminAddPlayer,
-                                onBulkImport = onBulkImport,
-                                onStatusChange = onUpdatePlayerStatus,
-                                onUpdateDetails = onUpdatePlayerDetails,
-                                onDeletePlayer = onDeletePlayer
-                            )
-                        }
+                        AdminSection.PLAYERS -> AdminPlayersTab(
+                            uiState = uiState,
+                            onImportAvatar = onImportAvatar,
+                            onAdminAddPlayer = onAdminAddPlayerWithProfile,
+                            onBulkImport = onBulkImport,
+                            onStatusChange = onUpdatePlayerStatus,
+                            onUpdateDetails = onUpdatePlayerDetails,
+                            onDeletePlayer = onDeletePlayer,
+                            onStartDiscordOAuth = onStartDiscordOAuth,
+                            onLoadDiscordGuildMembers = onLoadDiscordGuildMembers,
+                            onCreatePlayerProfile = onCreatePlayerProfile,
+                            onUpdatePlayerProfile = onUpdatePlayerProfile,
+                            onMergePlayerProfiles = onMergePlayerProfiles,
+                            onNavigateToTournamentTab = if (AdminSection.TOURNAMENT in allowedSections) {
+                                { selectedSection = AdminSection.TOURNAMENT }
+                            } else null
+                        )
                         AdminSection.DRAW -> if (uiState.tournament == null) {
                             EmptyStatePanel(
                                 icon = Icons.Default.SportsEsports,

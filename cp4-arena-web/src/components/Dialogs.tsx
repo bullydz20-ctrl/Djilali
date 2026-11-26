@@ -786,10 +786,28 @@ export function PlayerProfileModal({
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <PlayerAvatar avatarUrl={player.avatarUrl} name={player.name} size={58} borderColor="var(--championship-gold)" />
             <div>
-              <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.12rem' }}>{player.name}</h2>
-              <div style={{ fontSize: '0.78rem', color: 'var(--cyber-sky)', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.12rem' }}>{player.name}</h2>
+                {player.cp4Id && (
+                  <span
+                    className="score-num"
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '2px 8px',
+                      borderRadius: 999,
+                      background: 'rgba(245, 184, 46, 0.14)',
+                      border: '1px solid rgba(245, 184, 46, 0.45)',
+                      color: 'var(--championship-gold)'
+                    }}
+                  >
+                    {player.cp4Id}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--cyber-sky)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 <Shield size={13} />
-                <span>{player.elysiumNetId}</span>
+                <span>ElysiumNet: {player.elysiumNetId}</span>
+                {player.xeMoNetId && <span>• XeMoNet: {player.xeMoNetId}</span>}
               </div>
               <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                 {LEVEL_LABELS[player.level].label} • OVR {player.ovrRating}

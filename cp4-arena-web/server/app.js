@@ -4,6 +4,11 @@ import path from 'node:path';
 import express from 'express';
 import { createCloudStore, getPersistenceDiagnostics } from './cloudStore.js';
 import { openDatabase } from './db.js';
+import {
+  createDefaultDiscordAdapter,
+  createSignedOAuthState,
+  verifySignedOAuthState
+} from './discord.js';
 import { createMediaStore } from './mediaStore.js';
 import { ArenaService } from './service.js';
 
@@ -54,7 +59,71 @@ function resolveEffectiveDbPath(dbPath) {
   );
 }
 
-export async function createArenaAppAsync({ dbPath, uploadsDir, distDir, cloudStore = null, cloudAdapter = null } = {}) {
+function escapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderDiscordOAuthHtml({
+  ok,
+  title,
+  message,
+  profile = null,
+  duplicate = false,
+  origin = '*'
+}) {
+  const safeOrigin = typeof origin === 'string' && /^https?:\/\/[^/\s]+$/i.test(origin) ? origin : '*';
+  const postPayload = JSON.stringify({
+    type: 'cp4_discord_oauth_result',
+    ok: Boolean(ok),
+    created: Boolean(ok && !duplicate),
+    duplicate: Boolean(duplicate),
+    profileId: profile?.id ?? null,
+    cp4Id: profile?.cp4Id ?? null,
+    name: profile?.name ?? null,
+    errorAr: ok ? null : String(message || ''),
+    error: ok ? null : String(message || '')
+  });
+  return `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(title)} — CP4 ARENA</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #070913; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; padding: 20px; }
+    .card { max-width: 440px; width: 100%; background: #0f1528; border: 1px solid ${ok ? '#f5b82e' : '#ef4444'}; border-radius: 18px; padding: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,.45); }
+    .badge { display: inline-block; padding: 6px 14px; border-radius: 999px; background: ${ok ? 'rgba(245,184,46,.16)' : 'rgba(239,68,68,.16)'}; color: ${ok ? '#f5b82e' : '#fca5a5'}; font-weight: 700; margin-bottom: 14px; font-size: 14px; }
+    h1 { margin: 0 0 10px; font-size: 20px; color: ${ok ? '#f5b82e' : '#fca5a5'}; }
+    p { margin: 0 0 18px; line-height: 1.7; color: #cbd5e1; font-size: 15px; }
+    .cp4 { font-family: monospace; font-size: 20px; font-weight: 800; color: #38bdf8; background: #161f3b; border: 1px solid #2563eb; border-radius: 12px; padding: 10px 14px; margin: 12px 0 18px; }
+    button { background: #2563eb; color: #fff; border: 0; border-radius: 12px; padding: 12px 20px; font-weight: 700; cursor: pointer; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">${ok ? (duplicate ? 'ملف موجود مسبقاً' : 'تم الربط بنجاح') : 'تعذر الربط'}</div>
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(message)}</p>
+    ${profile?.cp4Id ? `<div class="cp4">${escapeHtml(profile.cp4Id)} — ${escapeHtml(profile.name)}</div>` : ''}
+    <button type="button" onclick="window.close()">إغلاق والعودة</button>
+  </div>
+  <script>
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(${postPayload}, ${JSON.stringify(safeOrigin)});
+      }
+    } catch (_) {}
+  </script>
+</body>
+</html>`;
+}
+
+export async function createArenaAppAsync({ dbPath, uploadsDir, distDir, cloudStore = null, cloudAdapter = null, discordAdapter = null } = {}) {
   const resolvedDbPath = resolveEffectiveDbPath(dbPath);
   const activeCloudStore = cloudStore || createCloudStore({ adapter: cloudAdapter });
   if (activeCloudStore.isEnabled()) {
@@ -64,7 +133,8 @@ export async function createArenaAppAsync({ dbPath, uploadsDir, distDir, cloudSt
     dbPath: resolvedDbPath,
     uploadsDir,
     distDir,
-    cloudStore: activeCloudStore
+    cloudStore: activeCloudStore,
+    discordAdapter
   });
   if (activeCloudStore.isEnabled()) {
     await activeCloudStore.syncDatabaseNow(bundle.db, resolvedDbPath);
@@ -72,9 +142,10 @@ export async function createArenaAppAsync({ dbPath, uploadsDir, distDir, cloudSt
   return bundle;
 }
 
-export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null } = {}) {
+export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null, discordAdapter = null } = {}) {
   const resolvedDbPath = resolveEffectiveDbPath(dbPath);
   const db = openDatabase(resolvedDbPath);
+  const activeDiscordAdapter = discordAdapter || createDefaultDiscordAdapter();
   const mediaStore = createMediaStore({
     dbPath: resolvedDbPath,
     uploadsDir: uploadsDir || path.resolve(process.cwd(), 'data', 'uploads'),
@@ -157,7 +228,224 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null 
         : null;
     const state = service.getPublicState(tournamentId, getBearerToken(req), getClientKey(req), requestedUsername);
     const persistence = getPersistenceDiagnostics({ dbPath: resolvedDbPath, cloudStore });
-    res.json({ ...state, persistence });
+    const discordStatus = activeDiscordAdapter.getStatus();
+    res.json({ ...state, persistence, discordStatus });
+  });
+
+  // Discord OAuth, Bot guild members & Unified Player Profiles (Stage 1)
+  app.get('/api/discord/status', (_req, res) => {
+    res.json({ ok: true, ...activeDiscordAdapter.getStatus() });
+  });
+
+  app.get('/api/discord/oauth/start', (req, res) => {
+    const status = activeDiscordAdapter.getStatus();
+    const wantsJson = req.query.format === 'json';
+    if (!status.oauthConfigured) {
+      const errorMsg =
+        'ربط Discord OAuth غير مُفعّل على الخادم بعد. يرجى ضبط متغيرات DISCORD_CLIENT_ID و DISCORD_CLIENT_SECRET و DISCORD_REDIRECT_URI.';
+      if (wantsJson) {
+        return res.status(503).json({ ok: false, code: 'DISCORD_OAUTH_UNCONFIGURED', error: errorMsg });
+      }
+      return res
+        .status(503)
+        .type('text/html; charset=utf-8')
+        .send(renderDiscordOAuthHtml({ ok: false, title: 'ربط Discord غير مُعد', message: errorMsg }));
+    }
+
+    const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+    const state = createSignedOAuthState(db.sessionSecret, { origin: originHeader });
+    const url = activeDiscordAdapter.buildAuthorizeUrl({ state });
+    if (!url) {
+      const errorMsg = 'تعذر إنشاء رابط تفويض Discord OAuth على الخادم.';
+      if (wantsJson) {
+        return res.status(503).json({ ok: false, code: 'DISCORD_OAUTH_UNCONFIGURED', error: errorMsg });
+      }
+      return res
+        .status(503)
+        .type('text/html; charset=utf-8')
+        .send(renderDiscordOAuthHtml({ ok: false, title: 'تعذر إنشاء الرابط', message: errorMsg }));
+    }
+
+    if (wantsJson) {
+      return res.json({ ok: true, url });
+    }
+    return res.redirect(url);
+  });
+
+  app.get('/api/discord/oauth/callback', async (req, res) => {
+    const status = activeDiscordAdapter.getStatus();
+    if (!status.oauthConfigured) {
+      return res
+        .status(503)
+        .type('text/html; charset=utf-8')
+        .send(
+          renderDiscordOAuthHtml({
+            ok: false,
+            title: 'ربط Discord غير مُفعّل',
+            message: 'إعدادات Discord OAuth غير مكتملة على الخادم.'
+          })
+        );
+    }
+
+    if (req.query.error) {
+      return res
+        .status(400)
+        .type('text/html; charset=utf-8')
+        .send(
+          renderDiscordOAuthHtml({
+            ok: false,
+            title: 'تم إلغاء الربط',
+            message: 'لم تكتمل موافقة Discord أو تم إلغاء العملية من المستخدم.'
+          })
+        );
+    }
+
+    const code = typeof req.query.code === 'string' ? req.query.code.trim() : '';
+    const rawState = typeof req.query.state === 'string' ? req.query.state.trim() : '';
+    const verifiedState = verifySignedOAuthState(db.sessionSecret, rawState);
+    if (!code || !verifiedState) {
+      return res
+        .status(400)
+        .type('text/html; charset=utf-8')
+        .send(
+          renderDiscordOAuthHtml({
+            ok: false,
+            title: 'جلسة التحقق غير صالحة',
+            message: 'انتهت صلاحية رمز التحقق (state) أو أن الطلب غير صالح. يرجى المحاولة مجدداً.'
+          })
+        );
+    }
+
+    try {
+      const discordUser = await activeDiscordAdapter.exchangeCodeForUser(code);
+      const out = service.createOrResolveDiscordOAuthProfile(discordUser);
+      if (!out.ok) {
+        return res
+          .status(out.status || 400)
+          .type('text/html; charset=utf-8')
+          .send(
+            renderDiscordOAuthHtml({
+              ok: false,
+              title: 'تعذر إتمام الربط',
+              message: out.error,
+              origin: verifiedState.origin
+            })
+          );
+      }
+      if (out.created) {
+        await syncCloud();
+      }
+      return res
+        .status(200)
+        .type('text/html; charset=utf-8')
+        .send(
+          renderDiscordOAuthHtml({
+            ok: true,
+            title: out.duplicate ? 'الحساب مربوط مسبقاً' : 'تم إنشاء ملف اللاعب الموحد',
+            message: out.messageAr,
+            profile: out.profile,
+            duplicate: out.duplicate,
+            origin: verifiedState.origin
+          })
+        );
+    } catch {
+      return res
+        .status(502)
+        .type('text/html; charset=utf-8')
+        .send(
+          renderDiscordOAuthHtml({
+            ok: false,
+            title: 'فشل الاتصال بـ Discord',
+            message: 'تعذر التحقق من حساب Discord حالياً. يرجى المحاولة مرة أخرى.',
+            origin: verifiedState.origin
+          })
+        );
+    }
+  });
+
+  app.get('/api/discord/guild-members', async (req, res) => {
+    const auth = service.requirePermission(getBearerToken(req), 'MANAGE_PLAYERS');
+    if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+
+    const status = activeDiscordAdapter.getStatus();
+    if (!status.guildConfigured) {
+      return res.status(503).json({
+        ok: false,
+        code: 'DISCORD_BOT_UNCONFIGURED',
+        error: 'بوت Discord غير مُفعّل على الخادم بعد. يرجى ضبط متغيرات DISCORD_BOT_TOKEN و DISCORD_GUILD_ID.'
+      });
+    }
+
+    try {
+      const members = await activeDiscordAdapter.fetchGuildMembers({
+        limit: Number(req.query.limit) || 200
+      });
+      const existingLinks = new Map(
+        db
+          .prepare('SELECT id, cp4_id, discord_user_id FROM player_profiles WHERE discord_user_id IS NOT NULL')
+          .all()
+          .map((row) => [String(row.discord_user_id), { id: row.id, cp4Id: row.cp4_id }])
+      );
+      const enriched = members.map((m) => {
+        const linked = existingLinks.get(String(m.discordUserId));
+        return {
+          ...m,
+          linkedProfileId: linked?.id ?? null,
+          linkedCp4Id: linked?.cp4Id ?? null
+        };
+      });
+      res.json({ ok: true, members: enriched });
+    } catch {
+      res.status(502).json({
+        ok: false,
+        code: 'DISCORD_BOT_FETCH_FAILED',
+        error: 'تعذر جلب قائمة أعضاء Discord من البوت حالياً.'
+      });
+    }
+  });
+
+  app.get('/api/player-profiles', (req, res) => {
+    const out = service.listPlayerProfiles(getBearerToken(req));
+    if (!out.ok) return res.status(out.status).json({ error: out.error });
+    res.json(out);
+  });
+
+  app.post('/api/player-profiles', async (req, res) => {
+    const out = service.createPlayerProfile(getBearerToken(req), req.body || {});
+    if (!out.ok) {
+      return res.status(out.status).json({
+        error: out.error,
+        code: out.code,
+        existingProfile: out.existingProfile
+      });
+    }
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.patch('/api/player-profiles/:id', async (req, res) => {
+    const out = service.updatePlayerProfile(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) {
+      return res.status(out.status).json({
+        error: out.error,
+        code: out.code,
+        existingProfile: out.existingProfile
+      });
+    }
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.post('/api/player-profiles/merge', async (req, res) => {
+    const out = service.mergePlayerProfiles(getBearerToken(req), req.body || {});
+    if (!out.ok) {
+      return res.status(out.status).json({
+        error: out.error,
+        code: out.code
+      });
+    }
+    await syncCloud();
+    res.status(out.status).json(out);
   });
 
   app.get('/api/tournaments/:id/export', (req, res) => {

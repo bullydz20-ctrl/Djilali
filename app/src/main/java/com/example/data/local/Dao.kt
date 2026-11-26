@@ -173,3 +173,27 @@ interface AppMetaDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun setValue(meta: AppMetaEntity)
 }
+
+@Dao
+interface PlayerProfileDao {
+    @Query("SELECT * FROM player_profiles ORDER BY id DESC")
+    fun observeProfiles(): Flow<List<PlayerProfileEntity>>
+
+    @Query("SELECT * FROM player_profiles ORDER BY id DESC")
+    suspend fun getProfiles(): List<PlayerProfileEntity>
+
+    @Query("SELECT * FROM player_profiles WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): PlayerProfileEntity?
+
+    @Query("SELECT * FROM player_profiles WHERE discordUserId = :discordUserId LIMIT 1")
+    suspend fun getByDiscordUserId(discordUserId: String): PlayerProfileEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrReplaceAll(profiles: List<PlayerProfileEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(profile: PlayerProfileEntity): Long
+
+    @Query("DELETE FROM player_profiles WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}

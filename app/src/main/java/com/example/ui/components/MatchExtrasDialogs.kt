@@ -98,8 +98,23 @@ fun PlayerProfileDialog(
                             style = MaterialTheme.typography.titleLarge,
                             color = ChampionshipGold,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
+                        player.cp4Id?.takeIf { it.isNotBlank() }?.let { cp4 ->
+                            Surface(
+                                color = ChampionshipGold.copy(alpha = 0.14f),
+                                shape = RoundedCornerShape(999.dp),
+                                border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.45f))
+                            ) {
+                                Text(
+                                    text = cp4,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ChampionshipGold,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                         if (isChampion) {
                             Icon(
                                 imageVector = Icons.Default.EmojiEvents,
@@ -109,8 +124,12 @@ fun PlayerProfileDialog(
                             )
                         }
                     }
+                    val idsText = buildString {
+                        append("ElysiumNet: ${player.elysiumNetId}")
+                        if (player.xeMoNetId.isNotBlank()) append(" • XeMoNet: ${player.xeMoNetId}")
+                    }
                     Text(
-                        text = "ElysiumNet/ XeMoNat: ${player.elysiumNetId}",
+                        text = idsText,
                         style = MaterialTheme.typography.bodySmall,
                         color = CyberSky
                     )

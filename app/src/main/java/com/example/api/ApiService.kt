@@ -50,9 +50,39 @@ sealed class ApiResult<out T> {
     data class Error(
         val messageAr: String,
         val statusCode: Int = 0,
-        val lockoutState: LockoutState? = null
+        val lockoutState: LockoutState? = null,
+        val errorCode: String? = null,
+        val existingProfile: PlayerProfileDto? = null
     ) : ApiResult<Nothing>()
 }
+
+data class PlayerProfileDto(
+    val id: Long,
+    val cp4Id: String,
+    val name: String,
+    val avatarUrl: String? = null,
+    val elysiumNetId: String = "",
+    val xeMoNetId: String = "",
+    val discordUserId: String? = null,
+    val createdAt: Long = 0L,
+    val tournamentsCount: Int = 0
+)
+
+data class DiscordGuildMemberDto(
+    val discordUserId: String,
+    val username: String,
+    val displayName: String,
+    val avatarUrl: String? = null,
+    val linkedProfileId: Long? = null,
+    val linkedCp4Id: String? = null
+)
+
+data class DiscordStatusDto(
+    val oauthConfigured: Boolean = false,
+    val botConfigured: Boolean = false,
+    val guildIdConfigured: Boolean = false,
+    val guildConfigured: Boolean = false
+)
 
 data class RemoteArenaState(
     val tournaments: List<TournamentEntity>,
@@ -82,7 +112,9 @@ data class RemoteArenaState(
     val currentAdmin: AdminAccountEntity?,
     val keepSignedIn: Boolean,
     val lockoutState: LockoutState,
-    val persistence: PersistenceInfo? = null
+    val persistence: PersistenceInfo? = null,
+    val playerProfiles: List<PlayerProfileDto> = emptyList(),
+    val discordStatus: DiscordStatusDto = DiscordStatusDto()
 )
 
 data class RaceResultEntry(
@@ -569,18 +601,89 @@ class ApiService(
         level: PlayerLevel,
         ovrRating: Int,
         clubName: String,
-        autoApprove: Boolean = true
+        autoApprove: Boolean = true,
+        profileId: Long? = null,
+        xeMoNetId: String = "",
+        discordUserId: String? = null
     ): ApiResult<PlayerEntity> {
         val body = JSONObject()
             .put("name", name)
             .put("elysiumNetId", elysiumNetId)
+            .put("xeMoNetId", xeMoNetId)
             .put("avatarUrl", toServerMediaPath(avatarUrl) ?: JSONObject.NULL)
             .put("level", level.name)
             .put("ovrRating", ovrRating)
             .put("clubName", clubName)
             .put("status", if (autoApprove) PlayerStatus.APPROVED.name else PlayerStatus.PENDING.name)
+            .apply {
+                if (profileId != null) put("profileId", profileId)
+                if (!discordUserId.isNullOrBlank()) put("discordUserId", discordUserId.trim())
+            }
         return executeJsonRequest("POST", "/api/tournaments/$tournamentId/players", body) { json ->
             parsePlayer(json.getJSONObject("player"))
+        }
+    }
+
+    suspend fun fetchDiscordOAuthStartUrl(): ApiResult<String> {
+        return executeJsonRequest("GET", "/api/discord/oauth/start?format=json", null) { json ->
+            json.optString("url", "")
+        }
+    }
+
+    suspend fun fetchDiscordGuildMembers(): ApiResult<List<DiscordGuildMemberDto>> {
+        return executeJsonRequest("GET", "/api/discord/guild-members", null) { json ->
+            parseArray(json.optJSONArray("members"), ::parseDiscordGuildMember)
+        }
+    }
+
+    suspend fun createPlayerProfile(
+        name: String,
+        avatarUrl: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?
+    ): ApiResult<PlayerProfileDto> {
+        val body = JSONObject()
+            .put("name", name)
+            .put("avatarUrl", toServerMediaPath(avatarUrl) ?: JSONObject.NULL)
+            .put("elysiumNetId", elysiumNetId)
+            .put("xeMoNetId", xeMoNetId)
+            .put("discordUserId", discordUserId?.trim()?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+        return executeJsonRequest("POST", "/api/player-profiles", body) { json ->
+            parsePlayerProfile(json.getJSONObject("profile"))
+        }
+    }
+
+    suspend fun updatePlayerProfile(
+        id: Long,
+        name: String,
+        avatarUrl: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?
+    ): ApiResult<PlayerProfileDto> {
+        val body = JSONObject()
+            .put("name", name)
+            .put("avatarUrl", toServerMediaPath(avatarUrl) ?: JSONObject.NULL)
+            .put("elysiumNetId", elysiumNetId)
+            .put("xeMoNetId", xeMoNetId)
+            .put("discordUserId", discordUserId?.trim()?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+        return executeJsonRequest("PATCH", "/api/player-profiles/$id", body) { json ->
+            parsePlayerProfile(json.getJSONObject("profile"))
+        }
+    }
+
+    suspend fun mergePlayerProfiles(
+        sourceProfileId: Long,
+        targetProfileId: Long,
+        confirmIdentity: Boolean
+    ): ApiResult<PlayerProfileDto> {
+        val body = JSONObject()
+            .put("sourceProfileId", sourceProfileId)
+            .put("targetProfileId", targetProfileId)
+            .put("confirmIdentity", confirmIdentity)
+        return executeJsonRequest("POST", "/api/player-profiles/merge", body) { json ->
+            parsePlayerProfile(json.getJSONObject("profile"))
         }
     }
 
@@ -593,6 +696,7 @@ class ApiService(
         val body = JSONObject()
             .put("name", player.name)
             .put("elysiumNetId", player.elysiumNetId)
+            .put("xeMoNetId", player.xeMoNetId)
             .put("avatarUrl", toServerMediaPath(player.avatarUri) ?: JSONObject.NULL)
             .put("clubName", player.clubName)
             .put("level", player.level.name)
@@ -974,10 +1078,14 @@ class ApiService(
                     val serverError = json.optString("error").takeIf { it.isNotBlank() }
                     val friendlyError = serverError ?: buildHttpErrorMessage(response.code, url)
                     val lock = json.optJSONObject("lockoutState")?.let(::parseLockout)
+                    val errorCode = json.optString("code").takeIf { it.isNotBlank() }
+                    val existingProfile = json.optJSONObject("existingProfile")?.let(::parsePlayerProfile)
                     return@withContext ApiResult.Error(
                         messageAr = friendlyError,
                         statusCode = response.code,
-                        lockoutState = lock
+                        lockoutState = lock,
+                        errorCode = errorCode,
+                        existingProfile = existingProfile
                     )
                 }
 
@@ -1052,6 +1160,8 @@ class ApiService(
         val currentAdmin = json.optJSONObject("currentAdmin")?.let(::parseAdmin)
         val lockoutState = json.optJSONObject("lockoutState")?.let(::parseLockout) ?: LockoutState()
         val persistence = json.optJSONObject("persistence")?.let(::parsePersistence)
+        val playerProfiles = parseArray(json.optJSONArray("playerProfiles"), ::parsePlayerProfile)
+        val discordStatus = parseDiscordStatus(json.optJSONObject("discordStatus"))
 
         return RemoteArenaState(
             tournaments = tournaments,
@@ -1081,7 +1191,9 @@ class ApiService(
             currentAdmin = currentAdmin,
             keepSignedIn = json.optBoolean("keepSignedIn", true),
             lockoutState = lockoutState,
-            persistence = persistence
+            persistence = persistence,
+            playerProfiles = playerProfiles,
+            discordStatus = discordStatus
         )
     }
 
@@ -1185,8 +1297,47 @@ class ApiService(
         status = enumOrDefault(obj.optString("status"), PlayerStatus.PENDING),
         groupId = obj.optNullableLong("groupId"),
         seedOrder = obj.optInt("seedOrder", 0),
-        registeredAt = obj.optLong("registeredAt", 0L)
+        registeredAt = obj.optLong("registeredAt", 0L),
+        profileId = obj.optNullableLong("profileId"),
+        cp4Id = obj.optNullableString("cp4Id"),
+        xeMoNetId = obj.optString("xeMoNetId", ""),
+        discordUserId = obj.optNullableString("discordUserId")
     )
+
+    private fun parsePlayerProfile(obj: JSONObject): PlayerProfileDto = PlayerProfileDto(
+        id = obj.optLong("id", 0L),
+        cp4Id = obj.optString("cp4Id", ""),
+        name = obj.optString("name", ""),
+        avatarUrl = resolveMediaUrl(obj.optNullableString("avatarUrl")),
+        elysiumNetId = obj.optString("elysiumNetId", ""),
+        xeMoNetId = obj.optString("xeMoNetId", ""),
+        discordUserId = obj.optNullableString("discordUserId"),
+        createdAt = obj.optLong("createdAt", 0L),
+        tournamentsCount = obj.optInt("tournamentsCount", 0)
+    )
+
+    private fun parseDiscordGuildMember(obj: JSONObject): DiscordGuildMemberDto = DiscordGuildMemberDto(
+        discordUserId = obj.optString("discordUserId", ""),
+        username = obj.optString("username", ""),
+        displayName = obj.optString("displayName", ""),
+        avatarUrl = resolveMediaUrl(obj.optNullableString("avatarUrl")),
+        linkedProfileId = obj.optNullableLong("linkedProfileId"),
+        linkedCp4Id = obj.optNullableString("linkedCp4Id")
+    )
+
+    private fun parseDiscordStatus(obj: JSONObject?): DiscordStatusDto {
+        if (obj == null) return DiscordStatusDto()
+        val oauth = obj.optBoolean("oauthConfigured", false)
+        val bot = obj.optBoolean("botConfigured", false)
+        val guildConfigured = obj.optBoolean("guildConfigured", false)
+        val guildId = obj.optBoolean("guildIdConfigured", guildConfigured)
+        return DiscordStatusDto(
+            oauthConfigured = oauth,
+            botConfigured = bot,
+            guildIdConfigured = guildId,
+            guildConfigured = guildConfigured
+        )
+    }
 
     private fun parseGroup(obj: JSONObject): TournamentGroupEntity = TournamentGroupEntity(
         id = obj.optLong("id", 0L),

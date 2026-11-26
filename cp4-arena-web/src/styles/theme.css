@@ -732,7 +732,7 @@ textarea.input {
   transition: width 0.25s ease;
 }
 
-.bracket-viewport-wrap {
+.bracket-viewport-shell {
   position: relative;
   border-radius: 20px;
   border: 1px solid var(--card-border);
@@ -742,17 +742,22 @@ textarea.input {
     radial-gradient(circle at 82% 20%, rgba(124, 58, 237, 0.09), transparent 44%),
     var(--obsidian-void);
   overflow: hidden;
-  min-height: 430px;
-  height: clamp(440px, 66dvh, 760px);
-  touch-action: none;
-  user-select: none;
+}
+
+.bracket-viewport-wrap {
+  width: 100%;
+  min-height: 460px;
+  height: clamp(460px, 68dvh, 780px);
+  overflow: auto;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--card-border) transparent;
 }
 
 .bracket-stage-surface {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform-origin: top center;
+  position: relative;
+  transform-origin: top left;
   will-change: transform;
 }
 

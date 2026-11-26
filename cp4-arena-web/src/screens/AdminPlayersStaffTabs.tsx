@@ -1,6 +1,31 @@
 import { useState } from 'react';
-import { CalendarClock, Check, Edit3, FileSpreadsheet, History, ImagePlus, Plus, Trash2, Trophy, UserPlus, X } from 'lucide-react';
-import { uploadImageFileApi } from '../api';
+import {
+  AlertTriangle,
+  Bot,
+  CalendarClock,
+  Check,
+  Edit3,
+  ExternalLink,
+  FileSpreadsheet,
+  GitMerge,
+  History,
+  IdCard,
+  ImagePlus,
+  Link2,
+  Plus,
+  Shield,
+  Trash2,
+  Trophy,
+  UserPlus,
+  Users,
+  X
+} from 'lucide-react';
+import {
+  fetchDiscordGuildMembersApi,
+  fetchDiscordOAuthStartUrlApi,
+  uploadImageFileApi
+} from '../api';
+import type { ApiError } from '../api';
 import { MatchResultsTable } from '../components/MatchResultsTable';
 import { PlayerAvatar } from '../components/PlayerAvatar';
 import { RacingOverviewPanel, isRacingFormat } from '../components/RacingSection';
@@ -10,7 +35,18 @@ import {
   SUB_ADMIN_PRESETS,
   evaluatePinStrengthClient
 } from '../types';
-import type { AdminAccount, ArenaState, Match, Player, PlayerLevel, PlayerStatus, RaceEntry, RaceStage } from '../types';
+import type {
+  AdminAccount,
+  ArenaState,
+  DiscordGuildMember,
+  Match,
+  Player,
+  PlayerLevel,
+  PlayerProfile,
+  PlayerStatus,
+  RaceEntry,
+  RaceStage
+} from '../types';
 
 export function AdminPlayersTab({
   state,
@@ -18,12 +54,19 @@ export function AdminPlayersTab({
   onBulkImport,
   onStatusChange,
   onUpdateDetails,
-  onDeletePlayer
+  onDeletePlayer,
+  onCreatePlayerProfile,
+  onUpdatePlayerProfile,
+  onMergePlayerProfiles,
+  onNotify
 }: {
   state: ArenaState;
   onAdminAddPlayer: (payload: {
+    profileId?: number | null;
     name: string;
     elysiumNetId: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
     avatarUrl: string | null;
     level: PlayerLevel;
     ovrRating: number;
@@ -34,13 +77,199 @@ export function AdminPlayersTab({
   onStatusChange: (id: number, status: PlayerStatus) => Promise<void>;
   onUpdateDetails: (id: number, payload: Record<string, unknown>) => Promise<void>;
   onDeletePlayer: (id: number) => Promise<void>;
+  onCreatePlayerProfile: (payload: {
+    name: string;
+    avatarUrl?: string | null;
+    elysiumNetId?: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
+  }) => Promise<PlayerProfile>;
+  onUpdatePlayerProfile: (
+    id: number,
+    payload: {
+      name?: string;
+      avatarUrl?: string | null;
+      elysiumNetId?: string;
+      xeMoNetId?: string;
+      discordUserId?: string | null;
+    }
+  ) => Promise<PlayerProfile>;
+  onMergePlayerProfiles: (payload: {
+    sourceProfileId: number;
+    targetProfileId: number;
+    confirmIdentity: boolean;
+  }) => Promise<PlayerProfile>;
+  onNotify: (msg: string) => void;
 }) {
   const [editing, setEditing] = useState<Player | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [prefillProfile, setPrefillProfile] = useState<PlayerProfile | null>(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
+  const [showCreateProfileModal, setShowCreateProfileModal] = useState(false);
+  const [selectedProfile, setSelectedProfile] = useState<PlayerProfile | null>(null);
+  const [showMergeProfilesModal, setShowMergeProfilesModal] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState(false);
+
+  const profiles = state.playerProfiles ?? [];
+  const discordStatus = state.discordStatus;
+
+  async function handleStartDiscordOAuth() {
+    setOauthBusy(true);
+    try {
+      const res = await fetchDiscordOAuthStartUrlApi();
+      const popup = window.open(res.url, 'cp4_discord_oauth', 'width=520,height=740');
+      if (!popup) {
+        window.location.href = res.url;
+      }
+    } catch (e) {
+      onNotify(e instanceof Error ? e.message : 'تعذر بدء الربط عبر Discord OAuth.');
+    } finally {
+      setOauthBusy(false);
+    }
+  }
 
   return (
     <div className="stack-col">
+      {/* Stage 1: Unified Player Profiles Section */}
+      <div className="arena-card stack-col" style={{ gap: 12, borderColor: 'rgba(56, 189, 248, 0.35)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 800, color: 'var(--championship-gold)' }}>
+              <IdCard size={18} />
+              <span>ملفات اللاعبين الموحدة ({profiles.length})</span>
+            </div>
+            <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+              ملف موحد برقم CP4 ثابت مع منع التكرار عبر Discord User ID
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ padding: '7px 10px', fontSize: '0.78rem' }}
+              disabled={oauthBusy}
+              onClick={handleStartDiscordOAuth}
+              data-testid="discord_oauth_start_btn"
+            >
+              <Link2 size={15} />
+              <span>{oauthBusy ? 'جاري التحويل...' : 'ربط تلقائي (Discord OAuth)'}</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ padding: '7px 11px', fontSize: '0.78rem' }}
+              onClick={() => setShowCreateProfileModal(true)}
+              data-testid="create_player_profile_btn"
+            >
+              <UserPlus size={15} />
+              <span>إنشاء / ربط ملف</span>
+            </button>
+            {profiles.length >= 2 && (
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ padding: '7px 10px', fontSize: '0.78rem', color: 'var(--championship-gold)' }}
+                onClick={() => setShowMergeProfilesModal(true)}
+                data-testid="merge_profiles_btn"
+              >
+                <GitMerge size={15} />
+                <span>دمج ملفين</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: '0.74rem' }}>
+          <span
+            className="arena-subcard"
+            style={{
+              padding: '4px 8px',
+              color: discordStatus?.oauthConfigured ? 'var(--emerald-win)' : 'var(--text-secondary)'
+            }}
+          >
+            Discord OAuth: {discordStatus?.oauthConfigured ? 'مفعّل' : 'يتطلب إعداد متغيرات الخادم'}
+          </span>
+          <span
+            className="arena-subcard"
+            style={{
+              padding: '4px 8px',
+              color: discordStatus?.botConfigured && discordStatus?.guildIdConfigured ? 'var(--cyber-sky)' : 'var(--text-secondary)'
+            }}
+          >
+            قائمة أعضاء البوت: {discordStatus?.botConfigured && discordStatus?.guildIdConfigured ? 'مفعّلة' : 'يتطلب توكن البوت ومعرّف السيرفر'}
+          </span>
+        </div>
+
+        {profiles.length === 0 ? (
+          <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            لا توجد ملفات لاعبين موحدة بعد. أنشئ ملفاً يدوياً أو عبر قائمة البوت أو عبر Discord OAuth.
+          </div>
+        ) : (
+          <div className="stack-col" style={{ gap: 8, maxHeight: 340, overflowY: 'auto' }}>
+            {profiles.map((prof) => (
+              <div
+                key={prof.id}
+                className="arena-subcard"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                  <PlayerAvatar avatarUrl={prof.avatarUrl} name={prof.name} size={40} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 800, fontSize: '0.9rem' }}>{prof.name}</span>
+                      <span
+                        className="score-num"
+                        style={{
+                          fontSize: '0.7rem',
+                          padding: '1px 7px',
+                          borderRadius: 999,
+                          background: 'rgba(245, 184, 46, 0.16)',
+                          border: '1px solid rgba(245, 184, 46, 0.45)',
+                          color: 'var(--championship-gold)'
+                        }}
+                      >
+                        {prof.cp4Id}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--cyber-sky)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {prof.elysiumNetId && <span>ElysiumNet: {prof.elysiumNetId}</span>}
+                      {prof.xeMoNetId && <span>XeMoNet: {prof.xeMoNetId}</span>}
+                      {prof.discordUserId && <span>Discord: {prof.discordUserId}</span>}
+                      <span>• {prof.tournamentsCount ?? 0} بطولات</span>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  {state.tournament && (
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      style={{ padding: '5px 9px', fontSize: '0.74rem' }}
+                      onClick={() => {
+                        setPrefillProfile(prof);
+                        setShowAddModal(true);
+                      }}
+                    >
+                      <Plus size={14} />
+                      <span>إضافة للبطولة</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    style={{ padding: '5px 9px', fontSize: '0.74rem', color: 'var(--championship-gold)' }}
+                    onClick={() => setSelectedProfile(prof)}
+                  >
+                    <Edit3 size={14} />
+                    <span>الملف</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ fontWeight: 800, color: 'var(--championship-gold)' }}>
           طلبات التسجيل الجديدة ({state.pendingPlayers.length})
@@ -60,7 +289,10 @@ export function AdminPlayersTab({
               type="button"
               className="btn btn-primary"
               style={{ padding: '7px 12px', fontSize: '0.82rem' }}
-              onClick={() => setShowAddModal(true)}
+              onClick={() => {
+                setPrefillProfile(null);
+                setShowAddModal(true);
+              }}
             >
               <UserPlus size={16} />
               <span>إضافة لاعب مباشرة</span>
@@ -118,10 +350,15 @@ export function AdminPlayersTab({
 
       {showAddModal && (
         <AdminAddPlayerModal
-          onClose={() => setShowAddModal(false)}
+          initialProfile={prefillProfile}
+          onClose={() => {
+            setShowAddModal(false);
+            setPrefillProfile(null);
+          }}
           onAdd={async (payload) => {
             await onAdminAddPlayer(payload);
             setShowAddModal(false);
+            setPrefillProfile(null);
           }}
         />
       )}
@@ -143,6 +380,43 @@ export function AdminPlayersTab({
           onSave={async (payload) => {
             await onUpdateDetails(editing.id, payload);
             setEditing(null);
+          }}
+        />
+      )}
+
+      {showCreateProfileModal && (
+        <CreatePlayerProfileModal
+          onClose={() => setShowCreateProfileModal(false)}
+          onCreate={async (payload) => {
+            await onCreatePlayerProfile(payload);
+            setShowCreateProfileModal(false);
+          }}
+          onOpenExisting={(existing) => {
+            setShowCreateProfileModal(false);
+            setSelectedProfile(existing);
+          }}
+        />
+      )}
+
+      {selectedProfile && (
+        <ProfileDetailEditModal
+          profile={selectedProfile}
+          onClose={() => setSelectedProfile(null)}
+          onSave={async (payload) => {
+            await onUpdatePlayerProfile(selectedProfile.id, payload);
+            setSelectedProfile(null);
+          }}
+          onOpenExisting={(existing) => setSelectedProfile(existing)}
+        />
+      )}
+
+      {showMergeProfilesModal && (
+        <MergeProfilesModal
+          profiles={profiles}
+          onClose={() => setShowMergeProfilesModal(false)}
+          onMerge={async (payload) => {
+            await onMergePlayerProfiles(payload);
+            setShowMergeProfilesModal(false);
           }}
         />
       )}
@@ -231,9 +505,26 @@ function AdminPlayerRow({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         <PlayerAvatar avatarUrl={player.avatarUrl} name={player.name} size={40} />
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{player.name}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{player.name}</span>
+            {player.cp4Id && (
+              <span
+                className="score-num"
+                style={{
+                  fontSize: '0.68rem',
+                  color: 'var(--championship-gold)',
+                  border: '1px solid rgba(245, 184, 46, 0.4)',
+                  borderRadius: 6,
+                  padding: '1px 5px'
+                }}
+              >
+                {player.cp4Id}
+              </span>
+            )}
+          </div>
           <div style={{ fontSize: '0.76rem', color: 'var(--cyber-sky)' }}>
-            {player.elysiumNetId} • {LEVEL_LABELS[player.level].label} ({player.ovrRating})
+            {player.elysiumNetId}
+            {player.xeMoNetId ? ` • ${player.xeMoNetId}` : ''} • {LEVEL_LABELS[player.level].label} ({player.ovrRating})
           </div>
         </div>
       </div>
@@ -260,13 +551,18 @@ function AdminPlayerRow({
 }
 
 function AdminAddPlayerModal({
+  initialProfile,
   onClose,
   onAdd
 }: {
+  initialProfile?: PlayerProfile | null;
   onClose: () => void;
   onAdd: (payload: {
+    profileId?: number | null;
     name: string;
     elysiumNetId: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
     avatarUrl: string | null;
     level: PlayerLevel;
     ovrRating: number;
@@ -274,12 +570,13 @@ function AdminAddPlayerModal({
     status: PlayerStatus;
   }) => Promise<void>;
 }) {
-  const [name, setName] = useState('');
-  const [elysiumId, setElysiumId] = useState('');
+  const [name, setName] = useState(initialProfile?.name || '');
+  const [elysiumId, setElysiumId] = useState(initialProfile?.elysiumNetId || '');
+  const [xeMoNetId, setXeMoNetId] = useState(initialProfile?.xeMoNetId || '');
   const [clubName, setClubName] = useState('');
   const [level, setLevel] = useState<PlayerLevel>('INTERMEDIATE');
   const [ovrRating, setOvrRating] = useState(String(LEVEL_LABELS.INTERMEDIATE.ovr));
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(initialProfile?.avatarUrl ?? null);
   const [autoApprove, setAutoApprove] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -302,7 +599,9 @@ function AdminAddPlayerModal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>إضافة لاعب مباشرة للبطولة</h3>
+        <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>
+          {initialProfile ? `تسجيل ${initialProfile.name} (${initialProfile.cp4Id}) في البطولة` : 'إضافة لاعب مباشرة للبطولة'}
+        </h3>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <PlayerAvatar avatarUrl={avatarUrl} name={name || 'P'} size={52} />
@@ -325,7 +624,8 @@ function AdminAddPlayerModal({
         </div>
 
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="اسم اللاعب *" />
-        <input className="input" value={elysiumId} onChange={(e) => setElysiumId(e.target.value)} placeholder="معرف اللاعب في ElysiumNet/ XeMoNat *" />
+        <input className="input" value={elysiumId} onChange={(e) => setElysiumId(e.target.value)} placeholder="معرف اللاعب في ElysiumNet *" />
+        <input className="input" value={xeMoNetId} onChange={(e) => setXeMoNetId(e.target.value)} placeholder="معرف XeMoNet (اختياري)" />
         <input className="input" value={clubName} onChange={(e) => setClubName(e.target.value)} placeholder="النادي / الشخصية المفضلة" />
         <input className="input" type="number" min={60} max={99} value={ovrRating} onChange={(e) => setOvrRating(e.target.value)} placeholder="التقييم (60-99)" />
 
@@ -361,16 +661,22 @@ function AdminAddPlayerModal({
             disabled={saving || uploading || !name.trim() || !elysiumId.trim()}
             onClick={async () => {
               setSaving(true);
+              setErr('');
               try {
                 await onAdd({
+                  profileId: initialProfile?.id ?? null,
                   name: name.trim(),
                   elysiumNetId: elysiumId.trim(),
+                  xeMoNetId: xeMoNetId.trim(),
+                  discordUserId: initialProfile?.discordUserId ?? null,
                   avatarUrl,
                   level,
                   ovrRating: Number(ovrRating) || LEVEL_LABELS[level].ovr,
                   clubName: clubName.trim(),
                   status: autoApprove ? 'APPROVED' : 'PENDING'
                 });
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : 'تعذر إضافة اللاعب.');
               } finally {
                 setSaving(false);
               }
@@ -470,6 +776,524 @@ function EditPlayerModal({
             onClick={() => onSave({ name, elysiumNetId: elysiumId, clubName, level, ovrRating: Number(ovrRating) || 81, avatarUrl })}
           >
             حفظ
+          </button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreatePlayerProfileModal({
+  onClose,
+  onCreate,
+  onOpenExisting
+}: {
+  onClose: () => void;
+  onCreate: (payload: {
+    name: string;
+    avatarUrl?: string | null;
+    elysiumNetId?: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
+  }) => Promise<void>;
+  onOpenExisting: (existing: PlayerProfile) => void;
+}) {
+  const [sourceMode, setSourceMode] = useState<'MANUAL' | 'BOT'>('MANUAL');
+  const [name, setName] = useState('');
+  const [discordUserId, setDiscordUserId] = useState('');
+  const [elysiumNetId, setElysiumNetId] = useState('');
+  const [xeMoNetId, setXeMoNetId] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [members, setMembers] = useState<DiscordGuildMember[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [membersError, setMembersError] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [conflictProfile, setConflictProfile] = useState<PlayerProfile | null>(null);
+
+  async function loadBotMembers() {
+    setLoadingMembers(true);
+    setMembersError('');
+    try {
+      const res = await fetchDiscordGuildMembersApi();
+      setMembers(res.members || []);
+    } catch (e) {
+      setMembersError(e instanceof Error ? e.message : 'تعذر جلب أعضاء Discord من البوت.');
+    } finally {
+      setLoadingMembers(false);
+    }
+  }
+
+  async function handleFileChange(file: File | null) {
+    if (!file) return;
+    setErr('');
+    setUploading(true);
+    try {
+      const url = await uploadImageFileApi(file);
+      setAvatarUrl(url);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'تعذر رفع الصورة.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>إنشاء أو ربط ملف لاعب موحد</h3>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="chip-row">
+          <button
+            type="button"
+            className={`chip ${sourceMode === 'MANUAL' ? 'selected' : ''}`}
+            onClick={() => setSourceMode('MANUAL')}
+          >
+            <Edit3 size={14} />
+            <span>إدخال يدوي</span>
+          </button>
+          <button
+            type="button"
+            className={`chip ${sourceMode === 'BOT' ? 'selected' : ''}`}
+            onClick={() => {
+              setSourceMode('BOT');
+              if (members.length === 0 && !loadingMembers) {
+                loadBotMembers();
+              }
+            }}
+          >
+            <Bot size={14} />
+            <span>اختيار من أعضاء Discord (البوت)</span>
+          </button>
+        </div>
+
+        {sourceMode === 'BOT' && (
+          <div className="arena-subcard stack-col" style={{ gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--cyber-sky)' }}>
+                أعضاء السيرفر عبر البوت
+              </span>
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ padding: '4px 9px', fontSize: '0.74rem' }}
+                onClick={loadBotMembers}
+                disabled={loadingMembers}
+              >
+                {loadingMembers ? 'جاري الجلب...' : 'تحديث القائمة'}
+              </button>
+            </div>
+            {membersError && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--crimson-loss)', fontWeight: 700 }}>{membersError}</div>
+            )}
+            {!loadingMembers && !membersError && members.length === 0 && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>لم يتم العثور على أعضاء.</div>
+            )}
+            <div className="stack-col" style={{ gap: 6, maxHeight: 210, overflowY: 'auto' }}>
+              {members.map((m) => (
+                <div
+                  key={m.discordUserId}
+                  className="arena-card"
+                  style={{ padding: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <PlayerAvatar avatarUrl={m.avatarUrl} name={m.displayName} size={34} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.84rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {m.displayName}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        @{m.username} • {m.discordUserId}
+                      </div>
+                    </div>
+                  </div>
+                  {m.linkedProfileId && m.linkedCp4Id ? (
+                    <span className="score-num" style={{ fontSize: '0.72rem', color: 'var(--championship-gold)' }}>
+                      مربوط ({m.linkedCp4Id})
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ padding: '5px 9px', fontSize: '0.74rem' }}
+                      onClick={() => {
+                        setName(m.displayName || m.username);
+                        setDiscordUserId(m.discordUserId);
+                        if (m.avatarUrl) setAvatarUrl(m.avatarUrl);
+                        setConflictProfile(null);
+                        setErr('');
+                        setSourceMode('MANUAL');
+                      }}
+                    >
+                      اختيار
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <PlayerAvatar avatarUrl={avatarUrl} name={name || 'P'} size={52} />
+          <label className="btn btn-outline" style={{ cursor: 'pointer', flex: 1 }}>
+            <ImagePlus size={17} />
+            <span>{uploading ? 'جاري الرفع...' : avatarUrl ? 'تغيير الصورة' : 'رفع صورة شخصية (اختياري)'}</span>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              style={{ display: 'none' }}
+              disabled={uploading}
+              onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+            />
+          </label>
+          {avatarUrl && (
+            <button type="button" className="icon-btn" onClick={() => setAvatarUrl(null)} title="إزالة الصورة">
+              <X size={16} />
+            </button>
+          )}
+        </div>
+
+        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="اسم اللاعب *" />
+        <input
+          className="input"
+          value={discordUserId}
+          onChange={(e) => {
+            setDiscordUserId(e.target.value);
+            setConflictProfile(null);
+          }}
+          placeholder="Discord User ID (اختياري أو 17-22 رقماً)"
+          style={{ direction: 'ltr', textAlign: 'left' }}
+        />
+        <input className="input" value={elysiumNetId} onChange={(e) => setElysiumNetId(e.target.value)} placeholder="ElysiumNet ID (اختياري)" />
+        <input className="input" value={xeMoNetId} onChange={(e) => setXeMoNetId(e.target.value)} placeholder="XeMoNet ID (اختياري)" />
+
+        <div style={{ fontSize: '0.74rem', color: 'var(--cyber-sky)' }}>
+          يتم إنشاء رقم CP4 ثابت تلقائياً (مثل CP4-000001) ولا يمكن تعديله لاحقاً.
+        </div>
+
+        {conflictProfile && (
+          <div className="arena-subcard stack-col" style={{ gap: 8, borderColor: 'var(--championship-gold)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--championship-gold)', fontWeight: 800, fontSize: '0.84rem' }}>
+              <AlertTriangle size={16} />
+              <span>يوجد ملف لاعب مسجل مسبقاً لهذا Discord User ID ({conflictProfile.cp4Id})</span>
+            </div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-primary)' }}>
+              الاسم: {conflictProfile.name}
+            </div>
+            <button
+              type="button"
+              className="btn btn-gold"
+              onClick={() => onOpenExisting(conflictProfile)}
+              data-testid="open_existing_profile_btn"
+            >
+              <ExternalLink size={15} />
+              <span>فتح الملف الموجود</span>
+            </button>
+          </div>
+        )}
+
+        {err && !conflictProfile && (
+          <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>
+        )}
+
+        <div className="grid-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={saving || uploading || !name.trim()}
+            onClick={async () => {
+              setSaving(true);
+              setErr('');
+              setConflictProfile(null);
+              try {
+                await onCreate({
+                  name: name.trim(),
+                  avatarUrl,
+                  elysiumNetId: elysiumNetId.trim(),
+                  xeMoNetId: xeMoNetId.trim(),
+                  discordUserId: discordUserId.trim() || null
+                });
+              } catch (e) {
+                const apiErr = e as ApiError;
+                if (apiErr.code === 'DUPLICATE_DISCORD_ID' && apiErr.existingProfile) {
+                  setConflictProfile(apiErr.existingProfile);
+                }
+                setErr(apiErr.message || 'تعذر إنشاء ملف اللاعب.');
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? 'جاري الحفظ...' : 'إنشاء الملف الموحد'}
+          </button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfileDetailEditModal({
+  profile,
+  onClose,
+  onSave,
+  onOpenExisting
+}: {
+  profile: PlayerProfile;
+  onClose: () => void;
+  onSave: (payload: {
+    name?: string;
+    avatarUrl?: string | null;
+    elysiumNetId?: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
+  }) => Promise<void>;
+  onOpenExisting: (existing: PlayerProfile) => void;
+}) {
+  const [name, setName] = useState(profile.name);
+  const [elysiumNetId, setElysiumNetId] = useState(profile.elysiumNetId);
+  const [xeMoNetId, setXeMoNetId] = useState(profile.xeMoNetId);
+  const [discordUserId, setDiscordUserId] = useState(profile.discordUserId || '');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(profile.avatarUrl ?? null);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [conflictProfile, setConflictProfile] = useState<PlayerProfile | null>(null);
+
+  async function handleFileChange(file: File | null) {
+    if (!file) return;
+    setErr('');
+    setUploading(true);
+    try {
+      const url = await uploadImageFileApi(file);
+      setAvatarUrl(url);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'تعذر رفع الصورة.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>ملف اللاعب الموحد</h3>
+            <div style={{ fontSize: '0.76rem', color: 'var(--cyber-sky)', marginTop: 2 }}>
+              تاريخ الإنشاء: {new Date(profile.createdAt).toLocaleDateString('ar-EG')} • {profile.tournamentsCount ?? 0} بطولات
+            </div>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">رقم لاعب CP4 الثابت (غير قابل للتعديل)</label>
+          <input className="input score-num" value={profile.cp4Id} readOnly disabled />
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <PlayerAvatar avatarUrl={avatarUrl} name={name || profile.name} size={52} />
+          <label className="btn btn-outline" style={{ cursor: 'pointer', flex: 1 }}>
+            <ImagePlus size={17} />
+            <span>{uploading ? 'جاري الرفع...' : avatarUrl ? 'تغيير الصورة' : 'رفع صورة'}</span>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              style={{ display: 'none' }}
+              disabled={uploading}
+              onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+            />
+          </label>
+          {avatarUrl && (
+            <button type="button" className="icon-btn" onClick={() => setAvatarUrl(null)} title="إزالة الصورة">
+              <X size={16} />
+            </button>
+          )}
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">اسم اللاعب *</label>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="اسم اللاعب" />
+        </div>
+        <div className="field-group">
+          <label className="field-label">ElysiumNet ID</label>
+          <input className="input" value={elysiumNetId} onChange={(e) => setElysiumNetId(e.target.value)} placeholder="ElysiumNet ID" />
+        </div>
+        <div className="field-group">
+          <label className="field-label">XeMoNet ID</label>
+          <input className="input" value={xeMoNetId} onChange={(e) => setXeMoNetId(e.target.value)} placeholder="XeMoNet ID" />
+        </div>
+        <div className="field-group">
+          <label className="field-label">Discord User ID</label>
+          <input
+            className="input"
+            value={discordUserId}
+            onChange={(e) => {
+              setDiscordUserId(e.target.value);
+              setConflictProfile(null);
+            }}
+            placeholder="Discord User ID"
+            style={{ direction: 'ltr', textAlign: 'left' }}
+          />
+        </div>
+
+        {conflictProfile && (
+          <div className="arena-subcard stack-col" style={{ gap: 8, borderColor: 'var(--championship-gold)' }}>
+            <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--championship-gold)' }}>
+              هذا المعرف مرتبط بملف آخر ({conflictProfile.cp4Id}) — {conflictProfile.name}
+            </div>
+            <button type="button" className="btn btn-gold" onClick={() => onOpenExisting(conflictProfile)}>
+              <ExternalLink size={15} />
+              <span>فتح الملف الموجود</span>
+            </button>
+          </div>
+        )}
+
+        {err && !conflictProfile && (
+          <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>
+        )}
+
+        <div className="grid-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={saving || uploading || !name.trim()}
+            onClick={async () => {
+              setSaving(true);
+              setErr('');
+              setConflictProfile(null);
+              try {
+                await onSave({
+                  name: name.trim(),
+                  avatarUrl,
+                  elysiumNetId: elysiumNetId.trim(),
+                  xeMoNetId: xeMoNetId.trim(),
+                  discordUserId: discordUserId.trim() || null
+                });
+              } catch (e) {
+                const apiErr = e as ApiError;
+                if (apiErr.code === 'DUPLICATE_DISCORD_ID' && apiErr.existingProfile) {
+                  setConflictProfile(apiErr.existingProfile);
+                }
+                setErr(apiErr.message || 'تعذر حفظ تعديلات الملف.');
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? 'جاري الحفظ...' : 'حفظ التعديلات'}
+          </button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>
+            إغلاق
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MergeProfilesModal({
+  profiles,
+  onClose,
+  onMerge
+}: {
+  profiles: PlayerProfile[];
+  onClose: () => void;
+  onMerge: (payload: {
+    sourceProfileId: number;
+    targetProfileId: number;
+    confirmIdentity: boolean;
+  }) => Promise<void>;
+}) {
+  const [targetId, setTargetId] = useState<number>(profiles[0]?.id ?? 0);
+  const [sourceId, setSourceId] = useState<number>(profiles[1]?.id ?? 0);
+  const [confirmIdentity, setConfirmIdentity] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <GitMerge size={19} color="var(--championship-gold)" />
+            <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>دمج ملفي لاعب يدوياً</h3>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          لا يتم دمج أي ملفات تلقائياً بتشابه الأسماء. عند التأكيد، تُنقل جميع مشاركات البطولات والمواجهات من الملف الثانوي إلى الملف الأساسي مع الاحتفاظ برقم CP4 للملف الأساسي.
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">الملف الأساسي (يحتفظ برقمه الثابت CP4)</label>
+          <select className="select" value={targetId} onChange={(e) => setTargetId(Number(e.target.value))}>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.cp4Id} — {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">الملف الثانوي (سيُدمج ويُزال)</label>
+          <select className="select" value={sourceId} onChange={(e) => setSourceId(Number(e.target.value))}>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.cp4Id} — {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <label className="arena-subcard" style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 700 }}>
+          <input
+            type="checkbox"
+            checked={confirmIdentity}
+            onChange={(e) => setConfirmIdentity(e.target.checked)}
+          />
+          <span>أؤكد أن الملفين يعودان لنفس اللاعب بعد التحقق يدوياً</span>
+        </label>
+
+        {err && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>}
+
+        <div className="grid-2">
+          <button
+            type="button"
+            className="btn btn-gold"
+            disabled={saving || !confirmIdentity || !targetId || !sourceId || targetId === sourceId}
+            onClick={async () => {
+              setSaving(true);
+              setErr('');
+              try {
+                await onMerge({ sourceProfileId: sourceId, targetProfileId: targetId, confirmIdentity: true });
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : 'تعذر دمج الملفين.');
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? 'جاري الدمج...' : 'تأكيد الدمج اليدوي'}
           </button>
           <button type="button" className="btn btn-outline" onClick={onClose}>
             إلغاء

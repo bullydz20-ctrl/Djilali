@@ -4,7 +4,11 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -15,13 +19,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -50,30 +53,37 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import com.example.data.local.MatchEntity
 import com.example.data.local.PlayerEntity
 import com.example.data.model.MatchStage
@@ -514,14 +524,14 @@ private fun SymmetricalBracketViewport(
     canEditScores: Boolean,
     onMatchClick: (MatchEntity) -> Unit
 ) {
-    val cardWidth = 220.dp
-    val finalCardWidth = 248.dp
-    val cardHeight = 122.dp
-    val finalCardHeight = 136.dp
-    val baseSlotHeight = 142.dp
-    val connectorWidth = 38.dp
-    val headerHeight = 36.dp
-    val headerGap = 10.dp
+    val cardWidth = 260.dp
+    val finalCardWidth = 284.dp
+    val cardHeight = 136.dp
+    val finalCardHeight = 150.dp
+    val baseSlotHeight = 158.dp
+    val connectorWidth = 46.dp
+    val headerHeight = 38.dp
+    val headerGap = 12.dp
     val headerTopOffset = headerHeight + headerGap
 
     val stageCount = model.preFinalStages.size
@@ -539,14 +549,14 @@ private fun SymmetricalBracketViewport(
 
     val finalCenterYDp = wingsHeightDp / 2f
     val finalBottomDp = finalCenterYDp + finalCardHeight / 2f
-    val championStemHeight = 20.dp
-    val championCardHeight = 160.dp
-    val thirdPlaceExtraDp = if (model.thirdPlaceMatches.isNotEmpty()) 190.dp else 0.dp
+    val championStemHeight = 22.dp
+    val championCardHeight = 166.dp
+    val thirdPlaceExtraDp = if (model.thirdPlaceMatches.isNotEmpty() && wingFilter == BracketWingFilter.ALL) 206.dp else 0.dp
     val centerTotalHeightDp = maxOf(
         wingsHeightDp,
-        finalBottomDp + championStemHeight + championCardHeight + 12.dp
+        finalBottomDp + championStemHeight + championCardHeight + 14.dp
     )
-    val naturalTreeHeightDp = headerTopOffset + centerTotalHeightDp + thirdPlaceExtraDp + 24.dp
+    val naturalTreeHeightDp = headerTopOffset + centerTotalHeightDp + thirdPlaceExtraDp + 32.dp
 
     val density = LocalDensity.current
     val naturalWidthPx = with(density) { naturalTreeWidthDp.toPx() }
@@ -628,95 +638,139 @@ private fun SymmetricalBracketViewport(
                     else "bracket_wing_focused_${wingFilter.name}"
                 )
         ) {
-            val viewportWPx = with(density) { maxWidth.toPx() }
-            val viewportHPx = with(density) { maxHeight.toPx() }
+            val viewportWidthDp = maxWidth
+            val viewportHeightDp = maxHeight
+            val viewportWPx = with(density) { viewportWidthDp.toPx() }
 
             val exactFitScale = remember(viewportWPx, naturalWidthPx) {
                 if (naturalWidthPx <= 0f) 1f
                 else ((viewportWPx - 16f) / naturalWidthPx).coerceIn(0.24f, 1.0f)
             }
-            val initialScale = remember(exactFitScale, maxWidth, stageCount, wingFilter) {
-                if (maxWidth >= 600.dp || exactFitScale >= 0.44f || wingFilter != BracketWingFilter.ALL) {
-                    exactFitScale
-                } else {
-                    // On narrow phones with deep 16-player trees, start slightly zoomed in around center Final + Semis
-                    0.56f
+            val minZoomScale = minOf(0.24f, exactFitScale)
+
+            // Default readable scale = 100% (1.0f), with horizontal & vertical scroll rather than shrinking on phones
+            var scale by remember(wingFilter, model.preFinalStages.size) {
+                mutableFloatStateOf(1f)
+            }
+            val currentScale by rememberUpdatedState(scale)
+            val hScroll = rememberScrollState()
+            val vScroll = rememberScrollState()
+            val coroutineScope = rememberCoroutineScope()
+
+            val viewportHPx = with(density) { viewportHeightDp.toPx() }
+            val finalFocusYPx = with(density) { (headerTopOffset + finalCenterYDp).toPx() }
+
+            LaunchedEffect(wingFilter, model.preFinalStages.size, viewportWPx, naturalWidthPx) {
+                val initialScale = 1f
+                val targetX = when (wingFilter) {
+                    BracketWingFilter.RIGHT_WING -> (naturalWidthPx * initialScale - viewportWPx).roundToInt().coerceAtLeast(0)
+                    BracketWingFilter.LEFT_WING -> 0
+                    BracketWingFilter.ALL -> ((naturalWidthPx * initialScale - viewportWPx) / 2f).roundToInt().coerceAtLeast(0)
                 }
+                val targetY = (finalFocusYPx * initialScale - viewportHPx * 0.42f).roundToInt().coerceAtLeast(0)
+                hScroll.scrollTo(targetX)
+                vScroll.scrollTo(targetY)
             }
 
-            var scale by remember(wingFilter, model.preFinalStages.size, maxWidth) {
-                mutableFloatStateOf(initialScale)
-            }
-            var offsetX by remember(wingFilter, model.preFinalStages.size) { mutableFloatStateOf(0f) }
-            var offsetY by remember(wingFilter, model.preFinalStages.size) { mutableFloatStateOf(0f) }
-
-            fun clampOffsets(targetScale: Float, x: Float, y: Float): Pair<Float, Float> {
-                val scaledW = naturalWidthPx * targetScale
-                val scaledH = naturalHeightPx * targetScale
-                val maxPanX = ((scaledW - viewportWPx) / 2f + 48f).coerceAtLeast(0f)
-                val minPanY = (-(scaledH - viewportHPx + 48f)).coerceAtMost(0f)
-                return Pair(
-                    x.coerceIn(-maxPanX, maxPanX),
-                    y.coerceIn(minPanY, 24f)
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(naturalWidthPx, naturalHeightPx, viewportWPx, viewportHPx) {
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            val nextScale = (scale * zoom).coerceIn(0.24f, 1.85f)
-                            val (clampedX, clampedY) = clampOffsets(
-                                nextScale,
-                                offsetX + pan.x,
-                                offsetY + pan.y
-                            )
-                            scale = nextScale
-                            offsetX = clampedX
-                            offsetY = clampedY
+            Box(modifier = Modifier.fillMaxSize()) {
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(minZoomScale, hScroll, vScroll) {
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        if (event.changes.count { it.pressed } >= 2) {
+                                            val zoom = event.calculateZoom()
+                                            val centroid = event.calculateCentroid(useCurrent = true)
+                                            if (zoom != 1f && centroid.isSpecified) {
+                                                val prevScale = currentScale
+                                                val nextScale = (prevScale * zoom).coerceIn(minZoomScale, 1.85f)
+                                                if (nextScale != prevScale) {
+                                                    val factor = nextScale / prevScale
+                                                    val targetX = ((hScroll.value + centroid.x) * factor - centroid.x)
+                                                        .roundToInt()
+                                                        .coerceAtLeast(0)
+                                                    val targetY = ((vScroll.value + centroid.y) * factor - centroid.y)
+                                                        .roundToInt()
+                                                        .coerceAtLeast(0)
+                                                    scale = nextScale
+                                                    coroutineScope.launch {
+                                                        hScroll.scrollTo(targetX)
+                                                        vScroll.scrollTo(targetY)
+                                                    }
+                                                }
+                                                event.changes.forEach { it.consume() }
+                                            }
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                }
+                            }
+                            .horizontalScroll(hScroll)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(min = viewportWidthDp)
+                                .height(viewportHeightDp)
+                                .verticalScroll(vScroll)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .widthIn(min = viewportWidthDp)
+                                    .heightIn(min = viewportHeightDp)
+                                    .padding(bottom = 72.dp),
+                                contentAlignment = Alignment.TopCenter
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .layout { measurable, _ ->
+                                            val naturalW = naturalWidthPx.roundToInt().coerceAtLeast(1)
+                                            val naturalH = naturalHeightPx.roundToInt().coerceAtLeast(1)
+                                            val placeable = measurable.measure(Constraints.fixed(naturalW, naturalH))
+                                            val scaledW = (placeable.width * scale).roundToInt().coerceAtLeast(1)
+                                            val scaledH = (placeable.height * scale).roundToInt().coerceAtLeast(1)
+                                            layout(scaledW, scaledH) {
+                                                placeable.place(0, 0)
+                                            }
+                                        }
+                                        .graphicsLayer {
+                                            scaleX = scale
+                                            scaleY = scale
+                                            transformOrigin = TransformOrigin(0f, 0f)
+                                        }
+                                ) {
+                                    SymmetricalBracketTreeContent(
+                                        model = model,
+                                        wingFilter = wingFilter,
+                                        playersById = playersById,
+                                        championPlayer = championPlayer,
+                                        bestOf = bestOf,
+                                        canEditScores = canEditScores,
+                                        cardWidth = cardWidth,
+                                        finalCardWidth = finalCardWidth,
+                                        cardHeight = cardHeight,
+                                        finalCardHeight = finalCardHeight,
+                                        baseSlotHeight = baseSlotHeight,
+                                        connectorWidth = connectorWidth,
+                                        headerHeight = headerHeight,
+                                        headerGap = headerGap,
+                                        wingsHeight = wingsHeightDp,
+                                        centerTotalHeight = centerTotalHeightDp,
+                                        championStemHeight = championStemHeight,
+                                        championCardHeight = championCardHeight,
+                                        onMatchClick = onMatchClick
+                                    )
+                                }
+                            }
                         }
-                    },
-                contentAlignment = Alignment.TopCenter
-            ) {
-                Box(
-                    modifier = Modifier
-                        .wrapContentSize(align = Alignment.TopCenter, unbounded = true)
-                        .requiredWidth(naturalTreeWidthDp)
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                            translationX = offsetX
-                            translationY = offsetY
-                            transformOrigin = TransformOrigin(0.5f, 0f)
-                        }
-                ) {
-                    SymmetricalBracketTreeContent(
-                        model = model,
-                        wingFilter = wingFilter,
-                        playersById = playersById,
-                        championPlayer = championPlayer,
-                        bestOf = bestOf,
-                        canEditScores = canEditScores,
-                        cardWidth = cardWidth,
-                        finalCardWidth = finalCardWidth,
-                        cardHeight = cardHeight,
-                        finalCardHeight = finalCardHeight,
-                        baseSlotHeight = baseSlotHeight,
-                        connectorWidth = connectorWidth,
-                        headerHeight = headerHeight,
-                        headerGap = headerGap,
-                        wingsHeight = wingsHeightDp,
-                        centerTotalHeight = centerTotalHeightDp,
-                        championStemHeight = championStemHeight,
-                        championCardHeight = championCardHeight,
-                        onMatchClick = onMatchClick
-                    )
+                    }
                 }
 
                 // Floating Zoom & Quick Center Toolbar
                 Surface(
-                    color = ObsidianVoid.copy(alpha = 0.88f),
+                    color = ObsidianVoid.copy(alpha = 0.9f),
                     shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(1.dp, CardBorder),
                     modifier = Modifier
@@ -730,11 +784,7 @@ private fun SymmetricalBracketViewport(
                     ) {
                         IconButton(
                             onClick = {
-                                val next = (scale - 0.16f).coerceIn(0.24f, 1.85f)
-                                val (cx, cy) = clampOffsets(next, offsetX, offsetY)
-                                scale = next
-                                offsetX = cx
-                                offsetY = cy
+                                scale = (scale - 0.15f).coerceIn(minZoomScale, 1.85f)
                             },
                             modifier = Modifier
                                 .minimumInteractiveComponentSize()
@@ -748,16 +798,14 @@ private fun SymmetricalBracketViewport(
                             style = MaterialTheme.typography.labelMedium,
                             color = ChampionshipGold,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp)
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp)
+                                .testTag("bracket_zoom_percent")
                         )
 
                         IconButton(
                             onClick = {
-                                val next = (scale + 0.16f).coerceIn(0.24f, 1.85f)
-                                val (cx, cy) = clampOffsets(next, offsetX, offsetY)
-                                scale = next
-                                offsetX = cx
-                                offsetY = cy
+                                scale = (scale + 0.15f).coerceIn(minZoomScale, 1.85f)
                             },
                             modifier = Modifier
                                 .minimumInteractiveComponentSize()
@@ -769,8 +817,10 @@ private fun SymmetricalBracketViewport(
                         TextButton(
                             onClick = {
                                 scale = exactFitScale
-                                offsetX = 0f
-                                offsetY = 0f
+                                coroutineScope.launch {
+                                    hScroll.scrollTo(0)
+                                    vScroll.scrollTo(0)
+                                }
                             },
                             modifier = Modifier
                                 .minimumInteractiveComponentSize()
@@ -788,9 +838,17 @@ private fun SymmetricalBracketViewport(
 
                         TextButton(
                             onClick = {
+                                val targetX = when (wingFilter) {
+                                    BracketWingFilter.RIGHT_WING -> (naturalWidthPx - viewportWPx).roundToInt().coerceAtLeast(0)
+                                    BracketWingFilter.LEFT_WING -> 0
+                                    BracketWingFilter.ALL -> ((naturalWidthPx - viewportWPx) / 2f).roundToInt().coerceAtLeast(0)
+                                }
+                                val targetY = (finalFocusYPx - viewportHPx * 0.42f).roundToInt().coerceAtLeast(0)
                                 scale = 1f
-                                offsetX = 0f
-                                offsetY = 0f
+                                coroutineScope.launch {
+                                    hScroll.scrollTo(targetX)
+                                    vScroll.scrollTo(targetY)
+                                }
                             },
                             modifier = Modifier
                                 .minimumInteractiveComponentSize()
@@ -803,7 +861,7 @@ private fun SymmetricalBracketViewport(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("النهائي", style = MaterialTheme.typography.labelSmall, color = ChampionshipGold)
+                            Text("100%", style = MaterialTheme.typography.labelSmall, color = ChampionshipGold)
                         }
                     }
                 }

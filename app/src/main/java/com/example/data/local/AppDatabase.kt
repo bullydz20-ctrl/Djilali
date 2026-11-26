@@ -12,19 +12,21 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         TournamentEntity::class,
         PlayerEntity::class,
+        PlayerProfileEntity::class,
         TournamentGroupEntity::class,
         MatchEntity::class,
         UserEntity::class,
         MatchReminderEntity::class,
         AppMetaEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tournamentDao(): TournamentDao
     abstract fun playerDao(): PlayerDao
+    abstract fun playerProfileDao(): PlayerProfileDao
     abstract fun groupDao(): GroupDao
     abstract fun matchDao(): MatchDao
     abstract fun userDao(): UserDao
@@ -55,6 +57,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `player_profiles` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `cp4Id` TEXT NOT NULL, `name` TEXT NOT NULL, `avatarUri` TEXT, `elysiumNetId` TEXT NOT NULL, `xeMoNetId` TEXT NOT NULL, `discordUserId` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `tournamentsCount` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_player_profiles_cp4Id` ON `player_profiles` (`cp4Id`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_player_profiles_discordUserId` ON `player_profiles` (`discordUserId`)")
+                db.execSQL("ALTER TABLE `players` ADD COLUMN `profileId` INTEGER")
+                db.execSQL("ALTER TABLE `players` ADD COLUMN `cp4Id` TEXT")
+                db.execSQL("ALTER TABLE `players` ADD COLUMN `xeMoNetId` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `players` ADD COLUMN `discordUserId` TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_players_profileId` ON `players` (`profileId`)")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -62,7 +79,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "fifa22_community_tournament.db"
                 )
-                    .addMigrations(MIGRATION_4_5, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

@@ -6,6 +6,7 @@ import {
   bulkImportPlayersApi,
   cancelReminderApi,
   changeOwnPinApi,
+  createPlayerProfileApi,
   createRaceApi,
   createSubAdminApi,
   createTournamentApi,
@@ -23,6 +24,7 @@ import {
   getLastAdminUsername,
   loginAdminApi,
   logoutAdminApi,
+  mergePlayerProfilesApi,
   registerPlayerApi,
   resolveMatchDisputeApi,
   restoreBackupApi,
@@ -39,6 +41,7 @@ import {
   updateMatchScoreApi,
   updateOwnProfileApi,
   updatePlayerDetailsApi,
+  updatePlayerProfileApi,
   updatePlayerStatusApi,
   updateSubAdminApi,
   updateTournamentApi,
@@ -176,6 +179,34 @@ export default function App() {
     };
     return () => es.close();
   }, [refreshState]);
+
+  // Listen for Discord OAuth callback popup completion
+  useEffect(() => {
+    const onMessage = (ev: MessageEvent) => {
+      if (ev.origin !== window.location.origin) return;
+      const data = ev.data as {
+        type?: string;
+        ok?: boolean;
+        cp4Id?: string;
+        name?: string;
+        created?: boolean;
+        duplicate?: boolean;
+        errorAr?: string;
+        error?: string;
+      } | null;
+      if (!data || data.type !== 'cp4_discord_oauth_result') return;
+      if (data.ok) {
+        const prefix = data.created ? 'تم إنشاء ملف لاعب عبر Discord' : 'تم ربط ملف اللاعب الموجود';
+        showToast(`${prefix}${data.cp4Id ? ` (${data.cp4Id})` : ''}${data.name ? ` — ${data.name}` : ''}`);
+        refreshState();
+      } else {
+        const errText = data.errorAr || data.error;
+        if (errText) showToast(errText);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [refreshState, showToast]);
 
   // PWA installability & standalone detection
   useEffect(() => {
@@ -519,6 +550,25 @@ export default function App() {
                   onDeleteRace={async (raceId) => {
                     await runAction(() => deleteRaceApi(raceId));
                   }}
+                  onCreatePlayerProfile={async (payload) => {
+                    const res = await createPlayerProfileApi(payload);
+                    if (res.messageAr) showToast(res.messageAr);
+                    await refreshState();
+                    return res.profile;
+                  }}
+                  onUpdatePlayerProfile={async (id, payload) => {
+                    const res = await updatePlayerProfileApi(id, payload);
+                    if (res.messageAr) showToast(res.messageAr);
+                    await refreshState();
+                    return res.profile;
+                  }}
+                  onMergePlayerProfiles={async (payload) => {
+                    const res = await mergePlayerProfilesApi(payload);
+                    if (res.messageAr) showToast(res.messageAr);
+                    await refreshState();
+                    return res.profile;
+                  }}
+                  onNotify={showToast}
                 />
               )}
             </div>

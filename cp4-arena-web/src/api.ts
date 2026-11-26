@@ -1,4 +1,4 @@
-import type { AdminAccount, ArenaState, LockoutState, PlayerLevel, PlayerStatus } from './types';
+import type { AdminAccount, ArenaState, DiscordGuildMember, LockoutState, PlayerLevel, PlayerProfile, PlayerStatus } from './types';
 
 const STORAGE_TOKEN_KEY = 'cp4_admin_token';
 const STORAGE_KEEP_KEY = 'cp4_keep_signed_in';
@@ -96,15 +96,21 @@ async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T>
     setAuthToken(null);
   }
   if (!res.ok) {
-    const err = new Error(data.error || 'حدث خطأ أثناء الاتصال بالخادم.') as Error & {
-      status?: number;
-      lockoutState?: LockoutState;
-    };
+    const err = new Error(data.error || 'حدث خطأ أثناء الاتصال بالخادم.') as ApiError;
     err.status = res.status;
+    err.code = data.code;
+    err.existingProfile = data.existingProfile;
     err.lockoutState = data.lockoutState;
     throw err;
   }
   return data as T;
+}
+
+export interface ApiError extends Error {
+  status?: number;
+  code?: string;
+  existingProfile?: PlayerProfile;
+  lockoutState?: LockoutState;
 }
 
 export async function fetchArenaState(
@@ -268,8 +274,11 @@ export async function deleteTournamentApi(id: number) {
 export async function adminAddPlayerApi(
   tournamentId: number,
   payload: {
+    profileId?: number | null;
     name: string;
     elysiumNetId: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
     avatarUrl: string | null;
     level: PlayerLevel;
     ovrRating?: number;
@@ -281,6 +290,61 @@ export async function adminAddPlayerApi(
     method: 'POST',
     body: JSON.stringify(payload)
   });
+}
+
+export async function fetchDiscordOAuthStartUrlApi() {
+  return apiRequest<{ ok: boolean; url: string }>('/api/discord/oauth/start?format=json');
+}
+
+export async function fetchDiscordGuildMembersApi() {
+  return apiRequest<{ ok: boolean; members: DiscordGuildMember[]; count: number }>('/api/discord/guild-members');
+}
+
+export async function fetchPlayerProfilesApi() {
+  return apiRequest<{ ok: boolean; profiles: PlayerProfile[] }>('/api/player-profiles');
+}
+
+export async function createPlayerProfileApi(payload: {
+  name: string;
+  avatarUrl?: string | null;
+  elysiumNetId?: string;
+  xeMoNetId?: string;
+  discordUserId?: string | null;
+}) {
+  return apiRequest<{ ok: boolean; profile: PlayerProfile; messageAr: string }>('/api/player-profiles', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updatePlayerProfileApi(
+  id: number,
+  payload: {
+    name?: string;
+    avatarUrl?: string | null;
+    elysiumNetId?: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
+  }
+) {
+  return apiRequest<{ ok: boolean; profile: PlayerProfile; messageAr: string }>(`/api/player-profiles/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function mergePlayerProfilesApi(payload: {
+  sourceProfileId: number;
+  targetProfileId: number;
+  confirmIdentity: boolean;
+}) {
+  return apiRequest<{ ok: boolean; profile: PlayerProfile; mergedFromCp4Id: string; messageAr: string }>(
+    '/api/player-profiles/merge',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
 }
 
 export async function updatePlayerStatusApi(id: number, status: PlayerStatus) {

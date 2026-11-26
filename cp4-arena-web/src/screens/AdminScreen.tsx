@@ -19,7 +19,7 @@ import {
 import { getHeadAutoBackupSummary } from '../api';
 import { EmptyStatePanel } from '../components/PlayerAvatar';
 import { adminHasPermission, evaluatePinStrengthClient } from '../types';
-import type { ArenaState, Match, PlayerLevel, PlayerStatus, RaceEntry, RaceStage } from '../types';
+import type { ArenaState, Match, PlayerLevel, PlayerProfile, PlayerStatus, RaceEntry, RaceStage } from '../types';
 import { isRacingFormat } from '../components/RacingSection';
 import { AdminAuthGate } from './AdminAuthGate';
 import {
@@ -65,7 +65,11 @@ export function AdminScreen({
   onCreateRace,
   onEditRace,
   onGenerateFinalRace,
-  onDeleteRace
+  onDeleteRace,
+  onCreatePlayerProfile,
+  onUpdatePlayerProfile,
+  onMergePlayerProfiles,
+  onNotify
 }: {
   state: ArenaState;
   onSetupHead: (p: { username: string; displayName: string; pin: string; keepSignedIn: boolean }) => Promise<void>;
@@ -75,8 +79,11 @@ export function AdminScreen({
   onCreateFreshTournament: (payload: Record<string, unknown>) => Promise<void>;
   onDeleteTournament: (id: number) => Promise<void>;
   onAdminAddPlayer: (payload: {
+    profileId?: number | null;
     name: string;
     elysiumNetId: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
     avatarUrl: string | null;
     level: PlayerLevel;
     ovrRating: number;
@@ -128,6 +135,29 @@ export function AdminScreen({
   onEditRace?: (race: RaceEntry) => void;
   onGenerateFinalRace?: (payload?: { title?: string; trackName?: string; qualifiersCount?: number }) => Promise<void>;
   onDeleteRace?: (raceId: number) => Promise<void>;
+  onCreatePlayerProfile: (payload: {
+    name: string;
+    avatarUrl?: string | null;
+    elysiumNetId?: string;
+    xeMoNetId?: string;
+    discordUserId?: string | null;
+  }) => Promise<PlayerProfile>;
+  onUpdatePlayerProfile: (
+    id: number,
+    payload: {
+      name?: string;
+      avatarUrl?: string | null;
+      elysiumNetId?: string;
+      xeMoNetId?: string;
+      discordUserId?: string | null;
+    }
+  ) => Promise<PlayerProfile>;
+  onMergePlayerProfiles: (payload: {
+    sourceProfileId: number;
+    targetProfileId: number;
+    confirmIdentity: boolean;
+  }) => Promise<PlayerProfile>;
+  onNotify: (msg: string) => void;
 }) {
   const admin = state.currentAdmin;
   const [showOwnAccountModal, setShowOwnAccountModal] = useState(false);
@@ -399,6 +429,10 @@ export function AdminScreen({
                 onStatusChange={onUpdatePlayerStatus}
                 onUpdateDetails={onUpdatePlayerDetails}
                 onDeletePlayer={onDeletePlayer}
+                onCreatePlayerProfile={onCreatePlayerProfile}
+                onUpdatePlayerProfile={onUpdatePlayerProfile}
+                onMergePlayerProfiles={onMergePlayerProfiles}
+                onNotify={onNotify}
               />
             )}
             {selected === 'DRAW' &&

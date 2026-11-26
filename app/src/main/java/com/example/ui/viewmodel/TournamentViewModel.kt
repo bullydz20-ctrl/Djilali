@@ -6,8 +6,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.api.ApiService
 import com.example.api.AuditLogEntry
+import com.example.api.DiscordGuildMemberDto
+import com.example.api.DiscordStatusDto
 import com.example.api.HallOfFameEntry
 import com.example.api.PersistenceInfo
+import com.example.api.PlayerProfileDto
 import com.example.api.RaceEntry
 import com.example.api.RaceResultDraft
 import com.example.api.RacingStandingRow
@@ -31,6 +34,7 @@ import com.example.domain.GroupStandingRow
 import com.example.domain.PlayerStats
 import com.example.domain.TournamentOverviewStats
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -78,7 +82,12 @@ data class TournamentUiState(
     val isRealtimeConnected: Boolean = false,
     val isServerReachable: Boolean = true,
     val connectionError: String? = null,
-    val persistence: PersistenceInfo? = null
+    val persistence: PersistenceInfo? = null,
+    val playerProfiles: List<PlayerProfileDto> = emptyList(),
+    val discordStatus: DiscordStatusDto = DiscordStatusDto(),
+    val discordGuildMembers: List<DiscordGuildMemberDto> = emptyList(),
+    val guildMembersLoading: Boolean = false,
+    val guildMembersError: String? = null
 )
 
 class TournamentViewModel(application: Application) : AndroidViewModel(application) {
@@ -127,11 +136,30 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
         SyncMeta(baseUrl, syncing, sseConnected, reachable, connErr)
     }
 
+    private val _discordGuildMembers = MutableStateFlow<List<DiscordGuildMemberDto>>(emptyList())
+    private val _guildMembersLoading = MutableStateFlow(false)
+    private val _guildMembersError = MutableStateFlow<String?>(null)
+
+    private data class DiscordMembersUiState(
+        val members: List<DiscordGuildMemberDto>,
+        val loading: Boolean,
+        val error: String?
+    )
+
+    private val discordMembersFlow = combine(
+        _discordGuildMembers,
+        _guildMembersLoading,
+        _guildMembersError
+    ) { members, loading, error ->
+        DiscordMembersUiState(members, loading, error)
+    }
+
     val uiState: StateFlow<TournamentUiState> = combine(
         repository.remoteState,
         sessionPrefs.sessionState,
-        syncMetaFlow
-    ) { remote: RemoteArenaState?, session: AdminSessionState, meta: SyncMeta ->
+        syncMetaFlow,
+        discordMembersFlow
+    ) { remote: RemoteArenaState?, session: AdminSessionState, meta: SyncMeta, discordMembers: DiscordMembersUiState ->
         if (remote == null) {
             TournamentUiState(
                 isLoaded = !meta.isSyncing && meta.connectionError != null,
@@ -141,7 +169,10 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
                 isSyncing = meta.isSyncing,
                 isRealtimeConnected = meta.isRealtimeConnected,
                 isServerReachable = meta.isServerReachable,
-                connectionError = meta.connectionError
+                connectionError = meta.connectionError,
+                discordGuildMembers = discordMembers.members,
+                guildMembersLoading = discordMembers.loading,
+                guildMembersError = discordMembers.error
             )
         } else {
             val adminList = if (remote.currentAdmin?.role == AdminRole.HEAD_ADMIN && remote.adminAccounts.isNotEmpty()) {
@@ -188,7 +219,12 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
                 isRealtimeConnected = meta.isRealtimeConnected,
                 isServerReachable = meta.isServerReachable,
                 connectionError = meta.connectionError,
-                persistence = remote.persistence
+                persistence = remote.persistence,
+                playerProfiles = remote.playerProfiles,
+                discordStatus = remote.discordStatus,
+                discordGuildMembers = discordMembers.members,
+                guildMembersLoading = discordMembers.loading,
+                guildMembersError = discordMembers.error
             )
         }
     }.stateIn(
@@ -348,6 +384,9 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
         ovrRating: Int,
         clubName: String,
         autoApprove: Boolean,
+        profileId: Long? = null,
+        xeMoNetId: String = "",
+        discordUserId: String? = null,
         onSuccess: () -> Unit = {}
     ) {
         val tId = uiState.value.tournament?.id ?: return
@@ -360,10 +399,119 @@ class TournamentViewModel(application: Application) : AndroidViewModel(applicati
                 level = level,
                 ovrRating = ovrRating,
                 clubName = clubName,
-                autoApprove = autoApprove
+                autoApprove = autoApprove,
+                profileId = profileId,
+                xeMoNetId = xeMoNetId,
+                discordUserId = discordUserId
             )
             handleResult(res)
             if (res is RepoResult.Success) onSuccess()
+        }
+    }
+
+    fun startDiscordOAuth(onUrlReady: (String) -> Unit) {
+        viewModelScope.launch {
+            when (val res = repository.fetchDiscordOAuthStartUrl()) {
+                is RepoResult.Success -> onUrlReady(res.data)
+                is RepoResult.Error -> _messages.tryEmit(res.messageAr)
+            }
+        }
+    }
+
+    fun loadDiscordGuildMembers() {
+        viewModelScope.launch {
+            _guildMembersLoading.value = true
+            _guildMembersError.value = null
+            when (val res = repository.fetchDiscordGuildMembers()) {
+                is RepoResult.Success -> {
+                    _discordGuildMembers.value = res.data
+                    _guildMembersError.value = null
+                }
+                is RepoResult.Error -> {
+                    _guildMembersError.value = res.messageAr
+                }
+            }
+            _guildMembersLoading.value = false
+        }
+    }
+
+    fun createPlayerProfile(
+        name: String,
+        avatarUri: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?,
+        onSuccess: (PlayerProfileDto) -> Unit = {},
+        onDuplicateDiscordId: (PlayerProfileDto) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            when (val res = repository.createPlayerProfile(name, avatarUri, elysiumNetId, xeMoNetId, discordUserId)) {
+                is RepoResult.Success -> {
+                    if (res.messageAr.isNotEmpty()) _messages.tryEmit(res.messageAr)
+                    onSuccess(res.data)
+                }
+                is RepoResult.Error -> {
+                    val existing = res.existingProfile
+                    if (res.code == "DUPLICATE_DISCORD_ID" && existing != null) {
+                        onDuplicateDiscordId(existing)
+                    } else {
+                        onError(res.messageAr)
+                        _messages.tryEmit(res.messageAr)
+                    }
+                }
+            }
+        }
+    }
+
+    fun updatePlayerProfile(
+        id: Long,
+        name: String,
+        avatarUri: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?,
+        onSuccess: (PlayerProfileDto) -> Unit = {},
+        onDuplicateDiscordId: (PlayerProfileDto) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            when (val res = repository.updatePlayerProfile(id, name, avatarUri, elysiumNetId, xeMoNetId, discordUserId)) {
+                is RepoResult.Success -> {
+                    if (res.messageAr.isNotEmpty()) _messages.tryEmit(res.messageAr)
+                    onSuccess(res.data)
+                }
+                is RepoResult.Error -> {
+                    val existing = res.existingProfile
+                    if (res.code == "DUPLICATE_DISCORD_ID" && existing != null) {
+                        onDuplicateDiscordId(existing)
+                    } else {
+                        onError(res.messageAr)
+                        _messages.tryEmit(res.messageAr)
+                    }
+                }
+            }
+        }
+    }
+
+    fun mergePlayerProfiles(
+        sourceProfileId: Long,
+        targetProfileId: Long,
+        confirmIdentity: Boolean,
+        onSuccess: (PlayerProfileDto) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            when (val res = repository.mergePlayerProfiles(sourceProfileId, targetProfileId, confirmIdentity)) {
+                is RepoResult.Success -> {
+                    if (res.messageAr.isNotEmpty()) _messages.tryEmit(res.messageAr)
+                    onSuccess(res.data)
+                }
+                is RepoResult.Error -> {
+                    onError(res.messageAr)
+                    _messages.tryEmit(res.messageAr)
+                }
+            }
         }
     }
 

@@ -415,17 +415,17 @@ function SymmetricalBracketViewport({
   canEdit: boolean;
   onTapMatch: (m: Match) => void;
 }) {
-  const CARD_WIDTH = 228;
-  const FINAL_CARD_WIDTH = 256;
-  const CARD_HEIGHT = 122;
-  const FINAL_CARD_HEIGHT = 136;
-  const BASE_SLOT_HEIGHT = 142;
-  const CONNECTOR_WIDTH = 40;
-  const HEADER_HEIGHT = 36;
-  const HEADER_GAP = 10;
+  const CARD_WIDTH = 268;
+  const FINAL_CARD_WIDTH = 292;
+  const CARD_HEIGHT = 136;
+  const FINAL_CARD_HEIGHT = 150;
+  const BASE_SLOT_HEIGHT = 158;
+  const CONNECTOR_WIDTH = 48;
+  const HEADER_HEIGHT = 38;
+  const HEADER_GAP = 12;
   const HEADER_OFFSET = HEADER_HEIGHT + HEADER_GAP;
   const CHAMPION_STEM = 22;
-  const CHAMPION_CARD_HEIGHT = 164;
+  const CHAMPION_CARD_HEIGHT = 166;
 
   const stageCount = model.preFinalStages.length;
   const sideWidth = stageCount === 0 ? 0 : stageCount * CARD_WIDTH + stageCount * CONNECTOR_WIDTH;
@@ -439,20 +439,21 @@ function SymmetricalBracketViewport({
   const wingsHeight = stageCount === 0 ? FINAL_CARD_HEIGHT + 16 : BASE_SLOT_HEIGHT * model.sideBaseSlots;
   const finalTop = wingsHeight / 2 - FINAL_CARD_HEIGHT / 2;
   const finalBottom = finalTop + FINAL_CARD_HEIGHT;
-  const centerHeight = Math.max(wingsHeight, finalBottom + CHAMPION_STEM + CHAMPION_CARD_HEIGHT + 10);
-  const thirdPlaceExtra = model.thirdPlaceMatches.length > 0 && wingFilter === 'ALL' ? 190 : 0;
-  const naturalHeight = HEADER_OFFSET + centerHeight + thirdPlaceExtra + 32;
+  const centerHeight = Math.max(wingsHeight, finalBottom + CHAMPION_STEM + CHAMPION_CARD_HEIGHT + 14);
+  const thirdPlaceExtra = model.thirdPlaceMatches.length > 0 && wingFilter === 'ALL' ? 206 : 0;
+  const naturalHeight = HEADER_OFFSET + centerHeight + thirdPlaceExtra + 44;
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 960, height: 560 });
   const [scale, setScale] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const hasAutoFittedKeyRef = useRef<string>('');
+  const scaleRef = useRef(1);
+  scaleRef.current = scale;
 
   const exactFitScale = useMemo(() => {
     const w = Math.max(260, viewportSize.width);
     return Math.max(0.24, Math.min(1, (w - 24) / naturalWidth));
   }, [viewportSize.width, naturalWidth]);
+  const minZoomScale = Math.min(0.24, exactFitScale);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -469,382 +470,460 @@ function SymmetricalBracketViewport({
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {
-    const key = `${wingFilter}:${stageCount}:${Math.round(viewportSize.width / 20)}`;
-    if (hasAutoFittedKeyRef.current === key) return;
-    hasAutoFittedKeyRef.current = key;
-    const defaultScale =
-      viewportSize.width >= 760 || exactFitScale >= 0.44 || wingFilter !== 'ALL' ? exactFitScale : 0.58;
-    setScale(defaultScale);
-    setPan({ x: 0, y: 0 });
-  }, [wingFilter, stageCount, viewportSize.width, exactFitScale]);
-
-  const clampPan = (targetScale: number, nextX: number, nextY: number) => {
+  const scrollToDefaultAnchor = (targetScale: number) => {
+    const el = viewportRef.current;
+    if (!el) return;
     const scaledW = naturalWidth * targetScale;
-    const scaledH = naturalHeight * targetScale;
-    const maxPanX = Math.max(0, (scaledW - viewportSize.width) / 2 + 48);
-    const minPanY = Math.min(0, -(scaledH - viewportSize.height + 56));
-    return {
-      x: Math.max(-maxPanX, Math.min(maxPanX, nextX)),
-      y: Math.max(minPanY, Math.min(20, nextY))
-    };
+    const targetLeft =
+      wingFilter === 'RIGHT_WING'
+        ? Math.max(0, scaledW - el.clientWidth)
+        : wingFilter === 'LEFT_WING'
+        ? 0
+        : Math.max(0, (scaledW - el.clientWidth) / 2);
+    const targetTop = Math.max(0, (HEADER_OFFSET + wingsHeight / 2) * targetScale - el.clientHeight * 0.42);
+    el.scrollLeft = targetLeft;
+    el.scrollTop = targetTop;
   };
 
-  // Drag & Pinch interaction state
-  const dragRef = useRef<{
+  useEffect(() => {
+    scaleRef.current = 1;
+    setScale(1);
+    const raf = requestAnimationFrame(() => scrollToDefaultAnchor(1));
+    return () => cancelAnimationFrame(raf);
+  }, [wingFilter, stageCount]);
+
+  // Desktop mouse drag-to-scroll & 2-finger touch pinch zoom (leaving 1-finger swipe 100% native!)
+  const mouseDragRef = useRef<{
     active: boolean;
     startX: number;
     startY: number;
-    origPanX: number;
-    origPanY: number;
+    origLeft: number;
+    origTop: number;
     moved: boolean;
-  }>({ active: false, startX: 0, startY: 0, origPanX: 0, origPanY: 0, moved: false });
+  }>({ active: false, startX: 0, startY: 0, origLeft: 0, origTop: 0, moved: false });
   const pinchDistRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
+
+  const applyFocalZoom = (nextScaleRaw: number, focalClientX: number, focalClientY: number) => {
+    const el = viewportRef.current;
+    const prevScale = scaleRef.current;
+    const nextScale = Math.max(minZoomScale, Math.min(1.85, nextScaleRaw));
+    if (!el || Math.abs(nextScale - prevScale) < 0.0005) return;
+
+    const rect = el.getBoundingClientRect();
+    const viewX = focalClientX - rect.left;
+    const viewY = focalClientY - rect.top;
+    const contentX = (el.scrollLeft + viewX) / prevScale;
+    const contentY = (el.scrollTop + viewY) / prevScale;
+
+    scaleRef.current = nextScale;
+    setScale(nextScale);
+    requestAnimationFrame(() => {
+      const target = viewportRef.current;
+      if (!target) return;
+      target.scrollLeft = Math.max(0, contentX * nextScale - viewX);
+      target.scrollTop = Math.max(0, contentY * nextScale - viewY);
+    });
+  };
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        pinchDistRef.current = Math.hypot(dx, dy);
+      } else if (e.touches.length !== 2) {
+        pinchDistRef.current = null;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+        if (!pinchDistRef.current || pinchDistRef.current <= 0) {
+          pinchDistRef.current = dist;
+          return;
+        }
+        const ratio = dist / pinchDistRef.current;
+        pinchDistRef.current = dist;
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+        applyFocalZoom(scaleRef.current * ratio, midX, midY);
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        pinchDistRef.current = null;
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.08 : 0.92;
+        applyFocalZoom(scaleRef.current * factor, e.clientX, e.clientY);
+      }
+    };
+
+    el.addEventListener('touchstart', handleTouchStart, { passive: true });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+    el.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+      el.removeEventListener('touchcancel', handleTouchEnd);
+      el.removeEventListener('wheel', handleWheel);
+    };
+  }, [minZoomScale]);
 
   const showLeftWing = (wingFilter === 'ALL' || wingFilter === 'LEFT_WING') && stageCount > 0;
   const showRightWing = (wingFilter === 'ALL' || wingFilter === 'RIGHT_WING') && stageCount > 0;
 
   return (
-    <div
-      ref={viewportRef}
-      className="bracket-viewport-wrap"
-      onPointerDown={(e) => {
-        if ((e.target as HTMLElement).closest('.bracket-zoom-toolbar')) return;
-        dragRef.current = {
-          active: true,
-          startX: e.clientX,
-          startY: e.clientY,
-          origPanX: pan.x,
-          origPanY: pan.y,
-          moved: false
-        };
-        suppressClickRef.current = false;
-      }}
-      onPointerMove={(e) => {
-        if (!dragRef.current.active || pinchDistRef.current !== null) return;
-        const dx = e.clientX - dragRef.current.startX;
-        const dy = e.clientY - dragRef.current.startY;
-        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
-          dragRef.current.moved = true;
-          suppressClickRef.current = true;
-        }
-        if (dragRef.current.moved) {
-          setPan(clampPan(scale, dragRef.current.origPanX + dx, dragRef.current.origPanY + dy));
-        }
-      }}
-      onPointerUp={() => {
-        dragRef.current.active = false;
-        setTimeout(() => {
-          suppressClickRef.current = false;
-        }, 40);
-      }}
-      onPointerCancel={() => {
-        dragRef.current.active = false;
-      }}
-      onTouchStart={(e) => {
-        if (e.touches.length === 2) {
-          dragRef.current.active = false;
-          const dx = e.touches[0].clientX - e.touches[1].clientX;
-          const dy = e.touches[0].clientY - e.touches[1].clientY;
-          pinchDistRef.current = Math.hypot(dx, dy);
-        }
-      }}
-      onTouchMove={(e) => {
-        if (e.touches.length === 2 && pinchDistRef.current) {
-          const dx = e.touches[0].clientX - e.touches[1].clientX;
-          const dy = e.touches[0].clientY - e.touches[1].clientY;
-          const dist = Math.hypot(dx, dy);
-          const ratio = dist / pinchDistRef.current;
-          pinchDistRef.current = dist;
-          const next = Math.max(0.24, Math.min(1.85, scale * ratio));
-          setScale(next);
-          setPan((prev) => clampPan(next, prev.x, prev.y));
-        }
-      }}
-      onTouchEnd={(e) => {
-        if (e.touches.length < 2) pinchDistRef.current = null;
-      }}
-      onWheel={(e) => {
-        if (e.ctrlKey || Math.abs(e.deltaY) > 0) {
-          e.preventDefault();
-          const delta = e.deltaY < 0 ? 0.1 : -0.1;
-          const next = Math.max(0.24, Math.min(1.85, scale + delta));
-          setScale(next);
-          setPan((prev) => clampPan(next, prev.x, prev.y));
-        }
-      }}
-    >
+    <div className="bracket-viewport-shell">
       <div
-        className="bracket-stage-surface"
-        style={{
-          width: naturalWidth,
-          padding: '14px 16px 24px',
-          transform: `translate3d(calc(-50% + ${pan.x}px), ${pan.y}px, 0) scale(${scale})`
+        ref={viewportRef}
+        dir="ltr"
+        className="bracket-viewport-wrap"
+        onPointerDown={(e) => {
+          if (e.pointerType !== 'mouse') return;
+          const el = viewportRef.current;
+          if (!el) return;
+          mouseDragRef.current = {
+            active: true,
+            startX: e.clientX,
+            startY: e.clientY,
+            origLeft: el.scrollLeft,
+            origTop: el.scrollTop,
+            moved: false
+          };
+          suppressClickRef.current = false;
+        }}
+        onPointerMove={(e) => {
+          if (e.pointerType !== 'mouse' || !mouseDragRef.current.active) return;
+          const el = viewportRef.current;
+          if (!el) return;
+          const dx = e.clientX - mouseDragRef.current.startX;
+          const dy = e.clientY - mouseDragRef.current.startY;
+          if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+            mouseDragRef.current.moved = true;
+            suppressClickRef.current = true;
+          }
+          if (mouseDragRef.current.moved) {
+            el.scrollLeft = mouseDragRef.current.origLeft - dx;
+            el.scrollTop = mouseDragRef.current.origTop - dy;
+          }
+        }}
+        onPointerUp={() => {
+          mouseDragRef.current.active = false;
+          setTimeout(() => {
+            suppressClickRef.current = false;
+          }, 40);
+        }}
+        onPointerCancel={() => {
+          mouseDragRef.current.active = false;
         }}
       >
         <div
           style={{
+            width: 'max-content',
+            minWidth: '100%',
+            minHeight: '100%',
+            paddingBottom: 74,
             display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 20
+            justifyContent: 'center',
+            alignItems: 'flex-start'
           }}
         >
-          {/* Symmetrical LTR Row: [Left Wing L->R] -> [Center Final + Champion] <- [Right Wing R->L] */}
-          <div dir="ltr" style={{ display: 'inline-flex', alignItems: 'flex-start' }}>
-            {showLeftWing &&
-              model.preFinalStages.map((stage, sIdx) => {
-                const sideMatchCount = 1 << (stageCount - 1 - sIdx);
-                const slotHeight = BASE_SLOT_HEIGHT * (1 << sIdx);
-                const wingMap = model.leftWingByStage.get(stage) || new Map<number, Match>();
-                const nextStage = model.preFinalStages[sIdx + 1];
-
-                return (
-                  <div key={`left_${stage}`} style={{ display: 'flex', alignItems: 'flex-start' }}>
-                    <WingColumn
-                      stage={stage}
-                      wingBadge="أيسر"
-                      sideMatchCount={sideMatchCount}
-                      slotHeight={slotHeight}
-                      wingsHeight={wingsHeight}
-                      wingMap={wingMap}
-                      matchNumbersById={model.matchNumbersById}
-                      bestOf={bestOf}
-                      playersById={playersById}
-                      cardWidth={CARD_WIDTH}
-                      cardHeight={CARD_HEIGHT}
-                      headerHeight={HEADER_HEIGHT}
-                      headerGap={HEADER_GAP}
-                      canEdit={canEdit}
-                      onTapMatch={(m) => {
-                        if (!suppressClickRef.current) onTapMatch(m);
-                      }}
-                    />
-
-                    {nextStage ? (
-                      <SymmetricalConnectorSvg
-                        childMatchesBySlot={wingMap}
-                        nextSideMatchCount={1 << (stageCount - 1 - (sIdx + 1))}
-                        childSlotHeight={slotHeight}
-                        parentSlotHeight={BASE_SLOT_HEIGHT * (1 << (sIdx + 1))}
-                        connectorWidth={CONNECTOR_WIDTH}
-                        totalHeight={wingsHeight}
-                        headerOffset={HEADER_OFFSET}
-                        direction="L_TO_R"
-                      />
-                    ) : (
-                      <SemiToFinalSvg
-                        semiMatch={wingMap.get(0)}
-                        width={CONNECTOR_WIDTH}
-                        height={wingsHeight}
-                        headerOffset={HEADER_OFFSET}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-
-            {/* Center Grand Final + Champion Pedestal */}
-            <div dir="rtl" style={{ width: FINAL_CARD_WIDTH, flexShrink: 0 }}>
+          <div
+            style={{
+              position: 'relative',
+              width: naturalWidth * scale,
+              height: naturalHeight * scale,
+              flexShrink: 0
+            }}
+          >
+            <div
+              className="bracket-stage-surface"
+              style={{
+                width: naturalWidth,
+                height: naturalHeight,
+                padding: '16px 16px 28px',
+                transform: `scale(${scale})`
+              }}
+            >
               <div
                 style={{
-                  height: HEADER_HEIGHT,
-                  marginBottom: HEADER_GAP,
-                  borderRadius: 10,
-                  border: '1.5px solid var(--championship-gold)',
-                  background: 'rgba(245,184,46,0.18)',
                   display: 'flex',
+                  flexDirection: 'column',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  color: 'var(--championship-gold)',
-                  fontWeight: 800,
-                  fontSize: '0.86rem'
+                  gap: 20
                 }}
               >
-                <Trophy size={16} />
-                <span>النهائي الكبير</span>
-              </div>
+                {/* Symmetrical LTR Row: [Left Wing L->R] -> [Center Final + Champion] <- [Right Wing R->L] */}
+                <div dir="ltr" style={{ display: 'inline-flex', alignItems: 'flex-start' }}>
+                  {showLeftWing &&
+                    model.preFinalStages.map((stage, sIdx) => {
+                      const sideMatchCount = 1 << (stageCount - 1 - sIdx);
+                      const slotHeight = BASE_SLOT_HEIGHT * (1 << sIdx);
+                      const wingMap = model.leftWingByStage.get(stage) || new Map<number, Match>();
+                      const nextStage = model.preFinalStages[sIdx + 1];
 
-              <div style={{ position: 'relative', width: FINAL_CARD_WIDTH, height: centerHeight }}>
-                <div style={{ position: 'absolute', top: finalTop, left: 0, right: 0, height: FINAL_CARD_HEIGHT }}>
-                  {model.finalMatch ? (
-                    <BracketMatchCard
-                      match={model.finalMatch}
-                      matchNumber={model.matchNumbersById.get(model.finalMatch.id)}
-                      bestOf={bestOf}
-                      player1={
-                        model.finalMatch.player1Id ? playersById.get(model.finalMatch.player1Id) || null : null
-                      }
-                      player2={
-                        model.finalMatch.player2Id ? playersById.get(model.finalMatch.player2Id) || null : null
-                      }
-                      isFinal
-                      canEdit={canEdit}
-                      onTap={() => {
-                        if (!suppressClickRef.current && model.finalMatch) onTapMatch(model.finalMatch);
+                      return (
+                        <div key={`left_${stage}`} style={{ display: 'flex', alignItems: 'flex-start' }}>
+                          <WingColumn
+                            stage={stage}
+                            wingBadge="أيسر"
+                            sideMatchCount={sideMatchCount}
+                            slotHeight={slotHeight}
+                            wingsHeight={wingsHeight}
+                            wingMap={wingMap}
+                            matchNumbersById={model.matchNumbersById}
+                            bestOf={bestOf}
+                            playersById={playersById}
+                            cardWidth={CARD_WIDTH}
+                            cardHeight={CARD_HEIGHT}
+                            headerHeight={HEADER_HEIGHT}
+                            headerGap={HEADER_GAP}
+                            canEdit={canEdit}
+                            onTapMatch={(m) => {
+                              if (!suppressClickRef.current) onTapMatch(m);
+                            }}
+                          />
+
+                          {nextStage ? (
+                            <SymmetricalConnectorSvg
+                              childMatchesBySlot={wingMap}
+                              nextSideMatchCount={1 << (stageCount - 1 - (sIdx + 1))}
+                              childSlotHeight={slotHeight}
+                              parentSlotHeight={BASE_SLOT_HEIGHT * (1 << (sIdx + 1))}
+                              connectorWidth={CONNECTOR_WIDTH}
+                              totalHeight={wingsHeight}
+                              headerOffset={HEADER_OFFSET}
+                              direction="L_TO_R"
+                            />
+                          ) : (
+                            <SemiToFinalSvg
+                              semiMatch={wingMap.get(0)}
+                              width={CONNECTOR_WIDTH}
+                              height={wingsHeight}
+                              headerOffset={HEADER_OFFSET}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+
+                  {/* Center Grand Final + Champion Pedestal */}
+                  <div dir="rtl" style={{ width: FINAL_CARD_WIDTH, flexShrink: 0 }}>
+                    <div
+                      style={{
+                        height: HEADER_HEIGHT,
+                        marginBottom: HEADER_GAP,
+                        borderRadius: 10,
+                        border: '1.5px solid var(--championship-gold)',
+                        background: 'rgba(245,184,46,0.18)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        color: 'var(--championship-gold)',
+                        fontWeight: 800,
+                        fontSize: '0.9rem'
                       }}
-                    />
-                  ) : (
-                    <BracketPlaceholderCard stage="FINAL" slotNum={1} height={FINAL_CARD_HEIGHT} />
-                  )}
+                    >
+                      <Trophy size={17} />
+                      <span>النهائي الكبير</span>
+                    </div>
+
+                    <div style={{ position: 'relative', width: FINAL_CARD_WIDTH, height: centerHeight }}>
+                      <div style={{ position: 'absolute', top: finalTop, left: 0, right: 0, height: FINAL_CARD_HEIGHT }}>
+                        {model.finalMatch ? (
+                          <BracketMatchCard
+                            match={model.finalMatch}
+                            matchNumber={model.matchNumbersById.get(model.finalMatch.id)}
+                            bestOf={bestOf}
+                            player1={
+                              model.finalMatch.player1Id ? playersById.get(model.finalMatch.player1Id) || null : null
+                            }
+                            player2={
+                              model.finalMatch.player2Id ? playersById.get(model.finalMatch.player2Id) || null : null
+                            }
+                            isFinal
+                            canEdit={canEdit}
+                            onTap={() => {
+                              if (!suppressClickRef.current && model.finalMatch) onTapMatch(model.finalMatch);
+                            }}
+                          />
+                        ) : (
+                          <BracketPlaceholderCard stage="FINAL" slotNum={1} height={FINAL_CARD_HEIGHT} />
+                        )}
+                      </div>
+
+                      {/* Golden vertical stem from Final to Champion Pedestal */}
+                      <svg
+                        width={FINAL_CARD_WIDTH}
+                        height={CHAMPION_STEM}
+                        style={{ position: 'absolute', top: finalBottom, left: 0, display: 'block' }}
+                      >
+                        {championPlayer && (
+                          <line
+                            x1={FINAL_CARD_WIDTH / 2}
+                            y1={0}
+                            x2={FINAL_CARD_WIDTH / 2}
+                            y2={CHAMPION_STEM}
+                            stroke="rgba(245,184,46,0.32)"
+                            strokeWidth={7}
+                            strokeLinecap="round"
+                          />
+                        )}
+                        <line
+                          x1={FINAL_CARD_WIDTH / 2}
+                          y1={0}
+                          x2={FINAL_CARD_WIDTH / 2}
+                          y2={CHAMPION_STEM}
+                          stroke={championPlayer ? 'var(--championship-gold)' : '#475569'}
+                          strokeWidth={3.2}
+                          strokeLinecap="round"
+                        />
+                      </svg>
+
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: finalBottom + CHAMPION_STEM,
+                          left: 0,
+                          right: 0,
+                          height: CHAMPION_CARD_HEIGHT
+                        }}
+                      >
+                        <ChampionPedestalCard champion={championPlayer} compact />
+                      </div>
+                    </div>
+                  </div>
+
+                  {showRightWing &&
+                    [...model.preFinalStages].reverse().map((stage, revIdx, reversed) => {
+                      const originalIdx = stageCount - 1 - revIdx;
+                      const sideMatchCount = 1 << (stageCount - 1 - originalIdx);
+                      const slotHeight = BASE_SLOT_HEIGHT * (1 << originalIdx);
+                      const wingMap = model.rightWingByStage.get(stage) || new Map<number, Match>();
+                      const childOriginalIdx = originalIdx - 1;
+                      const childStage = childOriginalIdx >= 0 ? model.preFinalStages[childOriginalIdx] : null;
+
+                      return (
+                        <div key={`right_${stage}`} style={{ display: 'flex', alignItems: 'flex-start' }}>
+                          {revIdx === 0 && (
+                            <SemiToFinalSvg
+                              semiMatch={wingMap.get(0)}
+                              width={CONNECTOR_WIDTH}
+                              height={wingsHeight}
+                              headerOffset={HEADER_OFFSET}
+                            />
+                          )}
+
+                          <WingColumn
+                            stage={stage}
+                            wingBadge="أيمن"
+                            sideMatchCount={sideMatchCount}
+                            slotHeight={slotHeight}
+                            wingsHeight={wingsHeight}
+                            wingMap={wingMap}
+                            matchNumbersById={model.matchNumbersById}
+                            bestOf={bestOf}
+                            playersById={playersById}
+                            cardWidth={CARD_WIDTH}
+                            cardHeight={CARD_HEIGHT}
+                            headerHeight={HEADER_HEIGHT}
+                            headerGap={HEADER_GAP}
+                            canEdit={canEdit}
+                            onTapMatch={(m) => {
+                              if (!suppressClickRef.current) onTapMatch(m);
+                            }}
+                          />
+
+                          {revIdx < reversed.length - 1 && childStage && (
+                            <SymmetricalConnectorSvg
+                              childMatchesBySlot={model.rightWingByStage.get(childStage) || new Map<number, Match>()}
+                              nextSideMatchCount={sideMatchCount}
+                              childSlotHeight={BASE_SLOT_HEIGHT * (1 << childOriginalIdx)}
+                              parentSlotHeight={slotHeight}
+                              connectorWidth={CONNECTOR_WIDTH}
+                              totalHeight={wingsHeight}
+                              headerOffset={HEADER_OFFSET}
+                              direction="R_TO_L"
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
                 </div>
 
-                {/* Golden vertical stem from Final to Champion Pedestal */}
-                <svg
-                  width={FINAL_CARD_WIDTH}
-                  height={CHAMPION_STEM}
-                  style={{ position: 'absolute', top: finalBottom, left: 0, display: 'block' }}
-                >
-                  {championPlayer && (
-                    <line
-                      x1={FINAL_CARD_WIDTH / 2}
-                      y1={0}
-                      x2={FINAL_CARD_WIDTH / 2}
-                      y2={CHAMPION_STEM}
-                      stroke="rgba(245,184,46,0.28)"
-                      strokeWidth={6}
-                      strokeLinecap="round"
-                    />
-                  )}
-                  <line
-                    x1={FINAL_CARD_WIDTH / 2}
-                    y1={0}
-                    x2={FINAL_CARD_WIDTH / 2}
-                    y2={CHAMPION_STEM}
-                    stroke={championPlayer ? 'var(--championship-gold)' : 'var(--card-border)'}
-                    strokeWidth={2.6}
-                    strokeLinecap="round"
-                  />
-                </svg>
-
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: finalBottom + CHAMPION_STEM,
-                    left: 0,
-                    right: 0,
-                    height: CHAMPION_CARD_HEIGHT
-                  }}
-                >
-                  <ChampionPedestalCard champion={championPlayer} compact />
-                </div>
+                {/* Third Place Match Centered Underneath */}
+                {wingFilter === 'ALL' && model.thirdPlaceMatches.length > 0 && (
+                  <div dir="rtl" className="stack-col" style={{ alignItems: 'center', gap: 8 }}>
+                    <div
+                      style={{
+                        padding: '5px 14px',
+                        borderRadius: 10,
+                        background: 'var(--elevated-navy)',
+                        border: '1px solid rgba(245,184,46,0.45)',
+                        color: 'var(--championship-gold)',
+                        fontSize: '0.84rem',
+                        fontWeight: 800
+                      }}
+                    >
+                      مباراة تحديد المركز الثالث والرابع
+                    </div>
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      {model.thirdPlaceMatches.map((m) => (
+                        <div key={m.id} style={{ width: FINAL_CARD_WIDTH }}>
+                          <BracketMatchCard
+                            match={m}
+                            matchNumber={model.matchNumbersById.get(m.id)}
+                            bestOf={bestOf}
+                            player1={m.player1Id ? playersById.get(m.player1Id) || null : null}
+                            player2={m.player2Id ? playersById.get(m.player2Id) || null : null}
+                            isFinal={false}
+                            canEdit={canEdit}
+                            onTap={() => {
+                              if (!suppressClickRef.current) onTapMatch(m);
+                            }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-
-            {showRightWing &&
-              [...model.preFinalStages].reverse().map((stage, revIdx, reversed) => {
-                const originalIdx = stageCount - 1 - revIdx;
-                const sideMatchCount = 1 << (stageCount - 1 - originalIdx);
-                const slotHeight = BASE_SLOT_HEIGHT * (1 << originalIdx);
-                const wingMap = model.rightWingByStage.get(stage) || new Map<number, Match>();
-                const childOriginalIdx = originalIdx - 1;
-                const childStage = childOriginalIdx >= 0 ? model.preFinalStages[childOriginalIdx] : null;
-
-                return (
-                  <div key={`right_${stage}`} style={{ display: 'flex', alignItems: 'flex-start' }}>
-                    {revIdx === 0 && (
-                      <SemiToFinalSvg
-                        semiMatch={wingMap.get(0)}
-                        width={CONNECTOR_WIDTH}
-                        height={wingsHeight}
-                        headerOffset={HEADER_OFFSET}
-                      />
-                    )}
-
-                    <WingColumn
-                      stage={stage}
-                      wingBadge="أيمن"
-                      sideMatchCount={sideMatchCount}
-                      slotHeight={slotHeight}
-                      wingsHeight={wingsHeight}
-                      wingMap={wingMap}
-                      matchNumbersById={model.matchNumbersById}
-                      bestOf={bestOf}
-                      playersById={playersById}
-                      cardWidth={CARD_WIDTH}
-                      cardHeight={CARD_HEIGHT}
-                      headerHeight={HEADER_HEIGHT}
-                      headerGap={HEADER_GAP}
-                      canEdit={canEdit}
-                      onTapMatch={(m) => {
-                        if (!suppressClickRef.current) onTapMatch(m);
-                      }}
-                    />
-
-                    {revIdx < reversed.length - 1 && childStage && (
-                      <SymmetricalConnectorSvg
-                        childMatchesBySlot={model.rightWingByStage.get(childStage) || new Map<number, Match>()}
-                        nextSideMatchCount={sideMatchCount}
-                        childSlotHeight={BASE_SLOT_HEIGHT * (1 << childOriginalIdx)}
-                        parentSlotHeight={slotHeight}
-                        connectorWidth={CONNECTOR_WIDTH}
-                        totalHeight={wingsHeight}
-                        headerOffset={HEADER_OFFSET}
-                        direction="R_TO_L"
-                      />
-                    )}
-                  </div>
-                );
-              })}
           </div>
-
-          {/* Third Place Match Centered Underneath */}
-          {wingFilter === 'ALL' && model.thirdPlaceMatches.length > 0 && (
-            <div dir="rtl" className="stack-col" style={{ alignItems: 'center', gap: 8 }}>
-              <div
-                style={{
-                  padding: '5px 14px',
-                  borderRadius: 10,
-                  background: 'var(--elevated-navy)',
-                  border: '1px solid rgba(245,184,46,0.45)',
-                  color: 'var(--championship-gold)',
-                  fontSize: '0.82rem',
-                  fontWeight: 800
-                }}
-              >
-                مباراة تحديد المركز الثالث والرابع
-              </div>
-              <div style={{ display: 'flex', gap: 12 }}>
-                {model.thirdPlaceMatches.map((m) => (
-                  <div key={m.id} style={{ width: FINAL_CARD_WIDTH }}>
-                    <BracketMatchCard
-                      match={m}
-                      matchNumber={model.matchNumbersById.get(m.id)}
-                      bestOf={bestOf}
-                      player1={m.player1Id ? playersById.get(m.player1Id) || null : null}
-                      player2={m.player2Id ? playersById.get(m.player2Id) || null : null}
-                      isFinal={false}
-                      canEdit={canEdit}
-                      onTap={() => {
-                        if (!suppressClickRef.current) onTapMatch(m);
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Floating Zoom & Pan Toolbar */}
+      {/* Pinned Floating Zoom & View Toolbar */}
       <div className="bracket-zoom-toolbar" dir="rtl">
         <button
           type="button"
           className="bracket-zoom-btn"
           aria-label="تصغير الشجرة"
-          onClick={() => {
-            const next = Math.max(0.24, scale - 0.16);
-            setScale(next);
-            setPan((prev) => clampPan(next, prev.x, prev.y));
-          }}
+          onClick={() => setScale((prev) => Math.max(minZoomScale, prev - 0.15))}
         >
           <Minus size={15} />
         </button>
 
-        <span className="score-num" style={{ color: 'var(--championship-gold)', fontSize: '0.8rem', padding: '0 4px' }}>
+        <span className="score-num" style={{ color: 'var(--championship-gold)', fontSize: '0.82rem', padding: '0 4px' }}>
           {Math.round(scale * 100)}%
         </span>
 
@@ -852,11 +931,7 @@ function SymmetricalBracketViewport({
           type="button"
           className="bracket-zoom-btn"
           aria-label="تكبير الشجرة"
-          onClick={() => {
-            const next = Math.min(1.85, scale + 0.16);
-            setScale(next);
-            setPan((prev) => clampPan(next, prev.x, prev.y));
-          }}
+          onClick={() => setScale((prev) => Math.min(1.85, prev + 0.15))}
         >
           <Plus size={15} />
         </button>
@@ -867,7 +942,10 @@ function SymmetricalBracketViewport({
           style={{ color: 'var(--cyber-sky)' }}
           onClick={() => {
             setScale(exactFitScale);
-            setPan({ x: 0, y: 0 });
+            if (viewportRef.current) {
+              viewportRef.current.scrollLeft = 0;
+              viewportRef.current.scrollTop = 0;
+            }
           }}
         >
           <Maximize2 size={14} />
@@ -880,11 +958,11 @@ function SymmetricalBracketViewport({
           style={{ color: 'var(--championship-gold)' }}
           onClick={() => {
             setScale(1);
-            setPan({ x: 0, y: 0 });
+            requestAnimationFrame(() => scrollToDefaultAnchor(1));
           }}
         >
           <Crosshair size={14} />
-          <span>النهائي</span>
+          <span>100%</span>
         </button>
       </div>
     </div>
@@ -931,7 +1009,7 @@ function WingColumn({
           height: headerHeight,
           marginBottom: headerGap,
           borderRadius: 10,
-          border: '1px solid rgba(37,99,235,0.55)',
+          border: '1px solid rgba(37,99,235,0.6)',
           background: 'var(--elevated-navy)',
           padding: '0 10px',
           display: 'flex',
@@ -940,16 +1018,16 @@ function WingColumn({
           gap: 6
         }}
       >
-        <span style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--text-primary)' }}>
+        <span style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
           {STAGE_LABELS[stage].label}
         </span>
         <span
           style={{
-            padding: '2px 7px',
+            padding: '2px 8px',
             borderRadius: 6,
-            background: 'rgba(124,58,237,0.28)',
+            background: 'rgba(124,58,237,0.32)',
             color: 'var(--cyber-sky)',
-            fontSize: '0.7rem',
+            fontSize: '0.74rem',
             fontWeight: 700
           }}
         >
@@ -1008,7 +1086,7 @@ function BracketPlaceholderCard({
         flexDirection: 'column',
         justifyContent: 'space-between',
         color: 'var(--text-muted)',
-        fontSize: '0.76rem'
+        fontSize: '0.8rem'
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -1089,13 +1167,13 @@ function BracketMatchCard({
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        border: `${isFinal ? 2 : 1.3}px solid ${
+        border: `${isFinal ? 2 : 1.4}px solid ${
           isFinal
             ? 'var(--championship-gold)'
             : match.isCompleted
-            ? 'rgba(245,184,46,0.72)'
+            ? 'rgba(245,184,46,0.75)'
             : isReady
-            ? 'rgba(37,99,235,0.85)'
+            ? 'rgba(37,99,235,0.88)'
             : 'var(--card-border)'
         }`
       }}
@@ -1103,24 +1181,24 @@ function BracketMatchCard({
       <div
         style={{
           background: isFinal ? 'rgba(245,184,46,0.14)' : 'rgba(7,9,19,0.65)',
-          padding: '4px 8px',
+          padding: '5px 10px',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           gap: 6,
-          fontSize: '0.7rem'
+          fontSize: '0.74rem'
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
           <span
             className="score-num"
             style={{
-              padding: '1px 5px',
+              padding: '1px 6px',
               borderRadius: 5,
               background: isFinal ? 'var(--championship-gold)' : 'var(--elevated-navy)',
               color: isFinal ? 'var(--midnight-surface)' : 'var(--cyber-sky)',
               fontWeight: 800,
-              fontSize: '0.72rem'
+              fontSize: '0.75rem'
             }}
           >
             #{displayNum}
@@ -1169,7 +1247,7 @@ function BracketMatchCard({
                 color: 'var(--cyber-sky)'
               }}
             >
-              <Edit3 size={10} />
+              <Edit3 size={11} />
             </span>
           )}
         </div>
@@ -1207,7 +1285,7 @@ function BracketSlotRow({
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        padding: '0 8px',
+        padding: '0 10px',
         background: isWinner
           ? 'rgba(245,184,46,0.16)'
           : isEliminated
@@ -1215,25 +1293,25 @@ function BracketSlotRow({
           : 'transparent'
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
         <PlayerAvatar
           avatarUrl={player?.avatarUrl}
           name={player?.name || '؟'}
-          size={isFinal ? 26 : 22}
+          size={isFinal ? 32 : 28}
           borderColor={
             isWinner
               ? 'var(--championship-gold)'
               : isEliminated
               ? 'rgba(239,68,68,0.45)'
               : player
-              ? 'rgba(56,189,248,0.5)'
+              ? 'rgba(56,189,248,0.65)'
               : 'var(--card-border)'
           }
         />
         <span
           style={{
-            fontSize: '0.8rem',
-            fontWeight: isWinner ? 800 : 500,
+            fontSize: '0.92rem',
+            fontWeight: isWinner ? 800 : 600,
             color: isWinner
               ? 'var(--championship-gold)'
               : isEliminated
@@ -1250,23 +1328,23 @@ function BracketSlotRow({
         </span>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
         {isWinner && (
           isFinal ? (
-            <Trophy size={13} color="var(--championship-gold)" />
+            <Trophy size={15} color="var(--championship-gold)" />
           ) : (
-            <CheckCircle2 size={13} color="var(--championship-gold)" />
+            <CheckCircle2 size={15} color="var(--championship-gold)" />
           )
         )}
-        {!isWinner && isEliminated && <XCircle size={12} color="rgba(239,68,68,0.72)" />}
+        {!isWinner && isEliminated && <XCircle size={13} color="rgba(239,68,68,0.78)" />}
 
         <span
           className="score-num"
           style={{
-            minWidth: 26,
+            minWidth: 32,
             textAlign: 'center',
-            padding: '2px 7px',
-            borderRadius: 6,
+            padding: '3px 9px',
+            borderRadius: 7,
             background: isWinner
               ? 'rgba(245,184,46,0.24)'
               : isEliminated
@@ -1277,7 +1355,7 @@ function BracketSlotRow({
               : isEliminated
               ? 'var(--text-muted)'
               : 'var(--text-primary)',
-            fontSize: '0.86rem'
+            fontSize: '0.98rem'
           }}
         >
           {score}
@@ -1341,8 +1419,8 @@ function SymmetricalConnectorSvg({
               key={`in_${idx}`}
               d={p.d}
               fill="none"
-              stroke={p.ready ? 'rgba(37,99,235,0.6)' : 'var(--card-border)'}
-              strokeWidth={2.2}
+              stroke={p.ready ? 'rgba(56,189,248,0.72)' : '#475569'}
+              strokeWidth={2.8}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -1354,8 +1432,8 @@ function SymmetricalConnectorSvg({
               <path
                 d={p.d}
                 fill="none"
-                stroke="rgba(245,184,46,0.24)"
-                strokeWidth={5.5}
+                stroke="rgba(245,184,46,0.3)"
+                strokeWidth={7.5}
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -1363,7 +1441,7 @@ function SymmetricalConnectorSvg({
                 d={p.d}
                 fill="none"
                 stroke="var(--championship-gold)"
-                strokeWidth={2.8}
+                strokeWidth={3.6}
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -1397,8 +1475,8 @@ function SemiToFinalSvg({
             y1={y}
             x2={width}
             y2={y}
-            stroke="rgba(245,184,46,0.25)"
-            strokeWidth={6}
+            stroke="rgba(245,184,46,0.3)"
+            strokeWidth={7.5}
             strokeLinecap="round"
           />
         )}
@@ -1407,8 +1485,8 @@ function SemiToFinalSvg({
           y1={y}
           x2={width}
           y2={y}
-          stroke={active ? 'var(--championship-gold)' : ready ? 'rgba(37,99,235,0.65)' : 'var(--card-border)'}
-          strokeWidth={active ? 3 : 2.3}
+          stroke={active ? 'var(--championship-gold)' : ready ? 'rgba(56,189,248,0.75)' : '#475569'}
+          strokeWidth={active ? 3.6 : 2.8}
           strokeLinecap="round"
         />
       </svg>

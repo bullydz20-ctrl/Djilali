@@ -33,6 +33,15 @@ import {
   shuffleArray
 } from './engine.js';
 import {
+  allocateNextCp4Id,
+  backfillPlayerProfiles,
+  syncCp4ProfileSequence
+} from './db.js';
+import {
+  isValidDiscordUserId,
+  normalizeDiscordUserId
+} from './discord.js';
+import {
   LOCKOUT_DURATION_MS,
   MAX_FAILED_ATTEMPTS,
   MAX_SUB_ADMINS,
@@ -175,12 +184,19 @@ function resolveTournamentGameRules(payload, fallbackCurrent = null) {
   };
 }
 
-function mapPlayer(row) {
-  return {
+function mapPlayer(row, { includeDiscordId = false } = {}) {
+  const xemo =
+    row.xemonet_id && String(row.xemonet_id).trim()
+      ? String(row.xemonet_id).trim()
+      : (row.profile_xemonet_id || '');
+  const mapped = {
     id: row.id,
     tournamentId: row.tournament_id,
+    profileId: row.profile_id ?? null,
+    cp4Id: row.profile_cp4_id ?? row.cp4_id ?? null,
     name: row.name,
     elysiumNetId: row.elysium_net_id,
+    xeMoNetId: xemo,
     avatarUrl: row.avatar_url ?? null,
     level: row.level,
     ovrRating: row.ovr_rating,
@@ -189,6 +205,25 @@ function mapPlayer(row) {
     groupId: row.group_id ?? null,
     seedOrder: row.seed_order ?? 0,
     registeredAt: row.registered_at
+  };
+  if (includeDiscordId) {
+    mapped.discordUserId = row.profile_discord_user_id ?? row.discord_user_id ?? null;
+  }
+  return mapped;
+}
+
+function mapPlayerProfile(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    cp4Id: row.cp4_id,
+    name: row.name,
+    avatarUrl: row.avatar_url ?? null,
+    elysiumNetId: row.elysium_net_id || '',
+    xeMoNetId: row.xemonet_id || '',
+    discordUserId: row.discord_user_id ?? null,
+    createdAt: row.created_at,
+    tournamentsCount: Number(row.tournaments_count || 0)
   };
 }
 
@@ -1058,7 +1093,388 @@ export class ArenaService {
     return { ok: true, status: 200, messageAr: 'تم حذف الحساب المساعد بنجاح.' };
   }
 
+  queryPlayerProfiles() {
+    return this.db
+      .prepare(`
+        SELECT pp.*, COUNT(p.id) AS tournaments_count
+        FROM player_profiles pp
+        LEFT JOIN players p ON p.profile_id = pp.id
+        GROUP BY pp.id
+        ORDER BY pp.id DESC
+      `)
+      .all()
+      .map(mapPlayerProfile);
+  }
+
+  getPlayerProfileById(profileId) {
+    const row = this.db
+      .prepare(`
+        SELECT pp.*, COUNT(p.id) AS tournaments_count
+        FROM player_profiles pp
+        LEFT JOIN players p ON p.profile_id = pp.id
+        WHERE pp.id = ?
+        GROUP BY pp.id
+      `)
+      .get(Number(profileId));
+    return mapPlayerProfile(row);
+  }
+
+  fetchMappedPlayerById(playerId, includeDiscordId = false) {
+    const row = this.db
+      .prepare(`
+        SELECT p.*, pp.cp4_id AS profile_cp4_id, pp.discord_user_id AS profile_discord_user_id, pp.xemonet_id AS profile_xemonet_id
+        FROM players p
+        LEFT JOIN player_profiles pp ON pp.id = p.profile_id
+        WHERE p.id = ?
+      `)
+      .get(Number(playerId));
+    return row ? mapPlayer(row, { includeDiscordId }) : null;
+  }
+
+  resolveOrCreateProfileForPlayer({
+    name,
+    elysiumNetId,
+    xeMoNetId = '',
+    avatarUrl = null,
+    profileId = null,
+    now = Date.now()
+  }) {
+    if (profileId != null) {
+      const existing = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(Number(profileId));
+      if (existing) return existing;
+    }
+
+    const cleanElysium = String(elysiumNetId || '').trim();
+    if (cleanElysium) {
+      const matched = this.db
+        .prepare("SELECT * FROM player_profiles WHERE elysium_net_id != '' AND LOWER(elysium_net_id) = LOWER(?) ORDER BY id ASC LIMIT 1")
+        .get(cleanElysium);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    const cp4Id = allocateNextCp4Id(this.db);
+    const info = this.db
+      .prepare(`
+        INSERT INTO player_profiles (
+          cp4_id, name, avatar_url, elysium_net_id, xemonet_id, discord_user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?)
+      `)
+      .run(
+        cp4Id,
+        String(name || 'لاعب').trim() || 'لاعب',
+        avatarUrl ? String(avatarUrl).trim() : null,
+        cleanElysium,
+        String(xeMoNetId || '').trim(),
+        now
+      );
+    return this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(Number(info.lastInsertRowid));
+  }
+
+  listPlayerProfiles(rawToken) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
+    if (!auth.ok) return auth;
+    return {
+      ok: true,
+      status: 200,
+      profiles: this.queryPlayerProfiles()
+    };
+  }
+
+  createPlayerProfile(rawToken, payload = {}) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
+    if (!auth.ok) return auth;
+
+    const cleanName = String(payload.name || '').trim();
+    if (!cleanName || cleanName.length > 60) {
+      return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب (من 1 إلى 60 حرفاً).' };
+    }
+
+    const cleanDiscordRaw = normalizeDiscordUserId(payload.discordUserId);
+    const cleanDiscordId = cleanDiscordRaw ? cleanDiscordRaw : null;
+    if (cleanDiscordId && !isValidDiscordUserId(cleanDiscordId)) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'INVALID_DISCORD_ID',
+        error: 'يرجى إدخال معرف Discord User ID صحيح (من 17 إلى 22 رقماً).'
+      };
+    }
+
+    const cleanElysium = String(payload.elysiumNetId || '').trim().slice(0, 60);
+    const cleanXeMoNet = String(payload.xeMoNetId || '').trim().slice(0, 60);
+    const cleanAvatar = payload.avatarUrl ? String(payload.avatarUrl).trim().slice(0, 500) : null;
+
+    const res = this.withTx(() => {
+      if (cleanDiscordId) {
+        const dupRow = this.db
+          .prepare('SELECT id FROM player_profiles WHERE discord_user_id = ?')
+          .get(cleanDiscordId);
+        if (dupRow) {
+          return {
+            ok: false,
+            status: 409,
+            code: 'DUPLICATE_DISCORD_ID',
+            error: 'يوجد ملف لاعب مسجل مسبقاً بنفس معرف Discord User ID.',
+            existingProfile: this.getPlayerProfileById(dupRow.id)
+          };
+        }
+      }
+
+      const cp4Id = allocateNextCp4Id(this.db);
+      const now = Date.now();
+      const info = this.db
+        .prepare(`
+          INSERT INTO player_profiles (
+            cp4_id, name, avatar_url, elysium_net_id, xemonet_id, discord_user_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(cp4Id, cleanName, cleanAvatar, cleanElysium, cleanXeMoNet, cleanDiscordId, now);
+
+      const profile = this.getPlayerProfileById(info.lastInsertRowid);
+      this.logAudit(
+        auth.session.rawAdmin,
+        null,
+        'CREATE_PLAYER_PROFILE',
+        `إنشاء ملف لاعب موحد جديد: ${profile.name} (${profile.cp4Id})`
+      );
+      return {
+        ok: true,
+        status: 201,
+        profile,
+        messageAr: `تم إنشاء ملف اللاعب الموحد بنجاح (${profile.cp4Id}).`
+      };
+    });
+
+    if (res.ok) this.emitChange('player_profile_created');
+    return res;
+  }
+
+  updatePlayerProfile(rawToken, profileId, payload = {}) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
+    if (!auth.ok) return auth;
+
+    const targetId = Number(profileId);
+    const existingRow = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(targetId);
+    if (!existingRow) {
+      return { ok: false, status: 404, error: 'ملف اللاعب غير موجود.' };
+    }
+
+    if (payload.cp4Id !== undefined && String(payload.cp4Id).trim() !== existingRow.cp4_id) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'CP4_ID_IMMUTABLE',
+        error: 'رقم اللاعب CP4 ثابت ولا يمكن تعديله أو تغييره.'
+      };
+    }
+
+    const cleanName = payload.name !== undefined ? String(payload.name).trim() : existingRow.name;
+    if (!cleanName || cleanName.length > 60) {
+      return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب (من 1 إلى 60 حرفاً).' };
+    }
+
+    let cleanDiscordId = existingRow.discord_user_id;
+    if (payload.discordUserId !== undefined) {
+      const normalized = normalizeDiscordUserId(payload.discordUserId);
+      cleanDiscordId = normalized ? normalized : null;
+      if (cleanDiscordId && !isValidDiscordUserId(cleanDiscordId)) {
+        return {
+          ok: false,
+          status: 400,
+          code: 'INVALID_DISCORD_ID',
+          error: 'يرجى إدخال معرف Discord User ID صحيح (من 17 إلى 22 رقماً).'
+        };
+      }
+    }
+
+    const cleanElysium =
+      payload.elysiumNetId !== undefined ? String(payload.elysiumNetId || '').trim().slice(0, 60) : existingRow.elysium_net_id;
+    const cleanXeMoNet =
+      payload.xeMoNetId !== undefined ? String(payload.xeMoNetId || '').trim().slice(0, 60) : existingRow.xemonet_id;
+    const cleanAvatar =
+      payload.avatarUrl !== undefined
+        ? (payload.avatarUrl ? String(payload.avatarUrl).trim().slice(0, 500) : null)
+        : existingRow.avatar_url;
+
+    const res = this.withTx(() => {
+      if (cleanDiscordId) {
+        const dupRow = this.db
+          .prepare('SELECT id FROM player_profiles WHERE discord_user_id = ? AND id != ?')
+          .get(cleanDiscordId, existingRow.id);
+        if (dupRow) {
+          return {
+            ok: false,
+            status: 409,
+            code: 'DUPLICATE_DISCORD_ID',
+            error: 'هذا Discord User ID مرتبط بملف لاعب آخر بالفعل.',
+            existingProfile: this.getPlayerProfileById(dupRow.id)
+          };
+        }
+      }
+
+      this.db
+        .prepare(`
+          UPDATE player_profiles SET
+            name = ?, avatar_url = ?, elysium_net_id = ?, xemonet_id = ?, discord_user_id = ?
+          WHERE id = ?
+        `)
+        .run(cleanName, cleanAvatar, cleanElysium, cleanXeMoNet, cleanDiscordId, existingRow.id);
+
+      const profile = this.getPlayerProfileById(existingRow.id);
+      this.logAudit(
+        auth.session.rawAdmin,
+        null,
+        'UPDATE_PLAYER_PROFILE',
+        `تحديث ملف اللاعب الموحد: ${profile.name} (${profile.cp4Id})`
+      );
+      return {
+        ok: true,
+        status: 200,
+        profile,
+        messageAr: `تم تحديث بيانات الملف (${profile.cp4Id}) بنجاح.`
+      };
+    });
+
+    if (res.ok) this.emitChange('player_profile_updated');
+    return res;
+  }
+
+  createOrResolveDiscordOAuthProfile({ discordUserId, displayName, username, avatarUrl = null } = {}) {
+    const cleanDiscordId = normalizeDiscordUserId(discordUserId);
+    if (!isValidDiscordUserId(cleanDiscordId)) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'INVALID_DISCORD_ID',
+        error: 'معرف Discord User ID المستلم غير صالح.'
+      };
+    }
+
+    const cleanName = String(displayName || username || 'لاعب Discord').trim().slice(0, 60) || 'لاعب Discord';
+    const cleanAvatar = avatarUrl ? String(avatarUrl).trim().slice(0, 500) : null;
+
+    const res = this.withTx(() => {
+      const existing = this.db
+        .prepare('SELECT id FROM player_profiles WHERE discord_user_id = ?')
+        .get(cleanDiscordId);
+      if (existing) {
+        const profile = this.getPlayerProfileById(existing.id);
+        return {
+          ok: true,
+          status: 200,
+          created: false,
+          duplicate: true,
+          code: 'DUPLICATE_DISCORD_ID',
+          profile,
+          messageAr: `هذا الحساب مربوط بالفعل بملف اللاعب (${profile.cp4Id}) — لم يتم إنشاء ملف مكرر.`
+        };
+      }
+
+      const cp4Id = allocateNextCp4Id(this.db);
+      const now = Date.now();
+      const info = this.db
+        .prepare(`
+          INSERT INTO player_profiles (
+            cp4_id, name, avatar_url, elysium_net_id, xemonet_id, discord_user_id, created_at
+          ) VALUES (?, ?, ?, '', '', ?, ?)
+        `)
+        .run(cp4Id, cleanName, cleanAvatar, cleanDiscordId, now);
+
+      const profile = this.getPlayerProfileById(info.lastInsertRowid);
+      return {
+        ok: true,
+        status: 201,
+        created: true,
+        duplicate: false,
+        profile,
+        messageAr: `تم ربط حساب Discord وإنشاء ملفك الموحد بنجاح (${profile.cp4Id}).`
+      };
+    });
+
+    if (res.ok && res.created) this.emitChange('player_profile_created');
+    return res;
+  }
+
+  mergePlayerProfiles(rawToken, { sourceProfileId, targetProfileId, confirmIdentity = false } = {}) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
+    if (!auth.ok) return auth;
+
+    if (confirmIdentity !== true) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'CONFIRM_REQUIRED',
+        error: 'يجب تأكيد تطابق هوية اللاعب يدوياً قبل دمج الملفين.'
+      };
+    }
+
+    const srcId = Number(sourceProfileId);
+    const dstId = Number(targetProfileId);
+    if (!Number.isInteger(srcId) || !Number.isInteger(dstId) || srcId <= 0 || dstId <= 0) {
+      return { ok: false, status: 400, error: 'معرفات الملفات المطلوب دمجها غير صالحة.' };
+    }
+    if (srcId === dstId) {
+      return { ok: false, status: 400, error: 'يرجى اختيار ملفين مختلفين لتنفيذ الدمج.' };
+    }
+
+    const res = this.withTx(() => {
+      const source = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(srcId);
+      const target = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(dstId);
+      if (!source || !target) {
+        return { ok: false, status: 404, error: 'أحد ملفي اللاعبين غير موجود.' };
+      }
+
+      if (source.discord_user_id && target.discord_user_id && source.discord_user_id !== target.discord_user_id) {
+        return {
+          ok: false,
+          status: 409,
+          error: 'يرتبط كلا الملفين بحسابي Discord مختلفين. لا يمكن الدمج التلقائي دون فك أحد الارتباطين.'
+        };
+      }
+
+      const mergedDiscordId = target.discord_user_id || source.discord_user_id || null;
+      const mergedElysium = String(target.elysium_net_id || '').trim() || String(source.elysium_net_id || '').trim();
+      const mergedXeMoNet = String(target.xemonet_id || '').trim() || String(source.xemonet_id || '').trim();
+      const mergedAvatar = target.avatar_url || source.avatar_url || null;
+
+      this.db.prepare('UPDATE players SET profile_id = ? WHERE profile_id = ?').run(target.id, source.id);
+      this.db.prepare('DELETE FROM player_profiles WHERE id = ?').run(source.id);
+      this.db
+        .prepare(`
+          UPDATE player_profiles SET
+            avatar_url = ?, elysium_net_id = ?, xemonet_id = ?, discord_user_id = ?
+          WHERE id = ?
+        `)
+        .run(mergedAvatar, mergedElysium, mergedXeMoNet, mergedDiscordId, target.id);
+
+      syncCp4ProfileSequence(this.db);
+      const mergedProfile = this.getPlayerProfileById(target.id);
+      this.logAudit(
+        auth.session.rawAdmin,
+        null,
+        'MERGE_PLAYER_PROFILES',
+        `دمج الملف ${source.cp4_id} داخل الملف الأساسي ${mergedProfile.cp4_id}`
+      );
+      return {
+        ok: true,
+        status: 200,
+        profile: mergedProfile,
+        mergedFromCp4Id: source.cp4_id,
+        messageAr: `تم دمج الملف (${source.cp4_id}) داخل الملف الأساسي (${mergedProfile.cp4Id}) مع الحفاظ على جميع البطولات والنتائج.`
+      };
+    });
+
+    if (res.ok) this.emitChange('player_profiles_merged');
+    return res;
+  }
+
   getPublicState(requestedTournamentId = null, rawToken = null, clientKey = 'default', requestedUsername = null) {
+    const session = rawToken ? this.verifySessionToken(rawToken) : null;
+    const isHeadAdmin = session?.admin?.role === AdminRole.HEAD_ADMIN;
+    const canManagePlayers = Boolean(session && hasPermission(session.rawAdmin, 'MANAGE_PLAYERS'));
+
     const tournamentRows = this.db.prepare('SELECT * FROM tournaments ORDER BY id DESC').all();
     const tournaments = tournamentRows.map(mapTournament);
     let tournament = null;
@@ -1070,7 +1486,16 @@ export class ArenaService {
     }
 
     const players = tournament
-      ? this.db.prepare('SELECT * FROM players WHERE tournament_id = ? ORDER BY registered_at ASC, id ASC').all(tournament.id).map(mapPlayer)
+      ? this.db
+          .prepare(`
+            SELECT p.*, pp.cp4_id AS profile_cp4_id, pp.discord_user_id AS profile_discord_user_id, pp.xemonet_id AS profile_xemonet_id
+            FROM players p
+            LEFT JOIN player_profiles pp ON pp.id = p.profile_id
+            WHERE p.tournament_id = ?
+            ORDER BY p.registered_at ASC, p.id ASC
+          `)
+          .all(tournament.id)
+          .map((row) => mapPlayer(row, { includeDiscordId: canManagePlayers }))
       : [];
     const groups = tournament
       ? this.db.prepare('SELECT * FROM tournament_groups WHERE tournament_id = ? ORDER BY display_order ASC').all(tournament.id).map(mapGroup)
@@ -1140,8 +1565,6 @@ export class ArenaService {
       ? players.find((p) => p.id === tournament.championPlayerId) || null
       : null;
 
-    const session = rawToken ? this.verifySessionToken(rawToken) : null;
-    const isHeadAdmin = session?.admin?.role === AdminRole.HEAD_ADMIN;
     const adminDirectory = this.getAdminDirectory();
     const cleanRequestedUsername =
       typeof requestedUsername === 'string' && requestedUsername.trim() ? requestedUsername.trim() : null;
@@ -1160,6 +1583,8 @@ export class ArenaService {
       ? this.db.prepare('SELECT * FROM admin_audit_logs ORDER BY id DESC LIMIT 60').all().map(mapAuditLog)
       : [];
 
+    const playerProfiles = canManagePlayers ? this.queryPlayerProfiles() : [];
+
     return {
       tournaments,
       tournament,
@@ -1167,6 +1592,7 @@ export class ArenaService {
       approvedPlayers,
       pendingPlayers,
       rejectedPlayers,
+      playerProfiles,
       groupsWithStandings,
       leagueStandings,
       leagueMatches,
@@ -1370,9 +1796,10 @@ export class ArenaService {
     return { ok: true, status: 200, messageAr: 'تم حذف البطولة نهائياً بنجاح.' };
   }
 
-  registerPlayer({ tournamentId, name, elysiumNetId, avatarUrl = null, level = PlayerLevel.INTERMEDIATE, clubName = '' }) {
+  registerPlayer({ tournamentId, name, elysiumNetId, xeMoNetId = '', avatarUrl = null, level = PlayerLevel.INTERMEDIATE, clubName = '' }) {
     const cleanName = String(name || '').trim();
     const cleanElysium = String(elysiumNetId || '').trim();
+    const cleanXeMoNet = String(xeMoNetId || '').trim().slice(0, 60);
     if (!cleanName || !cleanElysium) {
       return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب ومعرف ElysiumNet/ XeMoNat.' };
     }
@@ -1407,17 +1834,27 @@ export class ArenaService {
       }
 
       const now = Date.now();
+      const profileRow = this.resolveOrCreateProfileForPlayer({
+        name: cleanName,
+        elysiumNetId: cleanElysium,
+        xeMoNetId: cleanXeMoNet,
+        avatarUrl,
+        now
+      });
+
       const info = this.db
         .prepare(`
           INSERT INTO players (
-            tournament_id, name, elysium_net_id, avatar_url, level,
+            tournament_id, profile_id, name, elysium_net_id, xemonet_id, avatar_url, level,
             ovr_rating, club_name, status, group_id, seed_order, registered_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)
         `)
         .run(
           tournament.id,
+          profileRow?.id ?? null,
           cleanName,
           cleanElysium,
+          cleanXeMoNet,
           avatarUrl ? String(avatarUrl).trim() : null,
           safeLevel,
           defaultOvr,
@@ -1426,7 +1863,7 @@ export class ArenaService {
           now
         );
 
-      const player = mapPlayer(this.db.prepare('SELECT * FROM players WHERE id = ?').get(info.lastInsertRowid));
+      const player = this.fetchMappedPlayerById(info.lastInsertRowid, false);
       return {
         ok: true,
         status: 201,
@@ -1488,8 +1925,14 @@ export class ArenaService {
     const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
     if (!auth.ok) return auth;
 
-    const cleanName = String(payload.name || '').trim();
-    const cleanElysium = String(payload.elysiumNetId || '').trim();
+    const requestedProfileId = payload.profileId != null ? Number(payload.profileId) : null;
+    const requestedProfileRow = requestedProfileId
+      ? this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(requestedProfileId)
+      : null;
+
+    const cleanName = String(payload.name ?? requestedProfileRow?.name ?? '').trim();
+    const cleanElysium = String(payload.elysiumNetId ?? requestedProfileRow?.elysium_net_id ?? '').trim();
+    const cleanXeMoNet = String(payload.xeMoNetId ?? requestedProfileRow?.xemonet_id ?? '').trim().slice(0, 60);
     if (!cleanName || !cleanElysium) {
       return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب ومعرف ElysiumNet/ XeMoNat.' };
     }
@@ -1500,7 +1943,10 @@ export class ArenaService {
     const safeLevel = Object.values(PlayerLevel).includes(payload.level) ? payload.level : PlayerLevel.INTERMEDIATE;
     const ovrRating = Math.max(60, Math.min(99, Number(payload.ovrRating ?? PLAYER_LEVEL_META[safeLevel].defaultOvr) || 81));
     const clubName = String(payload.clubName || '').trim().slice(0, 50);
-    const avatarUrl = payload.avatarUrl ? String(payload.avatarUrl).trim() : null;
+    const avatarUrl =
+      payload.avatarUrl !== undefined
+        ? (payload.avatarUrl ? String(payload.avatarUrl).trim() : null)
+        : (requestedProfileRow?.avatar_url ?? null);
     const desiredStatus = payload.status === PlayerStatus.PENDING ? PlayerStatus.PENDING : PlayerStatus.APPROVED;
 
     const res = this.withTx(() => {
@@ -1522,17 +1968,28 @@ export class ArenaService {
       }
 
       const now = Date.now();
+      const profileRow = this.resolveOrCreateProfileForPlayer({
+        name: cleanName,
+        elysiumNetId: cleanElysium,
+        xeMoNetId: cleanXeMoNet,
+        avatarUrl,
+        profileId: requestedProfileRow?.id ?? null,
+        now
+      });
+
       const info = this.db
         .prepare(`
           INSERT INTO players (
-            tournament_id, name, elysium_net_id, avatar_url, level,
+            tournament_id, profile_id, name, elysium_net_id, xemonet_id, avatar_url, level,
             ovr_rating, club_name, status, group_id, seed_order, registered_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)
         `)
         .run(
           tournament.id,
+          profileRow?.id ?? null,
           cleanName,
           cleanElysium,
+          cleanXeMoNet,
           avatarUrl,
           safeLevel,
           ovrRating,
@@ -1548,7 +2005,7 @@ export class ArenaService {
           .run(TournamentStatus.REGISTRATION_CLOSED, tournament.id);
       }
 
-      const player = mapPlayer(this.db.prepare('SELECT * FROM players WHERE id = ?').get(info.lastInsertRowid));
+      const player = this.fetchMappedPlayerById(info.lastInsertRowid, true);
       return {
         ok: true,
         status: 201,
@@ -1585,9 +2042,9 @@ export class ArenaService {
 
       const insertStmt = this.db.prepare(`
         INSERT INTO players (
-          tournament_id, name, elysium_net_id, avatar_url, level,
+          tournament_id, profile_id, name, elysium_net_id, xemonet_id, avatar_url, level,
           ovr_rating, club_name, status, group_id, seed_order, registered_at
-        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, 0, ?)
+        ) VALUES (?, ?, ?, ?, '', NULL, ?, ?, ?, ?, NULL, 0, ?)
       `);
       const dupStmt = this.db.prepare('SELECT id FROM players WHERE tournament_id = ? AND LOWER(elysium_net_id) = LOWER(?)');
 
@@ -1618,8 +2075,15 @@ export class ArenaService {
           continue;
         }
 
+        const profileRow = this.resolveOrCreateProfileForPlayer({
+          name: pName,
+          elysiumNetId: pElysium,
+          now: now + importedCount
+        });
+
         insertStmt.run(
           tournament.id,
+          profileRow?.id ?? null,
           pName,
           pElysium,
           PlayerLevel.INTERMEDIATE,
@@ -1667,6 +2131,8 @@ export class ArenaService {
 
     const name = String(payload.name ?? existing.name).trim();
     const elysiumNetId = String(payload.elysiumNetId ?? existing.elysium_net_id).trim();
+    const xeMoNetId =
+      payload.xeMoNetId !== undefined ? String(payload.xeMoNetId || '').trim().slice(0, 60) : (existing.xemonet_id || '');
     if (!name || !elysiumNetId) {
       return { ok: false, status: 400, error: 'الاسم ومعرف ElysiumNet/ XeMoNat مطلوبان.' };
     }
@@ -1687,8 +2153,8 @@ export class ArenaService {
         : existing.avatar_url;
 
     this.db
-      .prepare('UPDATE players SET name = ?, elysium_net_id = ?, avatar_url = ?, club_name = ?, level = ?, ovr_rating = ? WHERE id = ?')
-      .run(name, elysiumNetId, avatarUrl, clubName, level, ovrRating, existing.id);
+      .prepare('UPDATE players SET name = ?, elysium_net_id = ?, xemonet_id = ?, avatar_url = ?, club_name = ?, level = ?, ovr_rating = ? WHERE id = ?')
+      .run(name, elysiumNetId, xeMoNetId, avatarUrl, clubName, level, ovrRating, existing.id);
 
     this.emitChange('player_updated');
     return { ok: true, status: 200, messageAr: 'تم تحديث بيانات اللاعب بنجاح.' };
@@ -2778,6 +3244,7 @@ export class ArenaService {
 
     const tournaments = this.db.prepare('SELECT * FROM tournaments ORDER BY id ASC').all();
     const tournamentGroups = this.db.prepare('SELECT * FROM tournament_groups ORDER BY id ASC').all();
+    const playerProfiles = this.db.prepare('SELECT * FROM player_profiles ORDER BY id ASC').all();
     const players = this.db.prepare('SELECT * FROM players ORDER BY id ASC').all();
     const matches = this.db.prepare('SELECT * FROM matches ORDER BY id ASC').all();
     const races = this.db.prepare('SELECT * FROM races ORDER BY id ASC').all();
@@ -2794,11 +3261,12 @@ export class ArenaService {
       ok: true,
       status: 200,
       backup: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         app: 'CP4_ARENA',
         exportedAt: Date.now(),
         tournaments,
         tournamentGroups,
+        playerProfiles,
         players,
         matches,
         races,
@@ -2832,6 +3300,7 @@ export class ArenaService {
     }
 
     const tournamentGroups = Array.isArray(backup.tournamentGroups) ? backup.tournamentGroups : [];
+    const playerProfiles = Array.isArray(backup.playerProfiles) ? backup.playerProfiles : [];
     const races = Array.isArray(backup.races) ? backup.races : [];
     const raceResults = Array.isArray(backup.raceResults) ? backup.raceResults : [];
     const matchReminders = Array.isArray(backup.matchReminders) ? backup.matchReminders : [];
@@ -2847,6 +3316,7 @@ export class ArenaService {
       this.db.prepare('DELETE FROM match_reminders').run();
       this.db.prepare('DELETE FROM matches').run();
       this.db.prepare('DELETE FROM players').run();
+      this.db.prepare('DELETE FROM player_profiles').run();
       this.db.prepare('DELETE FROM tournament_groups').run();
       this.db.prepare('DELETE FROM tournaments').run();
       this.db.prepare('DELETE FROM revoked_tokens').run();
@@ -2904,18 +3374,38 @@ export class ArenaService {
         insertGroup.run(Number(g.id), Number(g.tournament_id), String(g.name || ''), Number(g.display_order) || 0);
       }
 
+      const insertProfile = this.db.prepare(`
+        INSERT INTO player_profiles (
+          id, cp4_id, name, avatar_url, elysium_net_id, xemonet_id, discord_user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const pp of playerProfiles) {
+        insertProfile.run(
+          Number(pp.id),
+          String(pp.cp4_id || ''),
+          String(pp.name || ''),
+          pp.avatar_url ?? null,
+          String(pp.elysium_net_id || ''),
+          String(pp.xemonet_id || ''),
+          pp.discord_user_id ? String(pp.discord_user_id) : null,
+          Number(pp.created_at) || Date.now()
+        );
+      }
+
       const insertPlayer = this.db.prepare(`
         INSERT INTO players (
-          id, tournament_id, name, elysium_net_id, avatar_url, level,
+          id, tournament_id, profile_id, name, elysium_net_id, xemonet_id, avatar_url, level,
           ovr_rating, club_name, status, group_id, seed_order, registered_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const p of backup.players) {
         insertPlayer.run(
           Number(p.id),
           Number(p.tournament_id),
+          p.profile_id != null ? Number(p.profile_id) : null,
           String(p.name || ''),
           String(p.elysium_net_id || ''),
+          String(p.xemonet_id || ''),
           p.avatar_url ?? null,
           String(p.level || PlayerLevel.INTERMEDIATE),
           Number(p.ovr_rating) || 81,
@@ -3120,10 +3610,13 @@ export class ArenaService {
       }
 
       this.db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_tournament_seeded', '1')").run();
+      backfillPlayerProfiles(this.db);
+      syncCp4ProfileSequence(this.db);
 
       for (const table of [
         'tournaments',
         'tournament_groups',
+        'player_profiles',
         'players',
         'matches',
         'races',

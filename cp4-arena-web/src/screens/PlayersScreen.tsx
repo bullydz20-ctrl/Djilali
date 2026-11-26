@@ -149,19 +149,44 @@ export function PlayersScreen({
                 <div
                   style={{
                     marginTop: 10,
-                    fontWeight: 800,
-                    fontSize: '0.96rem',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis'
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 6
                   }}
                 >
-                  {player.name}
+                  <div
+                    style={{
+                      fontWeight: 800,
+                      fontSize: '0.96rem',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis'
+                    }}
+                  >
+                    {player.name}
+                  </div>
+                  {player.cp4Id && (
+                    <span
+                      className="score-num"
+                      style={{
+                        fontSize: '0.66rem',
+                        color: 'var(--championship-gold)',
+                        border: '1px solid rgba(245, 184, 46, 0.4)',
+                        borderRadius: 6,
+                        padding: '1px 5px',
+                        flexShrink: 0
+                      }}
+                    >
+                      {player.cp4Id}
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.76rem', color: 'var(--cyber-sky)', marginTop: 2 }}>
                   <Shield size={13} />
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {player.elysiumNetId}
+                    {player.xeMoNetId ? ` • ${player.xeMoNetId}` : ''}
                   </span>
                 </div>
                 {player.clubName && (

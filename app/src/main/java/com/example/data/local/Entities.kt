@@ -47,6 +47,26 @@ data class TournamentEntity(
 )
 
 @Entity(
+    tableName = "player_profiles",
+    indices = [
+        Index(value = ["cp4Id"], unique = true),
+        Index(value = ["discordUserId"], unique = true)
+    ]
+)
+data class PlayerProfileEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val cp4Id: String,
+    val name: String,
+    val avatarUri: String? = null,
+    val elysiumNetId: String = "",
+    val xeMoNetId: String = "",
+    val discordUserId: String? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val tournamentsCount: Int = 0
+)
+
+@Entity(
     tableName = "players",
     foreignKeys = [
         ForeignKey(
@@ -59,7 +79,8 @@ data class TournamentEntity(
     indices = [
         Index(value = ["tournamentId"]),
         Index(value = ["tournamentId", "elysiumNetId"], unique = true),
-        Index(value = ["groupId"])
+        Index(value = ["groupId"]),
+        Index(value = ["profileId"])
     ]
 )
 data class PlayerEntity(
@@ -74,7 +95,11 @@ data class PlayerEntity(
     val status: PlayerStatus = PlayerStatus.PENDING,
     val groupId: Long? = null,
     val seedOrder: Int = 0,
-    val registeredAt: Long = System.currentTimeMillis()
+    val registeredAt: Long = System.currentTimeMillis(),
+    val profileId: Long? = null,
+    val cp4Id: String? = null,
+    val xeMoNetId: String = "",
+    val discordUserId: String? = null
 )
 
 typealias ParticipantEntity = PlayerEntity

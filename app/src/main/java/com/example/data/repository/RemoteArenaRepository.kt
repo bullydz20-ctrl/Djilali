@@ -9,6 +9,8 @@ import com.example.api.ApiResult
 import com.example.api.ApiService
 import com.example.api.AutoScheduleResult
 import com.example.api.BulkImportResult
+import com.example.api.DiscordGuildMemberDto
+import com.example.api.PlayerProfileDto
 import com.example.api.RaceEntry
 import com.example.api.RaceResultDraft
 import com.example.api.RemoteArenaState
@@ -434,7 +436,10 @@ class RemoteArenaRepository(
         level: PlayerLevel,
         ovrRating: Int,
         clubName: String,
-        autoApprove: Boolean
+        autoApprove: Boolean,
+        profileId: Long? = null,
+        xeMoNetId: String = "",
+        discordUserId: String? = null
     ): RepoResult<PlayerEntity> = executeAndRefresh {
         apiService.adminAddPlayer(
             tournamentId = tournamentId,
@@ -444,7 +449,82 @@ class RemoteArenaRepository(
             level = level,
             ovrRating = ovrRating,
             clubName = clubName,
-            autoApprove = autoApprove
+            autoApprove = autoApprove,
+            profileId = profileId,
+            xeMoNetId = xeMoNetId,
+            discordUserId = discordUserId
+        )
+    }
+
+    suspend fun fetchDiscordOAuthStartUrl(): RepoResult<String> {
+        return when (val res = apiService.fetchDiscordOAuthStartUrl()) {
+            is ApiResult.Success -> {
+                if (res.data.isBlank()) {
+                    RepoResult.Error("تعذر الحصول على رابط Discord OAuth من الخادم.")
+                } else {
+                    RepoResult.Success(res.data, res.messageAr)
+                }
+            }
+            is ApiResult.Error -> RepoResult.Error(res.messageAr, res.errorCode, res.existingProfile)
+        }
+    }
+
+    suspend fun fetchDiscordGuildMembers(): RepoResult<List<DiscordGuildMemberDto>> {
+        return when (val res = apiService.fetchDiscordGuildMembers()) {
+            is ApiResult.Success -> RepoResult.Success(res.data, res.messageAr)
+            is ApiResult.Error -> {
+                if (res.statusCode == 401) {
+                    sessionPrefs.clearRemoteAuthSession()
+                    refreshState()
+                }
+                RepoResult.Error(res.messageAr, res.errorCode, res.existingProfile)
+            }
+        }
+    }
+
+    suspend fun createPlayerProfile(
+        name: String,
+        avatarUri: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?
+    ): RepoResult<PlayerProfileDto> = executeAndRefresh {
+        apiService.createPlayerProfile(
+            name = name,
+            avatarUrl = avatarUri,
+            elysiumNetId = elysiumNetId,
+            xeMoNetId = xeMoNetId,
+            discordUserId = discordUserId
+        )
+    }
+
+    suspend fun updatePlayerProfile(
+        id: Long,
+        name: String,
+        avatarUri: String?,
+        elysiumNetId: String,
+        xeMoNetId: String,
+        discordUserId: String?
+    ): RepoResult<PlayerProfileDto> = executeAndRefresh {
+        apiService.updatePlayerProfile(
+            id = id,
+            name = name,
+            avatarUrl = avatarUri,
+            elysiumNetId = elysiumNetId,
+            xeMoNetId = xeMoNetId,
+            discordUserId = discordUserId
+        )
+    }
+
+    suspend fun mergePlayerProfiles(
+        sourceProfileId: Long,
+        targetProfileId: Long,
+        confirmIdentity: Boolean
+    ): RepoResult<PlayerProfileDto> = executeAndRefresh {
+        apiService.mergePlayerProfiles(
+            sourceProfileId = sourceProfileId,
+            targetProfileId = targetProfileId,
+            confirmIdentity = confirmIdentity
         )
     }
 
@@ -666,7 +746,7 @@ class RemoteArenaRepository(
                     sessionPrefs.clearRemoteAuthSession()
                     refreshState()
                 }
-                RepoResult.Error(res.messageAr)
+                RepoResult.Error(res.messageAr, res.errorCode, res.existingProfile)
             }
         }
     }

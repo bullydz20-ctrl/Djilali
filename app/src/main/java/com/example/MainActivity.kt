@@ -490,11 +490,53 @@ fun FifaTournamentApp(
                                     onSaveTournament = viewModel::saveTournamentSettings,
                                     onCreateFreshTournament = viewModel::createFreshTournament,
                                     onDeleteTournament = viewModel::deleteCurrentTournament,
-                                    onAdminAddPlayer = viewModel::adminAddPlayer,
+                                    onAdminAddPlayer = { name, elysium, avatar, level, ovr, club, autoApprove, onSuccess ->
+                                        viewModel.adminAddPlayer(
+                                            name = name,
+                                            elysiumNetId = elysium,
+                                            avatarUri = avatar,
+                                            level = level,
+                                            ovrRating = ovr,
+                                            clubName = club,
+                                            autoApprove = autoApprove,
+                                            onSuccess = onSuccess
+                                        )
+                                    },
+                                    onAdminAddPlayerWithProfile = { name, elysium, avatar, level, ovr, club, autoApprove, profileId, xeMoNetId, discordUserId, onSuccess ->
+                                        viewModel.adminAddPlayer(
+                                            name = name,
+                                            elysiumNetId = elysium,
+                                            avatarUri = avatar,
+                                            level = level,
+                                            ovrRating = ovr,
+                                            clubName = club,
+                                            autoApprove = autoApprove,
+                                            profileId = profileId,
+                                            xeMoNetId = xeMoNetId,
+                                            discordUserId = discordUserId,
+                                            onSuccess = onSuccess
+                                        )
+                                    },
                                     onBulkImport = viewModel::bulkImportPlayers,
                                     onUpdatePlayerStatus = viewModel::updatePlayerStatus,
                                     onUpdatePlayerDetails = viewModel::updatePlayerDetails,
                                     onDeletePlayer = viewModel::deletePlayer,
+                                    onStartDiscordOAuth = {
+                                        viewModel.startDiscordOAuth { authUrl ->
+                                            try {
+                                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)))
+                                            } catch (_: Exception) {
+                                                clipboardManager.setText(AnnotatedString(authUrl))
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar("تعذر فتح المتصفح، تم نسخ رابط Discord OAuth للحافظة.")
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onLoadDiscordGuildMembers = viewModel::loadDiscordGuildMembers,
+                                    onCreatePlayerProfile = viewModel::createPlayerProfile,
+                                    onUpdatePlayerProfile = viewModel::updatePlayerProfile,
+                                    onMergePlayerProfiles = viewModel::mergePlayerProfiles,
                                     onRunDraw = viewModel::runDraw,
                                     onGenerateKnockoutFromStandings = viewModel::generateKnockoutFromStandings,
                                     onEditMatch = { editingMatch = it },

@@ -2,6 +2,7 @@ package com.example
 
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -374,14 +375,15 @@ class BracketInteractiveTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("bracket_full_tree").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_zoom_percent").assertTextEquals("100%")
         composeRule.onNodeWithTag("bracket_wing_filter_right").assertIsDisplayed()
         composeRule.onNodeWithTag("bracket_wing_filter_left").assertIsDisplayed()
         composeRule.onNodeWithTag("bracket_zoom_in").assertIsDisplayed()
         composeRule.onNodeWithTag("bracket_zoom_out").assertIsDisplayed()
         composeRule.onNodeWithTag("bracket_zoom_fit").assertIsDisplayed()
         composeRule.onNodeWithTag("bracket_zoom_reset").assertIsDisplayed()
-        composeRule.onNodeWithTag("bracket_round_header_FINAL").assertIsDisplayed()
-        composeRule.onNodeWithTag("bracket_champion_pedestal").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_round_header_FINAL").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_champion_pedestal").performScrollTo().assertIsDisplayed()
 
         // Switch to Right Wing focused view, then Left Wing focused view
         composeRule.onNodeWithTag("bracket_wing_filter_right").performClick()

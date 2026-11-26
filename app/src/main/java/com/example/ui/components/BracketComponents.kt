@@ -529,7 +529,7 @@ private fun BracketSlotRow(
                     else -> Color.Transparent
                 }
             )
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -537,31 +537,31 @@ private fun BracketSlotRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .weight(1f)
-                .padding(end = 4.dp)
+                .padding(end = 6.dp)
         ) {
             PlayerAvatar(
                 avatarUri = player?.avatarUri,
                 playerName = player?.name ?: "؟",
-                size = if (isFinal) 26.dp else 23.dp,
+                size = if (isFinal) 32.dp else 28.dp,
                 borderColor = when {
                     isWinner -> ChampionshipGold
                     isEliminated -> CrimsonLoss.copy(alpha = 0.45f)
-                    player != null -> CyberSky.copy(alpha = 0.55f)
-                    else -> CardBorder.copy(alpha = 0.4f)
+                    player != null -> CyberSky.copy(alpha = 0.65f)
+                    else -> CardBorder.copy(alpha = 0.5f)
                 }
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = player?.name ?: "بانتظار المتأهل",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = when {
                         isWinner -> ChampionshipGold
                         isEliminated -> TextMuted
                         player != null -> TextPrimary
                         else -> TextMuted
                     },
-                    fontWeight = if (isWinner) FontWeight.Bold else FontWeight.Normal,
+                    fontWeight = if (isWinner) FontWeight.Bold else FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -570,21 +570,21 @@ private fun BracketSlotRow(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             if (isWinner) {
                 Icon(
                     imageVector = if (isFinal) Icons.Default.EmojiEvents else Icons.Default.CheckCircle,
                     contentDescription = "فائز",
                     tint = ChampionshipGold,
-                    modifier = Modifier.size(13.dp)
+                    modifier = Modifier.size(15.dp)
                 )
             } else if (isEliminated) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "خاسر",
-                    tint = CrimsonLoss.copy(alpha = 0.7f),
-                    modifier = Modifier.size(12.dp)
+                    tint = CrimsonLoss.copy(alpha = 0.78f),
+                    modifier = Modifier.size(13.dp)
                 )
             }
 
@@ -594,20 +594,20 @@ private fun BracketSlotRow(
                     isEliminated -> ObsidianVoid.copy(alpha = 0.6f)
                     else -> ElevatedNavy
                 },
-                shape = RoundedCornerShape(6.dp),
-                modifier = Modifier.requiredWidthIn(min = 26.dp)
+                shape = RoundedCornerShape(7.dp),
+                modifier = Modifier.requiredWidthIn(min = 32.dp)
             ) {
                 Text(
                     text = scoreText,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     color = when {
                         isWinner -> ChampionshipGold
                         isEliminated -> TextMuted
                         else -> TextPrimary
                     },
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.ExtraBold,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                 )
             }
         }
@@ -640,9 +640,9 @@ fun SymmetricalConnectorCanvas(
 
         val childSlotPx = with(density) { childSlotHeight.toPx() }
         val parentSlotPx = with(density) { parentSlotHeight.toPx() }
-        val baseStroke = 2.2.dp.toPx()
-        val goldStroke = 2.8.dp.toPx()
-        val goldGlow = 5.5.dp.toPx()
+        val baseStroke = 2.8.dp.toPx()
+        val goldStroke = 3.6.dp.toPx()
+        val goldGlow = 7.5.dp.toPx()
 
         for (pairIdx in 0 until nextSideMatchCount) {
             val topChildY = childSlotPx * (pairIdx * 2) + childSlotPx / 2f
@@ -740,7 +740,7 @@ private fun DrawScope.drawBranchLine(
     if (hasWinner) {
         drawPath(
             path = path,
-            color = ChampionshipGold.copy(alpha = 0.22f),
+            color = ChampionshipGold.copy(alpha = 0.28f),
             style = Stroke(width = goldGlow, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
         drawPath(
@@ -752,7 +752,7 @@ private fun DrawScope.drawBranchLine(
         val isReady = match?.player1Id != null && match.player2Id != null
         drawPath(
             path = path,
-            color = if (isReady) ElectricCobalt.copy(alpha = 0.58f) else CardBorder,
+            color = if (isReady) CyberSky.copy(alpha = 0.72f) else TextMuted.copy(alpha = 0.55f),
             style = Stroke(width = baseStroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
     }
@@ -777,25 +777,25 @@ fun SemiToFinalConnectorCanvas(
         val isReady = semiMatch?.player1Id != null && semiMatch.player2Id != null
         if (hasWinner) {
             drawLine(
-                color = ChampionshipGold.copy(alpha = 0.25f),
+                color = ChampionshipGold.copy(alpha = 0.28f),
                 start = Offset(0f, y),
                 end = Offset(size.width, y),
-                strokeWidth = 6.dp.toPx(),
+                strokeWidth = 7.5.dp.toPx(),
                 cap = StrokeCap.Round
             )
             drawLine(
                 color = ChampionshipGold,
                 start = Offset(0f, y),
                 end = Offset(size.width, y),
-                strokeWidth = 3.dp.toPx(),
+                strokeWidth = 3.6.dp.toPx(),
                 cap = StrokeCap.Round
             )
         } else {
             drawLine(
-                color = if (isReady) ElectricCobalt.copy(alpha = 0.65f) else CardBorder,
+                color = if (isReady) CyberSky.copy(alpha = 0.75f) else TextMuted.copy(alpha = 0.55f),
                 start = Offset(0f, y),
                 end = Offset(size.width, y),
-                strokeWidth = 2.4.dp.toPx(),
+                strokeWidth = 2.8.dp.toPx(),
                 cap = StrokeCap.Round
             )
         }

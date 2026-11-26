@@ -39,7 +39,11 @@ import java.util.UUID
 
 sealed class RepoResult<out T> {
     data class Success<T>(val data: T, val messageAr: String = "") : RepoResult<T>()
-    data class Error(val messageAr: String) : RepoResult<Nothing>()
+    data class Error(
+        val messageAr: String,
+        val code: String? = null,
+        val existingProfile: com.example.api.PlayerProfileDto? = null
+    ) : RepoResult<Nothing>()
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)

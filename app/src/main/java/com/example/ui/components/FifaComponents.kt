@@ -664,13 +664,34 @@ fun FifaPlayerCard(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                Text(
-                    text = player.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = player.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    player.cp4Id?.takeIf { it.isNotBlank() }?.let { cp4 ->
+                        Surface(
+                            color = ChampionshipGold.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = cp4,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ChampionshipGold,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
@@ -680,8 +701,9 @@ fun FifaPlayerCard(
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
+                    val xemoSuffix = if (player.xeMoNetId.isNotBlank()) " • ${player.xeMoNetId}" else ""
                     Text(
-                        text = "ElysiumNet: ${player.elysiumNetId}",
+                        text = "ElysiumNet: ${player.elysiumNetId}$xemoSuffix",
                         style = MaterialTheme.typography.bodySmall,
                         color = CyberSky,
                         maxLines = 1,

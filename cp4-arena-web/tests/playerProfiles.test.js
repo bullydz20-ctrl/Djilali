@@ -544,6 +544,8 @@ test('Discord OAuth session cookie, auto-filled tournament registration with man
     assert.equal(callbackRes.status, 200);
     assert.ok(callbackRes.text.includes('CP4-000001'));
     assert.ok(callbackRes.text.includes('/?register=1'));
+    assert.ok(callbackRes.text.includes('__cp4CloseAndReturn'));
+    assert.ok(callbackRes.text.includes('href="/?register=1"'));
 
     const setCookieHeader = callbackRes.headers.get('set-cookie') || '';
     const cookieMatch = setCookieHeader.match(/cp4_discord_session=([^;]+)/);

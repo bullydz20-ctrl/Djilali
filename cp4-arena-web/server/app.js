@@ -114,6 +114,7 @@ function renderDiscordOAuthHtml({
 }) {
   const safeOrigin = typeof origin === 'string' && /^https?:\/\/[^/\s]+$/i.test(origin) ? origin : '*';
   const safeReturnTo = sanitizeRelativeReturnTo(returnTo);
+  const targetReturnTo = safeReturnTo || '/';
   const postPayload = JSON.stringify({
     type: 'cp4_discord_oauth_result',
     ok: Boolean(ok),
@@ -143,7 +144,7 @@ function renderDiscordOAuthHtml({
     h1 { margin: 0 0 10px; font-size: 20px; color: ${ok ? '#f5b82e' : '#fca5a5'}; }
     p { margin: 0 0 18px; line-height: 1.7; color: #cbd5e1; font-size: 15px; }
     .cp4 { font-family: monospace; font-size: 20px; font-weight: 800; color: #38bdf8; background: #161f3b; border: 1px solid #2563eb; border-radius: 12px; padding: 10px 14px; margin: 12px 0 18px; }
-    button { background: #2563eb; color: #fff; border: 0; border-radius: 12px; padding: 12px 20px; font-weight: 700; cursor: pointer; font-size: 14px; }
+    .btn-return { display: inline-block; background: #2563eb; color: #fff; border: 0; border-radius: 12px; padding: 12px 22px; font-weight: 700; cursor: pointer; font-size: 14px; text-decoration: none; }
   </style>
 </head>
 <body>
@@ -152,21 +153,44 @@ function renderDiscordOAuthHtml({
     <h1>${escapeHtml(title)}</h1>
     <p>${escapeHtml(message)}</p>
     ${profile?.cp4Id ? `<div class="cp4">${escapeHtml(profile.cp4Id)} — ${escapeHtml(profile.name)}</div>` : ''}
-    <button type="button" onclick="if (window.opener && !window.opener.closed) { window.close(); } else { window.location.href = ${JSON.stringify(safeReturnTo || '/')}; }">إغلاق والعودة</button>
+    <a class="btn-return" href="${escapeHtml(targetReturnTo)}" onclick="event.preventDefault(); window.__cp4CloseAndReturn();">إغلاق والعودة</a>
   </div>
   <script>
     (function () {
+      var targetUrl = ${JSON.stringify(targetReturnTo)};
+      var hasExplicitReturnTo = ${JSON.stringify(Boolean(safeReturnTo))};
+      var payload = ${postPayload};
+      var originTarget = ${JSON.stringify(safeOrigin)};
       var hasOpener = false;
-      try {
-        if (window.opener && !window.opener.closed) {
-          hasOpener = true;
-          window.opener.postMessage(${postPayload}, ${JSON.stringify(safeOrigin)});
+      function notifyOpener() {
+        try {
+          if (window.opener && !window.opener.closed) {
+            hasOpener = true;
+            window.opener.postMessage(payload, originTarget);
+            return true;
+          }
+        } catch (_) {}
+        return false;
+      }
+      notifyOpener();
+
+      window.__cp4CloseAndReturn = function () {
+        var opened = notifyOpener();
+        if (opened) {
+          try { window.close(); } catch (_) {}
+          setTimeout(function () {
+            if (!window.closed) {
+              window.location.replace(targetUrl);
+            }
+          }, 150);
+        } else {
+          window.location.replace(targetUrl);
         }
-      } catch (_) {}
-      var returnTo = ${JSON.stringify(safeReturnTo)};
-      if (!hasOpener && returnTo) {
+      };
+
+      if (!hasOpener && (hasExplicitReturnTo || ${JSON.stringify(Boolean(ok))})) {
         setTimeout(function () {
-          window.location.replace(returnTo);
+          window.location.replace(targetUrl);
         }, 450);
       }
     })();

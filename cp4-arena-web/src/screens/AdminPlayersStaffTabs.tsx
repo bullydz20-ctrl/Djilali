@@ -131,7 +131,15 @@ export function AdminPlayersTab({
   async function handleStartDiscordOAuth() {
     setOauthBusy(true);
     try {
-      const res = await fetchDiscordOAuthStartUrlApi();
+      const res = await fetchDiscordOAuthStartUrlApi('/');
+      const preferSameTab =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(pointer: coarse)').matches ||
+        window.innerWidth < 900;
+      if (preferSameTab) {
+        window.location.href = res.url;
+        return;
+      }
       const popup = window.open(res.url, 'cp4_discord_oauth', 'width=520,height=740');
       if (!popup) {
         window.location.href = res.url;

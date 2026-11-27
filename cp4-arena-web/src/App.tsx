@@ -313,12 +313,20 @@ export default function App() {
         return;
       }
       const startUrl = `/api/discord/oauth/start?returnTo=${encodeURIComponent(returnToPath)}`;
+      const preferSameTab =
+        isStandalone ||
+        window.matchMedia('(pointer: coarse)').matches ||
+        window.innerWidth < 900;
+      if (preferSameTab) {
+        window.location.href = startUrl;
+        return;
+      }
       const popup = window.open(startUrl, 'cp4_discord_oauth', 'width=520,height=740');
       if (!popup) {
         window.location.href = startUrl;
       }
     },
-    [state?.discordStatus, showToast]
+    [state?.discordStatus, isStandalone, showToast]
   );
 
   const handleLogoutDiscord = useCallback(async () => {

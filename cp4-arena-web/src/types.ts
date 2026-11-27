@@ -350,6 +350,104 @@ export interface AuditLogEntry {
   createdAt: number;
 }
 
+export type FriendlyMatchStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export interface RegisteredPlayerDirectoryEntry {
+  id: number;
+  cp4Id: string;
+  name: string;
+  avatarUrl: string | null;
+  elysiumNetId: string;
+  xeMoNetId: string;
+}
+
+export interface FriendlyMatch {
+  id: number;
+  gameTitle: string;
+  player1ProfileId: number;
+  player2ProfileId: number;
+  player1Name: string;
+  player1Cp4Id: string;
+  player1AvatarUrl: string | null;
+  player2Name: string;
+  player2Cp4Id: string;
+  player2AvatarUrl: string | null;
+  score1: number;
+  score2: number;
+  winnerProfileId: number | null;
+  matchDate: string;
+  proofImageUrl: string | null;
+  submittedByProfileId: number;
+  submittedByName: string;
+  status: FriendlyMatchStatus;
+  reviewNote: string | null;
+  reviewedBy: string | null;
+  reviewedAt: number | null;
+  createdAt: number;
+}
+
+export interface PlayerVictimEntry {
+  opponentProfileId: number;
+  opponentName: string;
+  opponentCp4Id: string;
+  opponentAvatarUrl: string | null;
+  gameTitle: string;
+  winsCount: number;
+  lossesCount: number;
+  drawsCount: number;
+  tournamentWins: number;
+  friendlyWins: number;
+  latestWinAt: number;
+}
+
+export interface PlayerH2HRecord {
+  opponentProfileId: number;
+  opponentName: string;
+  opponentCp4Id: string;
+  opponentAvatarUrl: string | null;
+  gameTitle: string;
+  winsCount: number;
+  lossesCount: number;
+  drawsCount: number;
+  tournamentWins: number;
+  friendlyWins: number;
+  matchesCount: number;
+  isQualifiedVictim: boolean;
+}
+
+export interface PlayerUnifiedStats {
+  profileId: number;
+  cp4Id: string;
+  totalMatches: number;
+  tournamentMatches: number;
+  friendlyMatches: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  goalsScored: number;
+  goalsConceded: number;
+  winRatePercent: number;
+  victimsCount: number;
+  h2hRecords: PlayerH2HRecord[];
+}
+
+export interface VictimAchievement {
+  key: string;
+  achieverProfileId: number;
+  achieverName: string;
+  achieverCp4Id: string;
+  achieverAvatarUrl: string | null;
+  victimProfileId: number;
+  victimName: string;
+  victimCp4Id: string;
+  victimAvatarUrl: string | null;
+  gameTitle: string;
+  winsCount: number;
+  tournamentWins: number;
+  friendlyWins: number;
+  latestWinAt: number;
+}
+
 export interface ArenaState {
   tournaments: Tournament[];
   tournament: Tournament | null;
@@ -384,6 +482,11 @@ export interface ArenaState {
   playerProfiles?: PlayerProfile[];
   discordStatus?: DiscordStatus;
   currentDiscordProfile?: PlayerProfile | null;
+  registeredPlayersDirectory?: RegisteredPlayerDirectoryEntry[];
+  friendlyMatches?: FriendlyMatch[];
+  victimsAchievements?: VictimAchievement[];
+  playerVictimsMap?: Record<string, PlayerVictimEntry[]>;
+  playerUnifiedStatsMap?: Record<string, PlayerUnifiedStats>;
 }
 
 export const FORMAT_LABELS: Record<TournamentFormat, string> = {

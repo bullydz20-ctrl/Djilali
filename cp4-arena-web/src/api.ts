@@ -702,3 +702,39 @@ export async function restoreBackupApi(backupData: unknown) {
   }
   return res;
 }
+
+export async function submitFriendlyMatchApi(payload: {
+  gameTitle: string;
+  opponentProfileId: number;
+  score1: number;
+  score2: number;
+  matchDate: string;
+  proofImageUrl?: string | null;
+}) {
+  return apiRequest<{ ok: boolean; friendlyMatch: import('./types').FriendlyMatch; messageAr: string }>(
+    '/api/friendly-matches',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function reviewFriendlyMatchApi(
+  matchId: number,
+  payload: {
+    action: 'APPROVE' | 'REJECT';
+    reviewNote?: string;
+    score1?: number;
+    score2?: number;
+  }
+) {
+  return apiRequest<{ ok: boolean; friendlyMatch: import('./types').FriendlyMatch; messageAr: string }>(
+    `/api/friendly-matches/${matchId}/review`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+

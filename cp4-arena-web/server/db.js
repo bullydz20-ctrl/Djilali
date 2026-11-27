@@ -30,6 +30,35 @@ export function openDatabase(customPath) {
   }
 
   const db = new DatabaseSync(resolvedPath);
+
+  if (resolvedPath !== ':memory:' && fs.existsSync(resolvedPath)) {
+    try {
+      const hasTournaments = Boolean(
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()
+      );
+      const hasFriendlyMatches = Boolean(
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'friendly_matches'").get()
+      );
+      if (hasTournaments && !hasFriendlyMatches) {
+        try {
+          db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+        } catch {
+          // ignore checkpoint error if db is not in WAL yet
+        }
+        const stat = fs.statSync(resolvedPath);
+        if (stat.size > 0) {
+          const backupDir = path.join(path.dirname(resolvedPath), 'backups');
+          fs.mkdirSync(backupDir, { recursive: true });
+          const baseName = path.basename(resolvedPath, path.extname(resolvedPath));
+          const backupPath = path.join(backupDir, `${baseName}-pre-friendly-${Date.now()}.db`);
+          fs.copyFileSync(resolvedPath, backupPath);
+        }
+      }
+    } catch (err) {
+      console.warn('[CP4 ARENA] Automatic pre-migration backup skipped:', err?.message || err);
+    }
+  }
+
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
@@ -227,6 +256,28 @@ export function openDatabase(customPath) {
       dnf INTEGER NOT NULL DEFAULT 0,
       UNIQUE(race_id, player_id)
     );
+
+    CREATE TABLE IF NOT EXISTS friendly_matches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_title TEXT NOT NULL,
+      player1_profile_id INTEGER NOT NULL REFERENCES player_profiles(id) ON DELETE CASCADE,
+      player2_profile_id INTEGER NOT NULL REFERENCES player_profiles(id) ON DELETE CASCADE,
+      score1 INTEGER NOT NULL,
+      score2 INTEGER NOT NULL,
+      winner_profile_id INTEGER,
+      match_date TEXT NOT NULL,
+      proof_image_url TEXT,
+      submitted_by_profile_id INTEGER NOT NULL REFERENCES player_profiles(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      review_note TEXT,
+      reviewed_by TEXT,
+      reviewed_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_friendly_p1 ON friendly_matches(player1_profile_id);
+    CREATE INDEX IF NOT EXISTS idx_friendly_p2 ON friendly_matches(player2_profile_id);
+    CREATE INDEX IF NOT EXISTS idx_friendly_status ON friendly_matches(status);
   `);
 
   ensureSchemaMigrations(db);

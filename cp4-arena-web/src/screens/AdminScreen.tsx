@@ -11,6 +11,7 @@ import {
   RotateCcw,
   Settings,
   Shield,
+  Swords,
   Trophy,
   Upload,
   UserCog,
@@ -22,6 +23,7 @@ import { adminHasPermission, evaluatePinStrengthClient } from '../types';
 import type { ArenaState, Match, PlayerLevel, PlayerProfile, PlayerStatus, RaceEntry, RaceStage } from '../types';
 import { isRacingFormat } from '../components/RacingSection';
 import { AdminAuthGate } from './AdminAuthGate';
+import { AdminFriendlyMatchesTab } from './AdminFriendlyMatchesTab';
 import {
   AdminAuditLogTab,
   AdminChampionTab,
@@ -31,7 +33,15 @@ import {
 } from './AdminPlayersStaffTabs';
 import { AdminDrawTab, AdminTournamentSettingsTab } from './AdminTournamentDrawTabs';
 
-type SectionKey = 'TOURNAMENT' | 'PLAYERS' | 'DRAW' | 'MATCHES' | 'SUB_ADMINS' | 'CHAMPION' | 'AUDIT';
+type SectionKey =
+  | 'TOURNAMENT'
+  | 'PLAYERS'
+  | 'DRAW'
+  | 'MATCHES'
+  | 'FRIENDLY_MATCHES'
+  | 'SUB_ADMINS'
+  | 'CHAMPION'
+  | 'AUDIT';
 
 export function AdminScreen({
   state,
@@ -70,6 +80,7 @@ export function AdminScreen({
   onUpdatePlayerProfile,
   onMergePlayerProfiles,
   onLinkPlayerDiscord,
+  onReviewFriendlyMatch,
   onNotify
 }: {
   state: ArenaState;
@@ -170,6 +181,10 @@ export function AdminScreen({
       unlink?: boolean;
     }
   ) => Promise<void>;
+  onReviewFriendlyMatch: (
+    matchId: number,
+    payload: { action: 'APPROVE' | 'REJECT'; reviewNote?: string; score1?: number; score2?: number }
+  ) => Promise<void>;
   onNotify: (msg: string) => void;
 }) {
   const admin = state.currentAdmin;
@@ -201,6 +216,15 @@ export function AdminScreen({
     }
     if (adminHasPermission(admin, 'EDIT_SCORES')) {
       allowedSections.push({ key: 'MATCHES', label: isRacingFormat(state.tournament?.format) ? 'السباقات' : 'المباريات', icon: <Trophy size={15} /> });
+    }
+    if (adminHasPermission(admin, 'EDIT_SCORES') || adminHasPermission(admin, 'MANAGE_PLAYERS')) {
+      const pendingFriendlyCount = (state.friendlyMatches || []).filter((fm) => fm.status === 'PENDING').length;
+      const friendlyBadge = pendingFriendlyCount > 0 ? ` (${pendingFriendlyCount})` : '';
+      allowedSections.push({
+        key: 'FRIENDLY_MATCHES',
+        label: `المواجهات الودية${friendlyBadge}`,
+        icon: <Swords size={15} />
+      });
     }
     if (admin.role === 'HEAD_ADMIN') {
       const subCount = state.adminAccounts.filter((a) => a.role === 'SUB_ADMIN').length;
@@ -526,6 +550,12 @@ export function AdminScreen({
                 onEditRace={onEditRace}
                 onGenerateFinalRace={onGenerateFinalRace}
                 onDeleteRace={onDeleteRace}
+              />
+            )}
+            {selected === 'FRIENDLY_MATCHES' && (
+              <AdminFriendlyMatchesTab
+                friendlyMatches={state.friendlyMatches || []}
+                onReviewFriendlyMatch={onReviewFriendlyMatch}
               />
             )}
             {selected === 'SUB_ADMINS' && (

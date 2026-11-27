@@ -99,6 +99,12 @@ export const PLAYER_STATUS_META = {
   REJECTED: { labelAr: 'مرفوض' }
 };
 
+export const FriendlyMatchStatus = {
+  PENDING: 'PENDING',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED'
+};
+
 export const PlayerLevel = {
   BEGINNER: 'BEGINNER',
   INTERMEDIATE: 'INTERMEDIATE',

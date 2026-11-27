@@ -2,6 +2,7 @@ import {
   AdminRole,
   DEFAULT_RACING_POINTS,
   DrawMode,
+  FriendlyMatchStatus,
   GAME_CATALOG,
   KnockoutTieRule,
   MATCH_STAGE_META,
@@ -24,6 +25,7 @@ import {
   computeSeasonLeaderboard,
   computeStandings,
   computeTournamentStats,
+  computeVictimsAndUnifiedRecords,
   distributePlayersIntoGroups,
   distributeSeededSlotsWithByes,
   generateRoundRobinMatches,
@@ -298,6 +300,41 @@ function mapReminder(row) {
     leadMinutes: row.lead_minutes,
     isEnabled: Boolean(row.is_enabled)
   };
+}
+
+function mapFriendlyMatch(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    gameTitle: row.game_title,
+    player1ProfileId: row.player1_profile_id,
+    player2ProfileId: row.player2_profile_id,
+    player1Name: row.p1_name || 'لاعب 1',
+    player1Cp4Id: row.p1_cp4_id || '',
+    player1AvatarUrl: row.p1_avatar_url ?? null,
+    player2Name: row.p2_name || 'لاعب 2',
+    player2Cp4Id: row.p2_cp4_id || '',
+    player2AvatarUrl: row.p2_avatar_url ?? null,
+    score1: Number(row.score1),
+    score2: Number(row.score2),
+    winnerProfileId: row.winner_profile_id ?? null,
+    matchDate: row.match_date,
+    proofImageUrl: row.proof_image_url ?? null,
+    submittedByProfileId: row.submitted_by_profile_id,
+    submittedByName: row.sub_name || row.p1_name || 'لاعب',
+    status: row.status,
+    reviewNote: row.review_note ?? null,
+    reviewedBy: row.reviewed_by ?? null,
+    reviewedAt: row.reviewed_at ?? null,
+    createdAt: row.created_at
+  };
+}
+
+function reassignFriendlyMatchProfiles(db, fromProfileId, toProfileId) {
+  db.prepare('UPDATE friendly_matches SET player1_profile_id = ? WHERE player1_profile_id = ?').run(toProfileId, fromProfileId);
+  db.prepare('UPDATE friendly_matches SET player2_profile_id = ? WHERE player2_profile_id = ?').run(toProfileId, fromProfileId);
+  db.prepare('UPDATE friendly_matches SET winner_profile_id = ? WHERE winner_profile_id = ?').run(toProfileId, fromProfileId);
+  db.prepare('UPDATE friendly_matches SET submitted_by_profile_id = ? WHERE submitted_by_profile_id = ?').run(toProfileId, fromProfileId);
 }
 
 function mapAdminRaw(row) {
@@ -1556,6 +1593,7 @@ export class ArenaService {
 
       this.db.prepare('UPDATE player_profiles SET discord_user_id = NULL WHERE id = ?').run(currentProfile.id);
       this.db.prepare('UPDATE players SET profile_id = ? WHERE profile_id = ?').run(legacyProfile.id, currentProfile.id);
+      reassignFriendlyMatchProfiles(this.db, currentProfile.id, legacyProfile.id);
       this.db
         .prepare('UPDATE player_profiles SET discord_user_id = ?, avatar_url = ?, xemonet_id = ? WHERE id = ?')
         .run(discordUserId, mergedAvatar, mergedXeMoNet, legacyProfile.id);
@@ -1624,6 +1662,7 @@ export class ArenaService {
       const mergedAvatar = target.avatar_url || source.avatar_url || null;
 
       this.db.prepare('UPDATE players SET profile_id = ? WHERE profile_id = ?').run(target.id, source.id);
+      reassignFriendlyMatchProfiles(this.db, source.id, target.id);
       this.db.prepare('DELETE FROM player_profiles WHERE id = ?').run(source.id);
       this.db
         .prepare(`
@@ -1654,10 +1693,20 @@ export class ArenaService {
     return res;
   }
 
-  getPublicState(requestedTournamentId = null, rawToken = null, clientKey = 'default', requestedUsername = null) {
+  getPublicState(
+    requestedTournamentId = null,
+    rawToken = null,
+    clientKey = 'default',
+    requestedUsername = null,
+    currentDiscordProfileId = null
+  ) {
     const session = rawToken ? this.verifySessionToken(rawToken) : null;
     const isHeadAdmin = session?.admin?.role === AdminRole.HEAD_ADMIN;
     const canManagePlayers = Boolean(session && hasPermission(session.rawAdmin, 'MANAGE_PLAYERS'));
+    const canReviewFriendly = Boolean(
+      session &&
+        (hasPermission(session.rawAdmin, 'EDIT_SCORES') || hasPermission(session.rawAdmin, 'MANAGE_PLAYERS'))
+    );
 
     const tournamentRows = this.db.prepare('SELECT * FROM tournaments ORDER BY id DESC').all();
     const tournaments = tournamentRows.map(mapTournament);
@@ -1778,6 +1827,54 @@ export class ArenaService {
 
     const playerProfiles = canManagePlayers ? this.queryPlayerProfiles() : [];
 
+    const registeredPlayersDirectory = this.db
+      .prepare('SELECT id, cp4_id, name, avatar_url, elysium_net_id, xemonet_id FROM player_profiles ORDER BY name COLLATE NOCASE ASC, id ASC')
+      .all()
+      .map((row) => ({
+        id: row.id,
+        cp4Id: row.cp4_id,
+        name: row.name,
+        avatarUrl: row.avatar_url ?? null,
+        elysiumNetId: row.elysium_net_id || '',
+        xeMoNetId: row.xemonet_id || ''
+      }));
+
+    const { playerVictimsMap, playerUnifiedStatsMap, victimsAchievements } = computeVictimsAndUnifiedRecords(this.db);
+
+    const friendlyMatchRows = this.db
+      .prepare(`
+        SELECT fm.*,
+          p1.name AS p1_name, p1.cp4_id AS p1_cp4_id, p1.avatar_url AS p1_avatar_url,
+          p2.name AS p2_name, p2.cp4_id AS p2_cp4_id, p2.avatar_url AS p2_avatar_url,
+          sub.name AS sub_name
+        FROM friendly_matches fm
+        LEFT JOIN player_profiles p1 ON p1.id = fm.player1_profile_id
+        LEFT JOIN player_profiles p2 ON p2.id = fm.player2_profile_id
+        LEFT JOIN player_profiles sub ON sub.id = fm.submitted_by_profile_id
+        ORDER BY
+          CASE WHEN fm.status = 'PENDING' THEN 0 ELSE 1 END ASC,
+          fm.created_at DESC,
+          fm.id DESC
+      `)
+      .all();
+
+    const parsedDiscordProfId = Number(currentDiscordProfileId);
+    const hasCallerProfile = Number.isInteger(parsedDiscordProfId) && parsedDiscordProfId > 0;
+    const friendlyMatches = friendlyMatchRows
+      .filter((row) => {
+        if (canReviewFriendly) return true;
+        if (row.status === FriendlyMatchStatus.APPROVED) return true;
+        if (hasCallerProfile) {
+          return (
+            row.player1_profile_id === parsedDiscordProfId ||
+            row.player2_profile_id === parsedDiscordProfId ||
+            row.submitted_by_profile_id === parsedDiscordProfId
+          );
+        }
+        return false;
+      })
+      .map(mapFriendlyMatch);
+
     return {
       tournaments,
       tournament,
@@ -1786,6 +1883,11 @@ export class ArenaService {
       pendingPlayers,
       rejectedPlayers,
       playerProfiles,
+      registeredPlayersDirectory,
+      friendlyMatches,
+      victimsAchievements,
+      playerVictimsMap,
+      playerUnifiedStatsMap,
       groupsWithStandings,
       leagueStandings,
       leagueMatches,
@@ -1810,6 +1912,301 @@ export class ArenaService {
       lockoutState: this.getLockoutState(clientKey),
       gameCatalog: GAME_CATALOG
     };
+  }
+
+  submitFriendlyMatch(submitterProfileId, payload = {}) {
+    const subId = Number(submitterProfileId);
+    if (!Number.isInteger(subId) || subId <= 0) {
+      return { ok: false, status: 401, error: 'يجب تسجيل الدخول عبر Discord لتسجيل مواجهة ودية.' };
+    }
+
+    const submitter = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(subId);
+    if (!submitter) {
+      return { ok: false, status: 401, error: 'لم يتم العثور على ملف اللاعب الموثق.' };
+    }
+
+    const rawGame = String(payload.gameTitle || '').trim();
+    if (!rawGame || rawGame.length > 60) {
+      return { ok: false, status: 400, error: 'يرجى اختيار اللعبة للمواجهة الودية.' };
+    }
+    const matchedCatalog = GAME_CATALOG.find(
+      (g) => g.id.toLowerCase() === rawGame.toLowerCase() || g.label.toLowerCase() === rawGame.toLowerCase()
+    );
+    const matchedTournamentGame = matchedCatalog
+      ? null
+      : this.db
+          .prepare('SELECT game_title FROM tournaments WHERE LOWER(TRIM(game_title)) = LOWER(TRIM(?)) LIMIT 1')
+          .get(rawGame);
+    if (!matchedCatalog && !matchedTournamentGame) {
+      return { ok: false, status: 400, error: 'يرجى اختيار لعبة معتمدة من قائمة ألعاب المنصة.' };
+    }
+    const gameTitle = matchedCatalog ? matchedCatalog.label : String(matchedTournamentGame.game_title).trim();
+
+    const opponentId = Number(payload.opponentProfileId);
+    if (!Number.isInteger(opponentId) || opponentId <= 0) {
+      return { ok: false, status: 400, error: 'يرجى اختيار الخصم من قائمة اللاعبين المسجلين.' };
+    }
+    if (opponentId === subId) {
+      return { ok: false, status: 400, error: 'لا يمكنك تسجيل مواجهة ضد نفسك.' };
+    }
+    const opponent = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(opponentId);
+    if (!opponent) {
+      return { ok: false, status: 404, error: 'الخصم المختار غير موجود في سجل اللاعبين.' };
+    }
+
+    const score1 = Number(payload.score1);
+    const score2 = Number(payload.score2);
+    if (
+      !Number.isInteger(score1) ||
+      !Number.isInteger(score2) ||
+      score1 < 0 ||
+      score2 < 0 ||
+      score1 > 99 ||
+      score2 > 99
+    ) {
+      return { ok: false, status: 400, error: 'يرجى إدخال نتيجة صحيحة للمواجهة (أرقام صحيحة من 0 إلى 99).' };
+    }
+
+    const matchDate = String(payload.matchDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(matchDate)) {
+      return { ok: false, status: 400, error: 'يرجى تحديد تاريخ المواجهة بصيغة صحيحة (YYYY-MM-DD).' };
+    }
+
+    let proofImageUrl = null;
+    if (payload.proofImageUrl !== undefined && payload.proofImageUrl !== null && String(payload.proofImageUrl).trim()) {
+      const candidate = String(payload.proofImageUrl).trim().slice(0, 500);
+      if (!candidate.startsWith('/uploads/') && !/^https?:\/\//i.test(candidate)) {
+        return { ok: false, status: 400, error: 'رابط صورة الإثبات غير صالح.' };
+      }
+      proofImageUrl = candidate;
+    }
+
+    const res = this.withTx(() => {
+      const duplicateRow = this.db
+        .prepare(`
+          SELECT id, status FROM friendly_matches
+          WHERE status IN ('PENDING', 'APPROVED')
+            AND LOWER(TRIM(game_title)) = LOWER(TRIM(?))
+            AND match_date = ?
+            AND (
+              (player1_profile_id = ? AND player2_profile_id = ? AND score1 = ? AND score2 = ?)
+              OR
+              (player1_profile_id = ? AND player2_profile_id = ? AND score1 = ? AND score2 = ?)
+            )
+          LIMIT 1
+        `)
+        .get(gameTitle, matchDate, subId, opponentId, score1, score2, opponentId, subId, score2, score1);
+
+      if (duplicateRow) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'DUPLICATE_FRIENDLY_MATCH',
+          error: 'تم تسجيل هذه المواجهة مسبقاً بنفس اللعبة والتاريخ والنتيجة وهي قيد المراجعة أو معتمدة.'
+        };
+      }
+
+      const winnerProfileId = score1 > score2 ? subId : score2 > score1 ? opponentId : null;
+      const now = Date.now();
+      const info = this.db
+        .prepare(`
+          INSERT INTO friendly_matches (
+            game_title, player1_profile_id, player2_profile_id,
+            score1, score2, winner_profile_id, match_date, proof_image_url,
+            submitted_by_profile_id, status, review_note, reviewed_by, reviewed_at, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+        `)
+        .run(
+          gameTitle,
+          subId,
+          opponentId,
+          score1,
+          score2,
+          winnerProfileId,
+          matchDate,
+          proofImageUrl,
+          subId,
+          FriendlyMatchStatus.PENDING,
+          now
+        );
+
+      const savedRow = this.db
+        .prepare(`
+          SELECT fm.*,
+            p1.name AS p1_name, p1.cp4_id AS p1_cp4_id, p1.avatar_url AS p1_avatar_url,
+            p2.name AS p2_name, p2.cp4_id AS p2_cp4_id, p2.avatar_url AS p2_avatar_url,
+            sub.name AS sub_name
+          FROM friendly_matches fm
+          LEFT JOIN player_profiles p1 ON p1.id = fm.player1_profile_id
+          LEFT JOIN player_profiles p2 ON p2.id = fm.player2_profile_id
+          LEFT JOIN player_profiles sub ON sub.id = fm.submitted_by_profile_id
+          WHERE fm.id = ?
+        `)
+        .get(Number(info.lastInsertRowid));
+
+      this.logAudit(
+        { username: submitter.cp4_id || 'discord_player', displayName: submitter.name },
+        null,
+        'SUBMIT_FRIENDLY_MATCH',
+        `إرسال مواجهة ودية (${gameTitle}): ${submitter.name} (${score1}-${score2}) ضد ${opponent.name} بتاريخ ${matchDate}`
+      );
+
+      return {
+        ok: true,
+        status: 201,
+        friendlyMatch: mapFriendlyMatch(savedRow),
+        messageAr: 'تم إرسال نتيجة المواجهة الودية إلى الإدارة للمراجعة والاعتماد.'
+      };
+    });
+
+    if (res.ok) this.emitChange('friendly_match_submitted');
+    return res;
+  }
+
+  reviewFriendlyMatch(rawToken, matchId, payload = {}) {
+    const auth = this.requirePermission(rawToken, null);
+    if (!auth.ok) return auth;
+    if (
+      !hasPermission(auth.session.rawAdmin, 'EDIT_SCORES') &&
+      !hasPermission(auth.session.rawAdmin, 'MANAGE_PLAYERS')
+    ) {
+      return { ok: false, status: 403, error: 'ليس لديك صلاحية مراجعة واعتماد المواجهات الودية.' };
+    }
+
+    const id = Number(matchId);
+    const action = String(payload.action || '').trim().toUpperCase();
+    if (!['APPROVE', 'REJECT'].includes(action)) {
+      return { ok: false, status: 400, error: 'يرجى تحديد إجراء المراجعة (APPROVE أو REJECT).' };
+    }
+
+    const existing = this.db.prepare('SELECT * FROM friendly_matches WHERE id = ?').get(id);
+    if (!existing) {
+      return { ok: false, status: 404, error: 'طلب المواجهة الودية غير موجود.' };
+    }
+
+    const nextScore1 = payload.score1 !== undefined ? Number(payload.score1) : existing.score1;
+    const nextScore2 = payload.score2 !== undefined ? Number(payload.score2) : existing.score2;
+    if (
+      !Number.isInteger(nextScore1) ||
+      !Number.isInteger(nextScore2) ||
+      nextScore1 < 0 ||
+      nextScore2 < 0 ||
+      nextScore1 > 99 ||
+      nextScore2 > 99
+    ) {
+      return { ok: false, status: 400, error: 'نتيجة المواجهة المعدّلة غير صالحة.' };
+    }
+
+    const reviewNote = payload.reviewNote !== undefined ? String(payload.reviewNote || '').trim().slice(0, 300) : '';
+    if (action === 'REJECT' && !reviewNote) {
+      return { ok: false, status: 400, error: 'يرجى كتابة سبب رفض المواجهة ليظهر للاعب.' };
+    }
+
+    const nextStatus = action === 'APPROVE' ? FriendlyMatchStatus.APPROVED : FriendlyMatchStatus.REJECTED;
+    const winnerProfileId =
+      nextScore1 > nextScore2 ? existing.player1_profile_id : nextScore2 > nextScore1 ? existing.player2_profile_id : null;
+    const reviewerName = auth.session.rawAdmin.displayName || auth.session.rawAdmin.username;
+    const now = Date.now();
+
+    const res = this.withTx(() => {
+      if (action === 'APPROVE') {
+        const dup = this.db
+          .prepare(`
+            SELECT id FROM friendly_matches
+            WHERE id != ?
+              AND status = 'APPROVED'
+              AND LOWER(TRIM(game_title)) = LOWER(TRIM(?))
+              AND match_date = ?
+              AND (
+                (player1_profile_id = ? AND player2_profile_id = ? AND score1 = ? AND score2 = ?)
+                OR
+                (player1_profile_id = ? AND player2_profile_id = ? AND score1 = ? AND score2 = ?)
+              )
+            LIMIT 1
+          `)
+          .get(
+            id,
+            existing.game_title,
+            existing.match_date,
+            existing.player1_profile_id,
+            existing.player2_profile_id,
+            nextScore1,
+            nextScore2,
+            existing.player2_profile_id,
+            existing.player1_profile_id,
+            nextScore2,
+            nextScore1
+          );
+        if (dup) {
+          return {
+            ok: false,
+            status: 409,
+            code: 'DUPLICATE_FRIENDLY_MATCH',
+            error: 'توجد مواجهة معتمدة مطابقة بالفعل بنفس اللعبة والتاريخ والنتيجة.'
+          };
+        }
+      }
+
+      this.db
+        .prepare(`
+          UPDATE friendly_matches SET
+            score1 = ?,
+            score2 = ?,
+            winner_profile_id = ?,
+            status = ?,
+            review_note = ?,
+            reviewed_by = ?,
+            reviewed_at = ?
+          WHERE id = ?
+        `)
+        .run(
+          nextScore1,
+          nextScore2,
+          winnerProfileId,
+          nextStatus,
+          reviewNote || null,
+          reviewerName,
+          now,
+          id
+        );
+
+      const updatedRow = this.db
+        .prepare(`
+          SELECT fm.*,
+            p1.name AS p1_name, p1.cp4_id AS p1_cp4_id, p1.avatar_url AS p1_avatar_url,
+            p2.name AS p2_name, p2.cp4_id AS p2_cp4_id, p2.avatar_url AS p2_avatar_url,
+            sub.name AS sub_name
+          FROM friendly_matches fm
+          LEFT JOIN player_profiles p1 ON p1.id = fm.player1_profile_id
+          LEFT JOIN player_profiles p2 ON p2.id = fm.player2_profile_id
+          LEFT JOIN player_profiles sub ON sub.id = fm.submitted_by_profile_id
+          WHERE fm.id = ?
+        `)
+        .get(id);
+
+      const mapped = mapFriendlyMatch(updatedRow);
+      const scoreEdited = nextScore1 !== existing.score1 || nextScore2 !== existing.score2;
+      const auditAction = action === 'APPROVE' ? 'APPROVE_FRIENDLY_MATCH' : 'REJECT_FRIENDLY_MATCH';
+      const auditSummary =
+        action === 'APPROVE'
+          ? `اعتماد مواجهة ودية (${mapped.gameTitle}): ${mapped.player1Name} ${nextScore1}-${nextScore2} ${mapped.player2Name}${scoreEdited ? ' (بعد تعديل النتيجة)' : ''}${reviewNote ? ` — ${reviewNote}` : ''}`
+          : `رفض مواجهة ودية (${mapped.gameTitle}): ${mapped.player1Name} ضد ${mapped.player2Name} — السبب: ${reviewNote}`;
+
+      this.logAudit(auth.session.rawAdmin, null, auditAction, auditSummary);
+
+      return {
+        ok: true,
+        status: 200,
+        friendlyMatch: mapped,
+        messageAr:
+          action === 'APPROVE'
+            ? 'تم اعتماد المواجهة الودية وتحديث الإحصائيات وقسم «ضحاياك».'
+            : 'تم رفض طلب المواجهة الودية مع حفظ سبب الرفض.'
+      };
+    });
+
+    if (res.ok) this.emitChange('friendly_match_reviewed');
+    return res;
   }
 
   getTournamentExport(tournamentId) {
@@ -3741,6 +4138,7 @@ export class ArenaService {
     const races = this.db.prepare('SELECT * FROM races ORDER BY id ASC').all();
     const raceResults = this.db.prepare('SELECT * FROM race_results ORDER BY id ASC').all();
     const matchReminders = this.db.prepare('SELECT * FROM match_reminders ORDER BY id ASC').all();
+    const friendlyMatches = this.db.prepare('SELECT * FROM friendly_matches ORDER BY id ASC').all();
     const adminAccounts = this.db.prepare('SELECT * FROM admin_accounts ORDER BY id ASC').all();
     const revokedAdmins = this.db.prepare('SELECT * FROM revoked_admins ORDER BY revoked_at ASC').all();
     const adminAuditLogs = this.db.prepare('SELECT * FROM admin_audit_logs ORDER BY id ASC').all();
@@ -3763,6 +4161,7 @@ export class ArenaService {
         races,
         raceResults,
         matchReminders,
+        friendlyMatches,
         adminAccounts,
         revokedAdmins,
         adminAuditLogs,
@@ -3795,6 +4194,7 @@ export class ArenaService {
     const races = Array.isArray(backup.races) ? backup.races : [];
     const raceResults = Array.isArray(backup.raceResults) ? backup.raceResults : [];
     const matchReminders = Array.isArray(backup.matchReminders) ? backup.matchReminders : [];
+    const friendlyMatches = Array.isArray(backup.friendlyMatches) ? backup.friendlyMatches : [];
     const adminAccounts = Array.isArray(backup.adminAccounts) ? backup.adminAccounts : [];
     const revokedAdmins = Array.isArray(backup.revokedAdmins) ? backup.revokedAdmins : [];
     const adminAuditLogs = Array.isArray(backup.adminAuditLogs) ? backup.adminAuditLogs : [];
@@ -3802,6 +4202,7 @@ export class ArenaService {
     const subAdminsRestoredCount = adminAccounts.filter((a) => a.role === AdminRole.SUB_ADMIN).length;
 
     this.withTx(() => {
+      this.db.prepare('DELETE FROM friendly_matches').run();
       this.db.prepare('DELETE FROM race_results').run();
       this.db.prepare('DELETE FROM races').run();
       this.db.prepare('DELETE FROM match_reminders').run();
@@ -4100,6 +4501,33 @@ export class ArenaService {
         );
       }
 
+      const insertFriendly = this.db.prepare(`
+        INSERT INTO friendly_matches (
+          id, game_title, player1_profile_id, player2_profile_id,
+          score1, score2, winner_profile_id, match_date, proof_image_url,
+          submitted_by_profile_id, status, review_note, reviewed_by, reviewed_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const fm of friendlyMatches) {
+        insertFriendly.run(
+          Number(fm.id),
+          String(fm.game_title || 'FIFA 22'),
+          Number(fm.player1_profile_id),
+          Number(fm.player2_profile_id),
+          Number(fm.score1) || 0,
+          Number(fm.score2) || 0,
+          fm.winner_profile_id != null ? Number(fm.winner_profile_id) : null,
+          String(fm.match_date || '2026-01-01'),
+          fm.proof_image_url ?? null,
+          Number(fm.submitted_by_profile_id),
+          String(fm.status || FriendlyMatchStatus.PENDING),
+          fm.review_note ?? null,
+          fm.reviewed_by ?? null,
+          fm.reviewed_at != null ? Number(fm.reviewed_at) : null,
+          Number(fm.created_at) || Date.now()
+        );
+      }
+
       this.db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_tournament_seeded', '1')").run();
       backfillPlayerProfiles(this.db);
       syncCp4ProfileSequence(this.db);
@@ -4113,6 +4541,7 @@ export class ArenaService {
         'races',
         'race_results',
         'match_reminders',
+        'friendly_matches',
         'admin_accounts',
         'admin_audit_logs'
       ]) {

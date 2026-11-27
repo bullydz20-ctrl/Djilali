@@ -30,6 +30,7 @@ import {
   registerPlayerApi,
   resolveMatchDisputeApi,
   restoreBackupApi,
+  reviewFriendlyMatchApi,
   runDrawApi,
   saveHeadAutoBackup,
   saveRaceResultsApi,
@@ -37,6 +38,7 @@ import {
   setAuthToken,
   setLastAdminUsername,
   setupHeadAdminApi,
+  submitFriendlyMatchApi,
   submitMatchDisputeApi,
   toggleMatchCheckInApi,
   updateKnockoutWinnerApi,
@@ -98,6 +100,9 @@ const AccountProfileModal = lazy(() =>
 const AccountSettingsModal = lazy(() =>
   import('./components/Dialogs').then((m) => ({ default: m.AccountSettingsModal }))
 );
+const FriendlyMatchModal = lazy(() =>
+  import('./components/FriendlyMatchModal').then((m) => ({ default: m.FriendlyMatchModal }))
+);
 
 type TabKey = 'HOME' | 'PLAYERS' | 'GROUPS' | 'BRACKET' | 'ADMIN';
 
@@ -141,6 +146,7 @@ export default function App() {
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [showMyProfileModal, setShowMyProfileModal] = useState(false);
   const [showAccountSettingsModal, setShowAccountSettingsModal] = useState(false);
+  const [showFriendlyModal, setShowFriendlyModal] = useState(false);
 
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState(false);
@@ -515,6 +521,7 @@ export default function App() {
                   onOpenPlayerProfile={(p) => setProfilePlayer(p)}
                   onCelebrateChampion={() => showToast('🏆 تحية كبيرة لبطل البطولة!')}
                   onOpenAdmin={() => setActiveTab('ADMIN')}
+                  onOpenSubmitFriendly={() => setShowFriendlyModal(true)}
                   onCreateRace={async (payload) => {
                     if (!state.tournament) return;
                     await runAction(() => createRaceApi(state.tournament!.id, payload));
@@ -743,6 +750,9 @@ export default function App() {
                     if (res.messageAr) showToast(res.messageAr);
                     await refreshState();
                   }}
+                  onReviewFriendlyMatch={async (matchId, payload) => {
+                    await runAction(() => reviewFriendlyMatchApi(matchId, payload));
+                  }}
                   onNotify={showToast}
                 />
               )}
@@ -853,21 +863,37 @@ export default function App() {
         />
       )}
 
-      {profilePlayer && state && (
-        <PlayerProfileModal
-          player={profilePlayer}
-          stats={state.playerStats.find((s) => s.player.id === profilePlayer.id) ?? null}
-          seasonEntry={
-            (state.seasonLeaderboard || []).find(
-              (e) => e.elysiumNetId.trim().toLowerCase() === profilePlayer.elysiumNetId.trim().toLowerCase()
-            ) ?? null
-          }
-          matches={state.allMatches}
-          playersById={playersById}
-          scoreUnitLabel={state.tournament?.scoreUnitLabel || 'نقطة'}
-          onClose={() => setProfilePlayer(null)}
-        />
-      )}
+      {profilePlayer && state && (() => {
+        const resolvedProfId =
+          profilePlayer.profileId ??
+          state.registeredPlayersDirectory?.find(
+            (d) =>
+              d.elysiumNetId &&
+              profilePlayer.elysiumNetId &&
+              d.elysiumNetId.trim().toLowerCase() === profilePlayer.elysiumNetId.trim().toLowerCase()
+          )?.id ??
+          null;
+        const profKey = resolvedProfId ? String(resolvedProfId) : '';
+        return (
+          <PlayerProfileModal
+            player={profilePlayer}
+            stats={state.playerStats.find((s) => s.player.id === profilePlayer.id) ?? null}
+            seasonEntry={
+              (state.seasonLeaderboard || []).find(
+                (e) => e.elysiumNetId.trim().toLowerCase() === profilePlayer.elysiumNetId.trim().toLowerCase()
+              ) ?? null
+            }
+            matches={state.allMatches}
+            playersById={playersById}
+            scoreUnitLabel={state.tournament?.scoreUnitLabel || 'نقطة'}
+            profileId={resolvedProfId}
+            unifiedStats={profKey ? (state.playerUnifiedStatsMap?.[profKey] ?? null) : null}
+            victims={profKey ? (state.playerVictimsMap?.[profKey] ?? []) : []}
+            friendlyMatches={state.friendlyMatches || []}
+            onClose={() => setProfilePlayer(null)}
+          />
+        );
+      })()}
 
       {reminderMatch && (
         <MatchReminderModal
@@ -920,10 +946,14 @@ export default function App() {
                 ) ?? null
               : null
           }
+          unifiedStats={state?.playerUnifiedStatsMap?.[String(activeDiscordProfile.id)] ?? null}
+          victims={state?.playerVictimsMap?.[String(activeDiscordProfile.id)] ?? []}
+          friendlyMatches={state?.friendlyMatches || []}
           activeTournamentName={state?.tournament?.name ?? null}
           isRegistrationOpenNow={Boolean(state?.isRegistrationOpenNow)}
           onOpenSettings={() => setShowAccountSettingsModal(true)}
           onOpenRegister={() => setShowRegisterModal(true)}
+          onOpenSubmitFriendly={() => setShowFriendlyModal(true)}
           onClose={() => setShowMyProfileModal(false)}
         />
       )}
@@ -941,6 +971,19 @@ export default function App() {
           }}
           onLogoutDiscord={handleLogoutDiscord}
           onClose={() => setShowAccountSettingsModal(false)}
+        />
+      )}
+
+      {showFriendlyModal && activeDiscordProfile && state && (
+        <FriendlyMatchModal
+          discordProfile={activeDiscordProfile}
+          gameCatalog={state.gameCatalog || []}
+          directory={state.registeredPlayersDirectory || []}
+          defaultGameTitle={state.tournament?.gameTitle ?? null}
+          onClose={() => setShowFriendlyModal(false)}
+          onSubmit={async (payload) => {
+            await runAction(() => submitFriendlyMatchApi(payload));
+          }}
         />
       )}
       </Suspense>

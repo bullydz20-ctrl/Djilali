@@ -1,5 +1,7 @@
 import {
   DEFAULT_RACING_POINTS,
+  FriendlyMatchStatus,
+  GAME_CATALOG,
   KnockoutTieRule,
   MATCH_STAGE_META,
   MatchStage,
@@ -1120,3 +1122,320 @@ export function buildHallOfFame(db) {
     })
     .filter(Boolean);
 }
+
+export const VICTIM_WINS_THRESHOLD = 5;
+
+function canonicalGameMeta(rawTitle) {
+  const clean = String(rawTitle || '').trim() || 'FIFA 22';
+  const key = clean.toLowerCase();
+  const preset = GAME_CATALOG.find((g) => g.id.toLowerCase() === key || g.label.toLowerCase() === key);
+  return {
+    key,
+    label: preset ? preset.label : clean
+  };
+}
+
+export function computeVictimsAndUnifiedRecords(db) {
+  const profiles = db
+    .prepare('SELECT id, cp4_id, name, avatar_url, elysium_net_id, xemonet_id FROM player_profiles ORDER BY id ASC')
+    .all();
+
+  const profileById = new Map();
+  const profileIdByElysium = new Map();
+  const unifiedStatsByProfile = new Map();
+
+  for (const pp of profiles) {
+    profileById.set(pp.id, pp);
+    const cleanElysium = String(pp.elysium_net_id || '').trim().toLowerCase();
+    if (cleanElysium && !profileIdByElysium.has(cleanElysium)) {
+      profileIdByElysium.set(cleanElysium, pp.id);
+    }
+    unifiedStatsByProfile.set(pp.id, {
+      profileId: pp.id,
+      cp4Id: pp.cp4_id,
+      totalMatches: 0,
+      tournamentMatches: 0,
+      friendlyMatches: 0,
+      wins: 0,
+      draws: 0,
+      losses: 0,
+      goalsScored: 0,
+      goalsConceded: 0,
+      winRatePercent: 0,
+      victimsCount: 0,
+      h2hRecords: []
+    });
+  }
+
+  const players = db.prepare('SELECT id, profile_id, elysium_net_id FROM players').all();
+  const profileIdByPlayerId = new Map();
+  for (const pl of players) {
+    if (pl.profile_id && profileById.has(pl.profile_id)) {
+      profileIdByPlayerId.set(pl.id, pl.profile_id);
+      continue;
+    }
+    const cleanElysium = String(pl.elysium_net_id || '').trim().toLowerCase();
+    if (cleanElysium && profileIdByElysium.has(cleanElysium)) {
+      profileIdByPlayerId.set(pl.id, profileIdByElysium.get(cleanElysium));
+    }
+  }
+
+  // Pairwise H2H per game: key = `${playerProfileId}::${opponentProfileId}::${gameKey}`
+  const h2hByKey = new Map();
+
+  function ensureH2H(playerProfileId, opponentProfileId, gameMeta) {
+    const key = `${playerProfileId}::${opponentProfileId}::${gameMeta.key}`;
+    let rec = h2hByKey.get(key);
+    if (!rec) {
+      rec = {
+        playerProfileId,
+        opponentProfileId,
+        gameKey: gameMeta.key,
+        gameTitle: gameMeta.label,
+        winsCount: 0,
+        lossesCount: 0,
+        drawsCount: 0,
+        tournamentWins: 0,
+        friendlyWins: 0,
+        matchesCount: 0,
+        latestWinAt: 0
+      };
+      h2hByKey.set(key, rec);
+    }
+    return rec;
+  }
+
+  function applyCompletedHeadToHead({
+    prof1Id,
+    prof2Id,
+    score1,
+    score2,
+    winnerProfileId,
+    gameMeta,
+    source,
+    timestampMs
+  }) {
+    if (!prof1Id || !prof2Id || prof1Id === prof2Id) return;
+    const s1 = unifiedStatsByProfile.get(prof1Id);
+    const s2 = unifiedStatsByProfile.get(prof2Id);
+    if (!s1 || !s2) return;
+
+    const h12 = ensureH2H(prof1Id, prof2Id, gameMeta);
+    const h21 = ensureH2H(prof2Id, prof1Id, gameMeta);
+
+    s1.totalMatches += 1;
+    s2.totalMatches += 1;
+    if (source === 'FRIENDLY') {
+      s1.friendlyMatches += 1;
+      s2.friendlyMatches += 1;
+    } else {
+      s1.tournamentMatches += 1;
+      s2.tournamentMatches += 1;
+    }
+
+    const g1 = Number.isFinite(score1) ? Math.max(0, Number(score1)) : 0;
+    const g2 = Number.isFinite(score2) ? Math.max(0, Number(score2)) : 0;
+    s1.goalsScored += g1;
+    s1.goalsConceded += g2;
+    s2.goalsScored += g2;
+    s2.goalsConceded += g1;
+
+    h12.matchesCount += 1;
+    h21.matchesCount += 1;
+
+    if (winnerProfileId === prof1Id) {
+      s1.wins += 1;
+      s2.losses += 1;
+      h12.winsCount += 1;
+      h21.lossesCount += 1;
+      if (source === 'FRIENDLY') h12.friendlyWins += 1;
+      else h12.tournamentWins += 1;
+      if (timestampMs > h12.latestWinAt) h12.latestWinAt = timestampMs;
+    } else if (winnerProfileId === prof2Id) {
+      s2.wins += 1;
+      s1.losses += 1;
+      h21.winsCount += 1;
+      h12.lossesCount += 1;
+      if (source === 'FRIENDLY') h21.friendlyWins += 1;
+      else h21.tournamentWins += 1;
+      if (timestampMs > h21.latestWinAt) h21.latestWinAt = timestampMs;
+    } else {
+      s1.draws += 1;
+      s2.draws += 1;
+      h12.drawsCount += 1;
+      h21.drawsCount += 1;
+    }
+  }
+
+  // 1. Official completed tournament matches
+  const completedTournamentMatches = db
+    .prepare(`
+      SELECT m.*, t.game_title, t.created_at AS tournament_created_at
+      FROM matches m
+      INNER JOIN tournaments t ON t.id = m.tournament_id
+      WHERE m.is_completed = 1
+    `)
+    .all();
+
+  for (const m of completedTournamentMatches) {
+    const prof1Id = m.player1_id != null ? profileIdByPlayerId.get(m.player1_id) : null;
+    const prof2Id = m.player2_id != null ? profileIdByPlayerId.get(m.player2_id) : null;
+    if (!prof1Id || !prof2Id || prof1Id === prof2Id) continue;
+
+    const s1 = m.leg1_score1;
+    const s2 = m.leg1_score2;
+    const hasScores = s1 != null && s2 != null;
+    const tot1 = hasScores ? Number(s1) + (m.is_two_legged ? Number(m.leg2_score1 ?? 0) : 0) : 0;
+    const tot2 = hasScores ? Number(s2) + (m.is_two_legged ? Number(m.leg2_score2 ?? 0) : 0) : 0;
+
+    let winnerProfileId = null;
+    if (m.winner_id === m.player1_id) winnerProfileId = prof1Id;
+    else if (m.winner_id === m.player2_id) winnerProfileId = prof2Id;
+    else if (hasScores && tot1 > tot2) winnerProfileId = prof1Id;
+    else if (hasScores && tot2 > tot1) winnerProfileId = prof2Id;
+    else if (m.penalty_score1 != null && m.penalty_score2 != null) {
+      if (m.penalty_score1 > m.penalty_score2) winnerProfileId = prof1Id;
+      else if (m.penalty_score2 > m.penalty_score1) winnerProfileId = prof2Id;
+    }
+
+    const ts = Number(m.scheduled_at_millis || m.tournament_created_at || 0);
+    applyCompletedHeadToHead({
+      prof1Id,
+      prof2Id,
+      score1: tot1,
+      score2: tot2,
+      winnerProfileId,
+      gameMeta: canonicalGameMeta(m.game_title),
+      source: 'TOURNAMENT',
+      timestampMs: ts
+    });
+  }
+
+  // 2. Approved off-tournament friendly matches (NEVER touch tournament/season points)
+  const approvedFriendlies = db
+    .prepare('SELECT * FROM friendly_matches WHERE status = ? ORDER BY id ASC')
+    .all(FriendlyMatchStatus.APPROVED);
+
+  for (const fm of approvedFriendlies) {
+    const prof1Id = fm.player1_profile_id;
+    const prof2Id = fm.player2_profile_id;
+    if (!profileById.has(prof1Id) || !profileById.has(prof2Id) || prof1Id === prof2Id) continue;
+
+    const s1 = Number(fm.score1);
+    const s2 = Number(fm.score2);
+    let winnerProfileId = null;
+    if (fm.winner_profile_id === prof1Id) winnerProfileId = prof1Id;
+    else if (fm.winner_profile_id === prof2Id) winnerProfileId = prof2Id;
+    else if (s1 > s2) winnerProfileId = prof1Id;
+    else if (s2 > s1) winnerProfileId = prof2Id;
+
+    const ts = Number(fm.reviewed_at || fm.created_at || 0);
+    applyCompletedHeadToHead({
+      prof1Id,
+      prof2Id,
+      score1: s1,
+      score2: s2,
+      winnerProfileId,
+      gameMeta: canonicalGameMeta(fm.game_title),
+      source: 'FRIENDLY',
+      timestampMs: ts
+    });
+  }
+
+  // 3. Build per-player victims (wins >= 5 in same game) & H2H records + global HomeScreen showcase
+  const playerVictimsMap = {};
+  const playerUnifiedStatsMap = {};
+  const victimsAchievements = [];
+
+  for (const pp of profiles) {
+    playerVictimsMap[String(pp.id)] = [];
+  }
+
+  for (const rec of h2hByKey.values()) {
+    const achiever = profileById.get(rec.playerProfileId);
+    const opp = profileById.get(rec.opponentProfileId);
+    if (!achiever || !opp) continue;
+
+    const statObj = unifiedStatsByProfile.get(rec.playerProfileId);
+    if (statObj && rec.matchesCount > 0) {
+      statObj.h2hRecords.push({
+        opponentProfileId: opp.id,
+        opponentName: opp.name,
+        opponentCp4Id: opp.cp4_id,
+        opponentAvatarUrl: opp.avatar_url ?? null,
+        gameTitle: rec.gameTitle,
+        winsCount: rec.winsCount,
+        lossesCount: rec.lossesCount,
+        drawsCount: rec.drawsCount,
+        tournamentWins: rec.tournamentWins,
+        friendlyWins: rec.friendlyWins,
+        matchesCount: rec.matchesCount,
+        isQualifiedVictim: rec.winsCount >= VICTIM_WINS_THRESHOLD
+      });
+    }
+
+    if (rec.winsCount >= VICTIM_WINS_THRESHOLD) {
+      const victimEntry = {
+        opponentProfileId: opp.id,
+        opponentName: opp.name,
+        opponentCp4Id: opp.cp4_id,
+        opponentAvatarUrl: opp.avatar_url ?? null,
+        gameTitle: rec.gameTitle,
+        winsCount: rec.winsCount,
+        lossesCount: rec.lossesCount,
+        drawsCount: rec.drawsCount,
+        tournamentWins: rec.tournamentWins,
+        friendlyWins: rec.friendlyWins,
+        latestWinAt: rec.latestWinAt
+      };
+      playerVictimsMap[String(achiever.id)].push(victimEntry);
+
+      victimsAchievements.push({
+        key: `${achiever.id}:${opp.id}:${rec.gameKey}`,
+        achieverProfileId: achiever.id,
+        achieverName: achiever.name,
+        achieverCp4Id: achiever.cp4_id,
+        achieverAvatarUrl: achiever.avatar_url ?? null,
+        victimProfileId: opp.id,
+        victimName: opp.name,
+        victimCp4Id: opp.cp4_id,
+        victimAvatarUrl: opp.avatar_url ?? null,
+        gameTitle: rec.gameTitle,
+        winsCount: rec.winsCount,
+        tournamentWins: rec.tournamentWins,
+        friendlyWins: rec.friendlyWins,
+        latestWinAt: rec.latestWinAt
+      });
+    }
+  }
+
+  for (const pp of profiles) {
+    const key = String(pp.id);
+    playerVictimsMap[key].sort((a, b) => {
+      if (b.winsCount !== a.winsCount) return b.winsCount - a.winsCount;
+      return a.gameTitle.localeCompare(b.gameTitle);
+    });
+    const statObj = unifiedStatsByProfile.get(pp.id);
+    statObj.victimsCount = playerVictimsMap[key].length;
+    statObj.winRatePercent =
+      statObj.totalMatches > 0 ? Math.floor((statObj.wins * 100) / statObj.totalMatches) : 0;
+    statObj.h2hRecords.sort((a, b) => {
+      if (b.winsCount !== a.winsCount) return b.winsCount - a.winsCount;
+      return b.matchesCount - a.matchesCount;
+    });
+    playerUnifiedStatsMap[key] = statObj;
+  }
+
+  victimsAchievements.sort((a, b) => {
+    if (b.winsCount !== a.winsCount) return b.winsCount - a.winsCount;
+    if (b.latestWinAt !== a.latestWinAt) return b.latestWinAt - a.latestWinAt;
+    return a.gameTitle.localeCompare(b.gameTitle);
+  });
+
+  return {
+    playerVictimsMap,
+    playerUnifiedStatsMap,
+    victimsAchievements
+  };
+}
+

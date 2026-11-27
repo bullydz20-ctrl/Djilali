@@ -340,10 +340,16 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
       typeof req.query.username === 'string' && req.query.username.trim()
         ? req.query.username.trim()
         : null;
-    const state = service.getPublicState(tournamentId, getBearerToken(req), getClientKey(req), requestedUsername);
+    const currentDiscordProfile = resolveAuthenticatedDiscordProfile(req);
+    const state = service.getPublicState(
+      tournamentId,
+      getBearerToken(req),
+      getClientKey(req),
+      requestedUsername,
+      currentDiscordProfile?.id ?? null
+    );
     const persistence = getPersistenceDiagnostics({ dbPath: resolvedDbPath, cloudStore });
     const discordStatus = activeDiscordAdapter.getStatus();
-    const currentDiscordProfile = resolveAuthenticatedDiscordProfile(req);
     res.json({ ...state, persistence, discordStatus, currentDiscordProfile });
   });
 
@@ -966,6 +972,29 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
   app.delete('/api/races/:id', async (req, res) => {
     const out = service.deleteRace(getBearerToken(req), Number(req.params.id));
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  // Off-tournament friendly matches (Discord player submit + Admin review)
+  app.post('/api/friendly-matches', async (req, res) => {
+    const authDiscordProfile = resolveAuthenticatedDiscordProfile(req);
+    if (!authDiscordProfile) {
+      return res.status(401).json({ error: 'يجب تسجيل الدخول عبر Discord لتسجيل مواجهة ودية.' });
+    }
+    const out = service.submitFriendlyMatch(authDiscordProfile.id, req.body || {});
+    if (!out.ok) {
+      return res.status(out.status).json({ error: out.error, code: out.code });
+    }
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
+  app.patch('/api/friendly-matches/:id/review', async (req, res) => {
+    const out = service.reviewFriendlyMatch(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) {
+      return res.status(out.status).json({ error: out.error, code: out.code });
+    }
     await syncCloud();
     res.status(out.status).json(out);
   });

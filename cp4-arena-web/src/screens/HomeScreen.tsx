@@ -10,8 +10,10 @@ import {
   Share2,
   Shield,
   ShieldCheck,
+  Skull,
   Sparkles,
   Star,
+  Swords,
   Trash2,
   TrendingUp,
   Trophy,
@@ -47,6 +49,7 @@ export function HomeScreen({
   onOpenPlayerProfile,
   onCelebrateChampion,
   onOpenAdmin,
+  onOpenSubmitFriendly,
   onCreateRace,
   onEditRace,
   onGenerateFinalRace,
@@ -67,6 +70,7 @@ export function HomeScreen({
   onOpenPlayerProfile: (player: Player) => void;
   onCelebrateChampion: () => void;
   onOpenAdmin?: () => void;
+  onOpenSubmitFriendly?: () => void;
   onCreateRace?: (payload: { title?: string; stage?: RaceStage; trackName?: string }) => Promise<void>;
   onEditRace?: (race: RaceEntry) => void;
   onGenerateFinalRace?: (payload?: { title?: string; trackName?: string; qualifiersCount?: number }) => Promise<void>;
@@ -143,6 +147,12 @@ export function HomeScreen({
             </div>
           )
         )}
+        <VictimsShowcaseSection
+          state={state}
+          discordProfile={discordProfile}
+          onStartDiscordLogin={onStartDiscordLogin}
+          onOpenSubmitFriendly={onOpenSubmitFriendly}
+        />
       </div>
     );
   }
@@ -710,6 +720,14 @@ export function HomeScreen({
         </div>
       )}
 
+      {/* Victims Achievements Section («ضحاياك») */}
+      <VictimsShowcaseSection
+        state={state}
+        discordProfile={discordProfile}
+        onStartDiscordLogin={onStartDiscordLogin}
+        onOpenSubmitFriendly={onOpenSubmitFriendly}
+      />
+
       {/* Scheduled Reminders */}
       {state.matchReminders.length > 0 && (
         <div className="arena-card stack-col" style={{ gap: 10 }}>
@@ -807,3 +825,177 @@ function StatCard({
     </div>
   );
 }
+
+function VictimsShowcaseSection({
+  state,
+  discordProfile,
+  onStartDiscordLogin,
+  onOpenSubmitFriendly
+}: {
+  state: ArenaState;
+  discordProfile: PlayerProfile | null;
+  onStartDiscordLogin?: () => void;
+  onOpenSubmitFriendly?: () => void;
+}) {
+  const achievements = state.victimsAchievements || [];
+  const myFriendlySubmissions = discordProfile
+    ? (state.friendlyMatches || [])
+        .filter(
+          (fm) =>
+            fm.player1ProfileId === discordProfile.id ||
+            fm.player2ProfileId === discordProfile.id ||
+            fm.submittedByProfileId === discordProfile.id
+        )
+        .slice(0, 4)
+    : [];
+
+  return (
+    <div className="arena-card stack-col" style={{ gap: 10, borderColor: 'rgba(245, 184, 46, 0.45)' }} data-testid="home_victims_section">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--championship-gold)', fontWeight: 800, fontSize: '1rem' }}>
+            <Skull size={18} />
+            <span>إنجازات «ضحاياك»</span>
+          </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+            يتأهل الإنجاز عند تحقيق 5+ انتصارات معتمدة ضد نفس الخصم في اللعبة نفسها (بطولات + وديات)
+          </div>
+        </div>
+
+        {(onOpenSubmitFriendly || onStartDiscordLogin) && (
+          <button
+            type="button"
+            className="btn btn-gold"
+            style={{ padding: '7px 12px', fontSize: '0.8rem', minHeight: 38 }}
+            onClick={() => {
+              if (discordProfile && onOpenSubmitFriendly) {
+                onOpenSubmitFriendly();
+              } else if (onStartDiscordLogin) {
+                onStartDiscordLogin();
+              }
+            }}
+            data-testid="home_log_friendly_btn"
+          >
+            <Swords size={15} />
+            <span>{discordProfile ? 'تسجيل مواجهة ودية' : 'اربط Discord لتسجيل مواجهة ودية'}</span>
+          </button>
+        )}
+      </div>
+
+      {achievements.length === 0 ? (
+        <div className="arena-subcard" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          لا توجد إنجازات «ضحاياك» معلنة بعد. حقق 5 انتصارات معتمدة على خصم في لعبة واحدة ليُخلّد إنجازك هنا!
+        </div>
+      ) : (
+        <div className="stack-col" style={{ gap: 8 }}>
+          {achievements.slice(0, 12).map((item) => (
+            <div
+              key={item.key}
+              className="arena-subcard"
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 10,
+                flexWrap: 'wrap',
+                borderColor: 'rgba(245, 184, 46, 0.35)'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: '1 1 220px' }}>
+                <PlayerAvatar
+                  avatarUrl={item.achieverAvatarUrl}
+                  name={item.achieverName}
+                  size={38}
+                  borderColor="var(--championship-gold)"
+                />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
+                    {item.achieverName}{' '}
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.78rem' }}>
+                      ضد
+                    </span>{' '}
+                    <span style={{ color: 'var(--crimson-loss)' }}>{item.victimName}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 3 }}>
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        padding: '1px 7px',
+                        borderRadius: 999,
+                        background: 'rgba(56, 189, 248, 0.14)',
+                        border: '1px solid rgba(56, 189, 248, 0.4)',
+                        color: 'var(--cyber-sky)'
+                      }}
+                    >
+                      <Gamepad2 size={11} />
+                      <span>{item.gameTitle}</span>
+                    </span>
+                    <span style={{ fontSize: '0.71rem', color: 'var(--text-secondary)' }}>
+                      بطولات {item.tournamentWins} • وديات {item.friendlyWins}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                <PlayerAvatar
+                  avatarUrl={item.victimAvatarUrl}
+                  name={item.victimName}
+                  size={30}
+                  borderColor="var(--crimson-loss)"
+                />
+                <div style={{ textAlign: 'left' }}>
+                  <div className="score-num" style={{ fontSize: '1.15rem', color: 'var(--championship-gold)' }}>
+                    {item.winsCount}
+                  </div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--emerald-win)', fontWeight: 700 }}>انتصارات</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {myFriendlySubmissions.length > 0 && (
+        <div className="stack-col" style={{ gap: 6, marginTop: 4 }}>
+          <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--cyber-sky)' }}>
+            مواجهاتك الودية الأخيرة
+          </div>
+          {myFriendlySubmissions.map((fm) => {
+            const statusColor =
+              fm.status === 'APPROVED'
+                ? 'var(--emerald-win)'
+                : fm.status === 'REJECTED'
+                ? 'var(--crimson-loss)'
+                : 'var(--championship-gold)';
+            const statusLabel =
+              fm.status === 'APPROVED' ? 'معتمدة' : fm.status === 'REJECTED' ? 'مرفوضة' : 'بانتظار المراجعة';
+            return (
+              <div
+                key={fm.id}
+                className="arena-subcard"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '7px 10px' }}
+              >
+                <div style={{ minWidth: 0, fontSize: '0.76rem' }}>
+                  <strong>{fm.player1Name}</strong> {fm.score1} - {fm.score2} <strong>{fm.player2Name}</strong>{' '}
+                  <span style={{ color: 'var(--cyber-sky)' }}>({fm.gameTitle})</span>
+                  {fm.reviewNote && (
+                    <div style={{ fontSize: '0.7rem', color: statusColor }}>ملاحظة الإدارة: {fm.reviewNote}</div>
+                  )}
+                </div>
+                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: statusColor, flexShrink: 0 }}>
+                  {statusLabel}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+

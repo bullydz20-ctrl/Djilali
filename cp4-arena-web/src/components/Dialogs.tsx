@@ -15,6 +15,7 @@ import {
   Shield,
   ShieldCheck,
   Smartphone,
+  Swords,
   Trophy,
   User,
   UserPlus,
@@ -23,17 +24,21 @@ import {
 import { uploadImageFileApi } from '../api';
 import { LEVEL_LABELS, RACE_STAGE_LABELS, STAGE_LABELS } from '../types';
 import type {
+  FriendlyMatch,
   Match,
   MatchReminder,
   Player,
   PlayerLevel,
+  PlayerProfile,
   PlayerStats,
+  PlayerUnifiedStats,
+  PlayerVictimEntry,
   RaceEntry,
   SeasonLeaderboardEntry
 } from '../types';
+import { VictimsProfileSection } from './FriendlyMatchModal';
 import { PlayerAvatar } from './PlayerAvatar';
 import { DiscordLogoIcon } from './TopHeader';
-import type { PlayerProfile } from '../types';
 
 export function RegisterPlayerModal({
   gameTitle,
@@ -861,6 +866,10 @@ export function PlayerProfileModal({
   matches,
   playersById,
   scoreUnitLabel,
+  profileId,
+  unifiedStats = null,
+  victims = [],
+  friendlyMatches = [],
   onClose
 }: {
   player: Player;
@@ -869,9 +878,14 @@ export function PlayerProfileModal({
   matches: Match[];
   playersById: Map<number, Player>;
   scoreUnitLabel: string;
+  profileId?: number | null;
+  unifiedStats?: PlayerUnifiedStats | null;
+  victims?: PlayerVictimEntry[];
+  friendlyMatches?: FriendlyMatch[];
   onClose: () => void;
 }) {
   const playerMatches = matches.filter((m) => m.player1Id === player.id || m.player2Id === player.id);
+  const resolvedProfileId = profileId ?? player.profileId ?? null;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -1006,6 +1020,14 @@ export function PlayerProfileModal({
             })
           )}
         </div>
+
+        <VictimsProfileSection
+          profileId={resolvedProfileId}
+          unifiedStats={unifiedStats}
+          victims={victims}
+          friendlyMatches={friendlyMatches}
+          testIdPrefix="profile"
+        />
       </div>
     </div>
   );
@@ -1326,18 +1348,26 @@ export function RaceResultsModal({
 export function AccountProfileModal({
   profile,
   seasonEntry,
+  unifiedStats = null,
+  victims = [],
+  friendlyMatches = [],
   activeTournamentName,
   isRegistrationOpenNow,
   onOpenSettings,
   onOpenRegister,
+  onOpenSubmitFriendly,
   onClose
 }: {
   profile: PlayerProfile;
   seasonEntry: SeasonLeaderboardEntry | null;
+  unifiedStats?: PlayerUnifiedStats | null;
+  victims?: PlayerVictimEntry[];
+  friendlyMatches?: FriendlyMatch[];
   activeTournamentName: string | null;
   isRegistrationOpenNow: boolean;
   onOpenSettings: () => void;
   onOpenRegister: () => void;
+  onOpenSubmitFriendly?: () => void;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1477,6 +1507,29 @@ export function AccountProfileModal({
               <ProfileMiniBox label="نسبة الفوز" value={`${seasonEntry.winRatePercent}%`} color="var(--cyber-sky)" />
             </div>
           </div>
+        )}
+
+        <VictimsProfileSection
+          profileId={profile.id}
+          unifiedStats={unifiedStats}
+          victims={victims}
+          friendlyMatches={friendlyMatches}
+          testIdPrefix="account_profile"
+        />
+
+        {onOpenSubmitFriendly && (
+          <button
+            type="button"
+            className="btn btn-gold"
+            onClick={() => {
+              onClose();
+              onOpenSubmitFriendly();
+            }}
+            data-testid="account_profile_submit_friendly_btn"
+          >
+            <Swords size={16} />
+            <span>تسجيل مواجهة ودية خارج البطولات</span>
+          </button>
         )}
 
         <div className="grid-2">

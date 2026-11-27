@@ -3,15 +3,21 @@ import {
   AlertTriangle,
   Award,
   BellRing,
+  Calendar,
+  Check,
   CheckCircle2,
   Copy,
   Download,
   Flag,
   ImagePlus,
+  Settings,
   Share2,
   Shield,
+  ShieldCheck,
   Smartphone,
   Trophy,
+  User,
+  UserPlus,
   X
 } from 'lucide-react';
 import { uploadImageFileApi } from '../api';
@@ -1348,6 +1354,323 @@ export function RaceResultsModal({
             إلغاء
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+export function AccountProfileModal({
+  profile,
+  seasonEntry,
+  activeTournamentName,
+  isRegistrationOpenNow,
+  onOpenSettings,
+  onOpenRegister,
+  onClose
+}: {
+  profile: PlayerProfile;
+  seasonEntry: SeasonLeaderboardEntry | null;
+  activeTournamentName: string | null;
+  isRegistrationOpenNow: boolean;
+  onOpenSettings: () => void;
+  onOpenRegister: () => void;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const createdLabel = profile.createdAt
+    ? new Date(profile.createdAt).toLocaleDateString('ar-EG', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      })
+    : '—';
+
+  async function handleCopyCp4() {
+    try {
+      await navigator.clipboard.writeText(profile.cp4Id);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // ignore clipboard errors
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} data-testid="account_profile_modal">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <User size={19} color="var(--cyber-sky)" />
+            <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.08rem' }}>
+              الملف الشخصي
+            </h2>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div
+          className="arena-subcard"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            borderColor: 'rgba(245, 184, 46, 0.45)',
+            background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(15, 21, 40, 0.92))'
+          }}
+        >
+          <PlayerAvatar
+            avatarUrl={profile.avatarUrl}
+            name={profile.name}
+            size={58}
+            borderColor="var(--championship-gold)"
+          />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: '1.02rem', color: 'var(--text-primary)' }}>
+              {profile.name}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+              <span
+                className="score-num"
+                style={{
+                  fontSize: '0.78rem',
+                  padding: '2px 9px',
+                  borderRadius: 999,
+                  background: 'rgba(245, 184, 46, 0.16)',
+                  border: '1px solid rgba(245, 184, 46, 0.55)',
+                  color: 'var(--championship-gold)'
+                }}
+              >
+                {profile.cp4Id}
+              </span>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={handleCopyCp4}
+                style={{ minHeight: 28, padding: '2px 8px', fontSize: '0.72rem', borderRadius: 999 }}
+              >
+                {copied ? <Check size={12} color="var(--emerald-win)" /> : <Copy size={12} />}
+                <span>{copied ? 'تم النسخ' : 'نسخ المعرف'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="arena-subcard stack-col" style={{ gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>ربط Discord</span>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontSize: '0.76rem',
+                fontWeight: 700,
+                color: 'var(--emerald-win)'
+              }}
+            >
+              <ShieldCheck size={14} />
+              <span>موثق {profile.discordUserId ? `(${profile.discordUserId})` : ''}</span>
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>ElysiumNet ID</span>
+            <span style={{ fontSize: '0.84rem', fontWeight: 700, color: profile.elysiumNetId ? 'var(--cyber-sky)' : 'var(--text-muted)' }}>
+              {profile.elysiumNetId || 'غير مضاف بعد'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>XeMoNet ID</span>
+            <span style={{ fontSize: '0.84rem', fontWeight: 700, color: profile.xeMoNetId ? 'var(--cyber-sky)' : 'var(--text-muted)' }}>
+              {profile.xeMoNetId || 'غير مضاف'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <Calendar size={13} />
+              <span>تاريخ الإنشاء</span>
+            </span>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>{createdLabel}</span>
+          </div>
+        </div>
+
+        {seasonEntry && (
+          <div className="arena-subcard stack-col" style={{ gap: 8, borderColor: 'rgba(56, 189, 248, 0.35)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 800, fontSize: '0.86rem', color: 'var(--cyber-sky)' }}>
+                إحصائيات الموسم
+              </span>
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--championship-gold)' }}>
+                المركز #{seasonEntry.rank} • {seasonEntry.seasonPoints} نقطة
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, textAlign: 'center' }}>
+              <ProfileMiniBox label="بطولات" value={seasonEntry.tournamentsCount} />
+              <ProfileMiniBox label="ألقاب" value={seasonEntry.titles} color="var(--championship-gold)" />
+              <ProfileMiniBox label="فوز" value={seasonEntry.wins} color="var(--emerald-win)" />
+              <ProfileMiniBox label="نسبة الفوز" value={`${seasonEntry.winRatePercent}%`} color="var(--cyber-sky)" />
+            </div>
+          </div>
+        )}
+
+        <div className="grid-2">
+          <button
+            type="button"
+            className="btn btn-outline"
+            onClick={() => {
+              onClose();
+              onOpenSettings();
+            }}
+          >
+            <Settings size={16} />
+            <span>تعديل المعرفات</span>
+          </button>
+          {isRegistrationOpenNow && activeTournamentName ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                onClose();
+                onOpenRegister();
+              }}
+            >
+              <UserPlus size={16} />
+              <span>تسجيل بالبطولة</span>
+            </button>
+          ) : (
+            <button type="button" className="btn btn-primary" onClick={onClose}>
+              إغلاق
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function AccountSettingsModal({
+  profile,
+  onSaveProfileIds,
+  onLogoutDiscord,
+  onClose
+}: {
+  profile: PlayerProfile;
+  onSaveProfileIds: (payload: { elysiumNetId: string; xeMoNetId: string }) => Promise<void>;
+  onLogoutDiscord: () => Promise<void> | void;
+  onClose: () => void;
+}) {
+  const [elysiumNetId, setElysiumNetId] = useState(profile.elysiumNetId || '');
+  const [xeMoNetId, setXeMoNetId] = useState(profile.xeMoNetId || '');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setErr('');
+    setSaving(true);
+    try {
+      await onSaveProfileIds({
+        elysiumNetId: elysiumNetId.trim(),
+        xeMoNetId: xeMoNetId.trim()
+      });
+      onClose();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : 'تعذر حفظ الإعدادات.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} data-testid="account_settings_modal">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Settings size={19} color="var(--championship-gold)" />
+            <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.08rem' }}>
+              إعدادات الحساب
+            </h2>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="arena-subcard" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <PlayerAvatar avatarUrl={profile.avatarUrl} name={profile.name} size={42} borderColor="var(--championship-gold)" />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: '0.92rem' }}>{profile.name}</div>
+              <div className="score-num" style={{ fontSize: '0.74rem', color: 'var(--cyber-sky)' }}>
+                {profile.cp4Id} (ثابت)
+              </div>
+            </div>
+          </div>
+          <span
+            style={{
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              padding: '3px 9px',
+              borderRadius: 999,
+              background: 'rgba(88, 101, 242, 0.2)',
+              border: '1px solid rgba(129, 140, 248, 0.5)',
+              color: '#E0E7FF',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            Discord متصل
+          </span>
+        </div>
+
+        <form onSubmit={handleSave} className="stack-col">
+          <div className="field-group">
+            <label className="field-label">معرف ElysiumNet</label>
+            <input
+              className="input"
+              value={elysiumNetId}
+              onChange={(e) => setElysiumNetId(e.target.value)}
+              placeholder="مثال: ELY_Player99"
+              maxLength={60}
+              data-testid="settings_elysium_input"
+            />
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">معرف XeMoNet (اختياري)</label>
+            <input
+              className="input"
+              value={xeMoNetId}
+              onChange={(e) => setXeMoNetId(e.target.value)}
+              placeholder="مثال: XEMO_Player99"
+              maxLength={60}
+              data-testid="settings_xemonet_input"
+            />
+          </div>
+
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            تُستخدم هذه المعرفات لتعبئة نموذج التسجيل تلقائياً في البطولات القادمة، مع بقاء رقم CP4 ومعرف Discord ثابتين.
+          </div>
+
+          {err && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>}
+
+          <div className="grid-2">
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              {saving ? 'جاري الحفظ...' : 'حفظ الإعدادات'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger-outline"
+              onClick={async () => {
+                onClose();
+                await onLogoutDiscord();
+              }}
+            >
+              تسجيل الخروج
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

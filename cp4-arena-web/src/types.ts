@@ -514,6 +514,18 @@ export function adminHasPermission(admin: AdminAccount | null, perm: AdminPermis
   }
 }
 
+export function hasAnyAdminAccess(admin: AdminAccount | null | undefined): boolean {
+  if (!admin || !admin.isActive) return false;
+  if (admin.role === 'HEAD_ADMIN') return true;
+  return Boolean(
+    admin.canManageTournament ||
+      admin.canManagePlayers ||
+      admin.canRunDraw ||
+      admin.canEditScores ||
+      admin.canCrownChampion
+  );
+}
+
 const ARABIC_GROUP_LETTERS = [
   'المجموعة أ',
   'المجموعة ب',

@@ -41,6 +41,7 @@ import {
   toggleMatchCheckInApi,
   updateKnockoutWinnerApi,
   updateMatchScoreApi,
+  updateOwnDiscordProfileApi,
   updateOwnProfileApi,
   updatePlayerDetailsApi,
   updatePlayerProfileApi,
@@ -91,6 +92,12 @@ const RegisterPlayerModal = lazy(() =>
 const ScoreEntryModal = lazy(() =>
   import('./components/Dialogs').then((m) => ({ default: m.ScoreEntryModal }))
 );
+const AccountProfileModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.AccountProfileModal }))
+);
+const AccountSettingsModal = lazy(() =>
+  import('./components/Dialogs').then((m) => ({ default: m.AccountSettingsModal }))
+);
 
 type TabKey = 'HOME' | 'PLAYERS' | 'GROUPS' | 'BRACKET' | 'ADMIN';
 
@@ -132,6 +139,8 @@ export default function App() {
   const [profilePlayer, setProfilePlayer] = useState<Player | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
+  const [showMyProfileModal, setShowMyProfileModal] = useState(false);
+  const [showAccountSettingsModal, setShowAccountSettingsModal] = useState(false);
 
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState(false);
@@ -416,14 +425,23 @@ export default function App() {
         discordProfile={activeDiscordProfile}
         tournaments={state?.tournaments ?? []}
         activeTournamentId={state?.tournament?.id ?? selectedTournamentId}
+        activeTab={activeTab}
         onSelectTournament={selectTournament}
+        onNavigateTab={(tab) => setActiveTab(tab)}
         onOpenAdmin={() => setActiveTab('ADMIN')}
+        onLogoutAdmin={async () => {
+          await logoutAdminApi();
+          showToast('تم تسجيل الخروج من لوحة المشرف.');
+          await refreshState();
+        }}
         onOpenExportShare={() => {
           if (state?.tournament) setShowExportModal(true);
         }}
         onOpenInstallPwa={() => setShowInstallModal(true)}
         onStartDiscordLogin={() => startDiscordLogin(showRegisterModal ? '/?register=1' : '/')}
         onLogoutDiscord={handleLogoutDiscord}
+        onOpenMyProfile={() => setShowMyProfileModal(true)}
+        onOpenAccountSettings={() => setShowAccountSettingsModal(true)}
         canShowInstall={!isStandalone}
       />
 
@@ -887,6 +905,42 @@ export default function App() {
             setDeferredInstallPrompt(null);
           }}
           onClose={() => setShowInstallModal(false)}
+        />
+      )}
+
+      {showMyProfileModal && activeDiscordProfile && (
+        <AccountProfileModal
+          profile={activeDiscordProfile}
+          seasonEntry={
+            activeDiscordProfile.elysiumNetId
+              ? (state?.seasonLeaderboard || []).find(
+                  (e) =>
+                    e.elysiumNetId.trim().toLowerCase() ===
+                    activeDiscordProfile.elysiumNetId.trim().toLowerCase()
+                ) ?? null
+              : null
+          }
+          activeTournamentName={state?.tournament?.name ?? null}
+          isRegistrationOpenNow={Boolean(state?.isRegistrationOpenNow)}
+          onOpenSettings={() => setShowAccountSettingsModal(true)}
+          onOpenRegister={() => setShowRegisterModal(true)}
+          onClose={() => setShowMyProfileModal(false)}
+        />
+      )}
+
+      {showAccountSettingsModal && activeDiscordProfile && (
+        <AccountSettingsModal
+          profile={activeDiscordProfile}
+          onSaveProfileIds={async (payload) => {
+            const res = await updateOwnDiscordProfileApi(payload);
+            if (res.profile) {
+              setDiscordProfileOverride(res.profile);
+            }
+            if (res.messageAr) showToast(res.messageAr);
+            await refreshState();
+          }}
+          onLogoutDiscord={handleLogoutDiscord}
+          onClose={() => setShowAccountSettingsModal(false)}
         />
       )}
       </Suspense>

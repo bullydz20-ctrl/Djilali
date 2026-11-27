@@ -330,6 +330,19 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
     res.json({ ok: true, messageAr: 'تم تسجيل الخروج من حساب Discord.' });
   });
 
+  app.patch('/api/discord/session/profile', async (req, res) => {
+    const authDiscordProfile = resolveAuthenticatedDiscordProfile(req);
+    if (!authDiscordProfile) {
+      return res.status(401).json({ ok: false, error: 'يرجى تسجيل الدخول عبر Discord أولاً.' });
+    }
+    const out = service.updateOwnDiscordProfile(authDiscordProfile.id, req.body || {});
+    if (!out.ok) {
+      return res.status(out.status).json({ error: out.error, code: out.code });
+    }
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
   app.get('/api/discord/oauth/start', (req, res) => {
     const status = activeDiscordAdapter.getStatus();
     const wantsJson = req.query.format === 'json';

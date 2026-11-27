@@ -1398,6 +1398,45 @@ export class ArenaService {
     return res;
   }
 
+  updateOwnDiscordProfile(profileId, payload = {}) {
+    const targetId = Number(profileId);
+    const existingRow = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(targetId);
+    if (!existingRow) {
+      return { ok: false, status: 404, error: 'ملف اللاعب غير موجود.' };
+    }
+
+    if (payload.cp4Id !== undefined && String(payload.cp4Id).trim() !== existingRow.cp4_id) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'CP4_ID_IMMUTABLE',
+        error: 'رقم اللاعب CP4 ثابت ولا يمكن تعديله أو تغييره.'
+      };
+    }
+
+    const cleanElysium =
+      payload.elysiumNetId !== undefined
+        ? String(payload.elysiumNetId || '').trim().slice(0, 60)
+        : existingRow.elysium_net_id;
+    const cleanXeMoNet =
+      payload.xeMoNetId !== undefined
+        ? String(payload.xeMoNetId || '').trim().slice(0, 60)
+        : existingRow.xemonet_id;
+
+    this.db
+      .prepare('UPDATE player_profiles SET elysium_net_id = ?, xemonet_id = ? WHERE id = ?')
+      .run(cleanElysium, cleanXeMoNet, existingRow.id);
+
+    const profile = this.getPlayerProfileById(existingRow.id);
+    this.emitChange('player_profile_updated');
+    return {
+      ok: true,
+      status: 200,
+      profile,
+      messageAr: `تم حفظ إعدادات ملفك بنجاح (${profile.cp4Id}).`
+    };
+  }
+
   mergePlayerProfiles(rawToken, { sourceProfileId, targetProfileId, confirmIdentity = false } = {}) {
     const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
     if (!auth.ok) return auth;

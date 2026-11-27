@@ -306,6 +306,13 @@ export async function logoutDiscordSessionApi() {
   });
 }
 
+export async function updateOwnDiscordProfileApi(payload: { elysiumNetId?: string; xeMoNetId?: string }) {
+  return apiRequest<{ ok: boolean; profile: PlayerProfile; messageAr: string }>('/api/discord/session/profile', {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+}
+
 export async function linkPlayerDiscordApi(
   playerId: number,
   payload: {

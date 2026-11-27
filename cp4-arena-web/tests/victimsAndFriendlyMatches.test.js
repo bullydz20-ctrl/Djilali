@@ -577,3 +577,16 @@ test('Friendly matches submission, admin review, per-game «ضحاياك» thres
     await srv.close();
   }
 });
+
+test('FriendlyMatchModal and modal CSS use mobile-safe dvh sheet rules instead of vh clipping', () => {
+  const modalSrc = fs.readFileSync(path.resolve('src/components/FriendlyMatchModal.tsx'), 'utf8');
+  const cssSrc = fs.readFileSync(path.resolve('src/styles/theme.css'), 'utf8');
+  assert.equal(modalSrc.includes('92vh'), false);
+  assert.ok(modalSrc.includes('modal-panel-sheet'));
+  assert.ok(modalSrc.includes('modal-sheet-header'));
+  assert.ok(modalSrc.includes('modal-sheet-body'));
+  assert.ok(modalSrc.includes('modal-sheet-footer'));
+  assert.ok(cssSrc.includes('100dvh - 16px'));
+  assert.ok(cssSrc.includes('overscroll-behavior: contain'));
+});
+

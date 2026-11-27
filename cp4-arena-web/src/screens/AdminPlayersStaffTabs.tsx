@@ -938,7 +938,7 @@ function CreatePlayerProfileModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>إنشاء أو ربط ملف لاعب موحد</h3>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
@@ -1182,7 +1182,7 @@ function ProfileDetailEditModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>ملف اللاعب الموحد</h3>
@@ -1493,7 +1493,7 @@ function LinkPlayerDiscordModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>ربط المشارك بحساب Discord موثق</h3>

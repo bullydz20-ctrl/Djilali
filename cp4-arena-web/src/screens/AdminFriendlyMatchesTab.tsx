@@ -343,7 +343,7 @@ export function AdminFriendlyMatchesTab({
             <img
               src={previewUrl}
               alt="إثبات المواجهة"
-              style={{ width: '100%', maxHeight: '72vh', objectFit: 'contain', borderRadius: 12 }}
+              style={{ width: '100%', maxHeight: '68dvh', objectFit: 'contain', borderRadius: 12 }}
             />
           </div>
         </div>

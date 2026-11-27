@@ -1226,7 +1226,7 @@ export function RaceResultsModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.08rem' }}>

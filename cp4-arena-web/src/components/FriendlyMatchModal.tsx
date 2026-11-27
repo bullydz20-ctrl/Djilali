@@ -67,7 +67,7 @@ export function FriendlyMatchModal({
   }, [availableOpponents, opponentQuery]);
 
   const selectedOpponent =
-    availableOpponents.find((p) => p.id === opponentProfileId) || filteredOpponents[0] || null;
+    filteredOpponents.find((p) => p.id === opponentProfileId) || filteredOpponents[0] || null;
   const activeCatalogItem = gameCatalog.find((g) => g.label === gameTitle);
 
   async function handleProofUpload(file: File | null) {
@@ -124,203 +124,240 @@ export function FriendlyMatchModal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="modal-panel stack-col"
+        className="modal-panel modal-panel-sheet"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxHeight: '92vh', overflowY: 'auto' }}
         data-testid="friendly_match_modal"
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Swords size={20} color="var(--championship-gold)" />
-            <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.08rem' }}>
+        <div className="modal-sheet-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Swords size={19} color="var(--championship-gold)" style={{ flexShrink: 0 }} />
+            <h2
+              style={{
+                margin: 0,
+                color: 'var(--championship-gold)',
+                fontSize: '0.98rem',
+                lineHeight: 1.3,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}
+            >
               تسجيل مواجهة ودية خارج البطولات
             </h2>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
-            <X size={18} />
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onClose}
+            aria-label="إغلاق"
+            style={{ minWidth: 38, minHeight: 38, padding: 6, flexShrink: 0 }}
+          >
+            <X size={17} />
           </button>
         </div>
 
-        <div
-          className="arena-subcard"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            borderColor: 'rgba(88, 101, 242, 0.5)',
-            background: 'rgba(88, 101, 242, 0.12)'
-          }}
-        >
-          <PlayerAvatar avatarUrl={discordProfile.avatarUrl} name={discordProfile.name} size={38} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{discordProfile.name}</div>
-            <div className="score-num" style={{ fontSize: '0.74rem', color: 'var(--cyber-sky)' }}>
-              {discordProfile.cp4Id} • مرسل النتيجة
-            </div>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit} className="stack-col" style={{ gap: 12 }}>
-          <div className="field-group">
-            <label className="field-label">اللعبة *</label>
-            <select
-              className="input"
-              value={gameTitle}
-              onChange={(e) => setGameTitle(e.target.value)}
-              data-testid="friendly_game_select"
+        <form onSubmit={handleSubmit} className="modal-sheet-form">
+          <div className="modal-sheet-body">
+            <div
+              className="arena-subcard"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px 10px',
+                borderColor: 'rgba(88, 101, 242, 0.5)',
+                background: 'rgba(88, 101, 242, 0.12)'
+              }}
             >
-              {gameCatalog.map((g) => (
-                <option key={g.id} value={g.label}>
-                  {g.label} — {g.categoryAr}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field-group">
-            <label className="field-label">اختيار الخصم من اللاعبين المسجلين *</label>
-            <input
-              className="input"
-              value={opponentQuery}
-              onChange={(e) => setOpponentQuery(e.target.value)}
-              placeholder="بحث بالاسم أو CP4 ID أو ElysiumNet..."
-              style={{ marginBottom: 6 }}
-            />
-            <select
-              className="input"
-              value={selectedOpponent?.id ?? 0}
-              onChange={(e) => setOpponentProfileId(Number(e.target.value))}
-              data-testid="friendly_opponent_select"
-            >
-              {filteredOpponents.length === 0 ? (
-                <option value={0}>لا يوجد لاعب مطابق</option>
-              ) : (
-                filteredOpponents.map((opp) => (
-                  <option key={opp.id} value={opp.id}>
-                    {opp.name} ({opp.cp4Id}){opp.elysiumNetId ? ` — ${opp.elysiumNetId}` : ''}
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
-
-          <div className="grid-2">
-            <div className="field-group">
-              <label className="field-label">
-                نتيجتك ({activeCatalogItem?.scoreUnitLabel || 'نقطة'}) *
-              </label>
-              <input
-                className="input score-num"
-                type="number"
-                min={0}
-                max={99}
-                value={score1}
-                onChange={(e) => setScore1(e.target.value)}
-                data-testid="friendly_score1_input"
-              />
-            </div>
-            <div className="field-group">
-              <label className="field-label">
-                نتيجة {selectedOpponent?.name || 'الخصم'} *
-              </label>
-              <input
-                className="input score-num"
-                type="number"
-                min={0}
-                max={99}
-                value={score2}
-                onChange={(e) => setScore2(e.target.value)}
-                data-testid="friendly_score2_input"
-              />
-            </div>
-          </div>
-
-          <div className="field-group">
-            <label className="field-label">تاريخ المواجهة *</label>
-            <input
-              className="input"
-              type="date"
-              value={matchDate}
-              onChange={(e) => setMatchDate(e.target.value)}
-              data-testid="friendly_date_input"
-            />
-          </div>
-
-          <div className="stack-col" style={{ gap: 6 }}>
-            <label className="btn btn-outline" style={{ cursor: uploading ? 'wait' : 'pointer' }}>
-              <ImagePlus size={17} />
-              <span>
-                {uploading
-                  ? 'جاري رفع صورة الإثبات...'
-                  : proofImageUrl
-                  ? 'تم إرفاق صورة الإثبات ✓ (تغيير)'
-                  : 'إرفاق صورة إثبات النتيجة (اختياري)'}
-              </span>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                style={{ display: 'none' }}
-                disabled={uploading}
-                onChange={(e) => handleProofUpload(e.target.files?.[0] || null)}
-              />
-            </label>
-            {proofImageUrl && (
-              <div style={{ position: 'relative' }}>
-                <img
-                  src={proofImageUrl}
-                  alt="إثبات المواجهة الودية"
+              <PlayerAvatar avatarUrl={discordProfile.avatarUrl} name={discordProfile.name} size={34} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div
                   style={{
-                    width: '100%',
-                    maxHeight: 160,
-                    objectFit: 'cover',
-                    borderRadius: 12,
-                    border: '1px solid var(--card-border)'
+                    fontWeight: 700,
+                    fontSize: '0.86rem',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
                   }}
-                />
-                <button
-                  type="button"
-                  className="icon-btn"
-                  onClick={() => setProofImageUrl(null)}
-                  aria-label="إزالة الصورة"
-                  style={{ position: 'absolute', top: 6, left: 6, background: 'rgba(7,9,19,0.85)' }}
                 >
-                  <X size={14} />
-                </button>
+                  {discordProfile.name}
+                </div>
+                <div className="score-num" style={{ fontSize: '0.72rem', color: 'var(--cyber-sky)' }}>
+                  {discordProfile.cp4Id} • مرسل النتيجة
+                </div>
               </div>
-            )}
-          </div>
+            </div>
 
-          <div
-            className="arena-subcard"
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 8,
-              fontSize: '0.75rem',
-              color: 'var(--text-secondary)',
-              borderColor: 'rgba(245, 184, 46, 0.35)'
-            }}
-          >
-            <ShieldAlert size={16} color="var(--championship-gold)" style={{ flexShrink: 0, marginTop: 2 }} />
-            <span style={{ lineHeight: 1.55 }}>
-              المواجهات الودية تُراجع من الإدارة قبل اعتمادها، ولا تمنح نقاطاً في ترتيب الموسم العام، وتُحتسب في الإحصائيات وقسم «ضحاياك» فور الاعتماد.
-            </span>
-          </div>
+            <div className="field-group">
+              <label className="field-label">اللعبة *</label>
+              <select
+                className="input"
+                value={gameTitle}
+                onChange={(e) => setGameTitle(e.target.value)}
+                data-testid="friendly_game_select"
+              >
+                {gameCatalog.map((g) => (
+                  <option key={g.id} value={g.label}>
+                    {g.label} — {g.categoryAr}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {err && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>}
+            <div className="field-group">
+              <label className="field-label">اختيار الخصم من اللاعبين المسجلين *</label>
+              <input
+                className="input"
+                value={opponentQuery}
+                onChange={(e) => setOpponentQuery(e.target.value)}
+                placeholder="بحث بالاسم أو CP4 ID أو ElysiumNet..."
+              />
+              <select
+                className="input"
+                value={selectedOpponent?.id ?? 0}
+                onChange={(e) => setOpponentProfileId(Number(e.target.value))}
+                data-testid="friendly_opponent_select"
+              >
+                {filteredOpponents.length === 0 ? (
+                  <option value={0}>لا يوجد لاعب مطابق</option>
+                ) : (
+                  filteredOpponents.map((opp) => (
+                    <option key={opp.id} value={opp.id}>
+                      {opp.name} ({opp.cp4Id}){opp.elysiumNetId ? ` — ${opp.elysiumNetId}` : ''}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
 
-          <div className="grid-2">
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={saving || uploading || availableOpponents.length === 0}
-              data-testid="friendly_submit_btn"
+            <div className="grid-2">
+              <div className="field-group">
+                <label
+                  className="field-label"
+                  style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >
+                  نتيجتك ({activeCatalogItem?.scoreUnitLabel || 'نقطة'}) *
+                </label>
+                <input
+                  className="input score-num"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={99}
+                  value={score1}
+                  onChange={(e) => setScore1(e.target.value)}
+                  data-testid="friendly_score1_input"
+                />
+              </div>
+              <div className="field-group">
+                <label
+                  className="field-label"
+                  style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >
+                  نتيجة {selectedOpponent?.name || 'الخصم'} *
+                </label>
+                <input
+                  className="input score-num"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={99}
+                  value={score2}
+                  onChange={(e) => setScore2(e.target.value)}
+                  data-testid="friendly_score2_input"
+                />
+              </div>
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">تاريخ المواجهة *</label>
+              <input
+                className="input"
+                type="date"
+                value={matchDate}
+                onChange={(e) => setMatchDate(e.target.value)}
+                data-testid="friendly_date_input"
+              />
+            </div>
+
+            <div className="stack-col" style={{ gap: 6 }}>
+              <label className="btn btn-outline" style={{ cursor: uploading ? 'wait' : 'pointer', width: '100%' }}>
+                <ImagePlus size={16} />
+                <span>
+                  {uploading
+                    ? 'جاري رفع صورة الإثبات...'
+                    : proofImageUrl
+                    ? 'تم إرفاق صورة الإثبات ✓ (تغيير)'
+                    : 'إرفاق صورة إثبات النتيجة (اختياري)'}
+                </span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  style={{ display: 'none' }}
+                  disabled={uploading}
+                  onChange={(e) => handleProofUpload(e.target.files?.[0] || null)}
+                />
+              </label>
+              {proofImageUrl && (
+                <div style={{ position: 'relative' }}>
+                  <img
+                    src={proofImageUrl}
+                    alt="إثبات المواجهة الودية"
+                    style={{
+                      width: '100%',
+                      maxHeight: 140,
+                      objectFit: 'cover',
+                      borderRadius: 12,
+                      border: '1px solid var(--card-border)'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => setProofImageUrl(null)}
+                    aria-label="إزالة الصورة"
+                    style={{ position: 'absolute', top: 6, left: 6, background: 'rgba(7,9,19,0.85)' }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div
+              className="arena-subcard"
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                padding: '8px 10px',
+                fontSize: '0.73rem',
+                color: 'var(--text-secondary)',
+                borderColor: 'rgba(245, 184, 46, 0.35)'
+              }}
             >
-              {saving ? 'جاري الإرسال...' : 'إرسال للمراجعة'}
-            </button>
-            <button type="button" className="btn btn-outline" onClick={onClose}>
-              إلغاء
-            </button>
+              <ShieldAlert size={15} color="var(--championship-gold)" style={{ flexShrink: 0, marginTop: 2 }} />
+              <span style={{ lineHeight: 1.5 }}>
+                المواجهات الودية تُراجع من الإدارة قبل اعتمادها، ولا تمنح نقاطاً في ترتيب الموسم العام، وتُحتسب في الإحصائيات وقسم «ضحاياك» فور الاعتماد.
+              </span>
+            </div>
+          </div>
+
+          <div className="modal-sheet-footer">
+            {err && <div style={{ color: 'var(--crimson-loss)', fontSize: '0.8rem', fontWeight: 700 }}>{err}</div>}
+            <div className="grid-2">
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={saving || uploading || availableOpponents.length === 0}
+                data-testid="friendly_submit_btn"
+              >
+                {saving ? 'جاري الإرسال...' : 'إرسال للمراجعة'}
+              </button>
+              <button type="button" className="btn btn-outline" onClick={onClose}>
+                إلغاء
+              </button>
+            </div>
           </div>
         </form>
       </div>

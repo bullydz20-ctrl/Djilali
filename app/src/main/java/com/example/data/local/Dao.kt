@@ -108,7 +108,7 @@ interface MatchDao {
     @Query("DELETE FROM matches WHERE tournamentId = :tournamentId")
     suspend fun deleteMatchesForTournament(tournamentId: Long)
 
-    @Query("DELETE FROM matches WHERE tournamentId = :tournamentId AND stage IN ('ROUND_OF_16', 'QUARTER_FINAL', 'SEMI_FINAL', 'THIRD_PLACE', 'FINAL')")
+    @Query("DELETE FROM matches WHERE tournamentId = :tournamentId AND stage IN ('ROUND_OF_64', 'ROUND_OF_32', 'ROUND_OF_16', 'QUARTER_FINAL', 'SEMI_FINAL', 'THIRD_PLACE', 'FINAL')")
     suspend fun deleteKnockoutMatchesForTournament(tournamentId: Long)
 }
 

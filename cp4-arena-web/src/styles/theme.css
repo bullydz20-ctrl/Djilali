@@ -828,3 +828,445 @@ textarea.input {
   box-shadow: 0 0 28px rgba(245, 184, 46, 0.16);
 }
 
+/* ===== CP4 ARENA Esports Tournament Bracket Theme ===== */
+:root {
+  --electric-red: #ef4444;
+  --neon-crimson: #f87171;
+  --electric-blue-glow: rgba(37, 99, 235, 0.52);
+  --electric-red-glow: rgba(239, 68, 68, 0.52);
+  --gold-glow: rgba(245, 184, 46, 0.45);
+}
+
+.esports-arena-shell {
+  position: relative;
+  border-radius: 20px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  background:
+    radial-gradient(ellipse 46% 52% at 50% 42%, rgba(245, 184, 46, 0.14), transparent 70%),
+    radial-gradient(ellipse 52% 85% at 8% 35%, rgba(37, 99, 235, 0.3), transparent 62%),
+    radial-gradient(ellipse 52% 85% at 92% 35%, rgba(239, 68, 68, 0.28), transparent 62%),
+    linear-gradient(180deg, #060a18 0%, #090e20 55%, #050711 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 20px 50px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.esports-arena-shell.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  border-radius: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  width: 100vw;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+}
+
+.esports-arena-shell.is-fullscreen .bracket-viewport-wrap {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.esports-arena-shell.is-fullscreen .esports-vertical-scroll {
+  flex: 1;
+  max-height: none;
+  overflow-y: auto;
+}
+
+.esports-top-bar {
+  position: relative;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(37, 99, 235, 0.2) 0%,
+      rgba(15, 21, 40, 0.92) 32%,
+      rgba(15, 21, 40, 0.96) 50%,
+      rgba(15, 21, 40, 0.92) 68%,
+      rgba(239, 68, 68, 0.2) 100%
+    );
+  border-bottom: 1px solid rgba(245, 184, 46, 0.25);
+}
+
+.esports-mode-capsule {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(6, 10, 24, 0.9);
+  border: 1.5px solid rgba(56, 189, 248, 0.55);
+  box-shadow: 0 0 16px rgba(37, 99, 235, 0.24);
+  gap: 3px;
+}
+
+.esports-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.esports-mode-btn.active {
+  background: linear-gradient(180deg, #ffd464 0%, #f5b82e 55%, #c78b14 100%);
+  color: #161004;
+  box-shadow: 0 0 14px rgba(245, 184, 46, 0.48);
+}
+
+.esports-brand-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.05;
+  padding: 0 6px;
+}
+
+.esports-brand-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-display);
+  font-size: clamp(1.15rem, 2.3vw, 1.65rem);
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.75);
+}
+
+.esports-brand-cp4 {
+  background: linear-gradient(180deg, #ffffff 15%, #cbd5e1 65%, #94a3b8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.esports-brand-arena {
+  background: linear-gradient(180deg, #fde68a 10%, #f5b82e 55%, #b4780d 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.esports-brand-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: #f8fafc;
+}
+
+.esports-sub-chevrons {
+  width: 26px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--championship-gold));
+}
+
+.esports-sub-chevrons.rev {
+  background: linear-gradient(270deg, transparent, var(--championship-gold));
+}
+
+.esports-zoom-capsule {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(6, 10, 24, 0.9);
+  border: 1.5px solid rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 16px rgba(37, 99, 235, 0.2);
+}
+
+.esports-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: rgba(22, 31, 59, 0.75);
+  color: #f8fafc;
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.esports-zoom-btn:hover {
+  background: rgba(37, 99, 235, 0.32);
+  border-color: rgba(56, 189, 248, 0.65);
+}
+
+.esports-zoom-pct {
+  min-width: 46px;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: var(--championship-gold);
+}
+
+/* Chamfered / Hexagonal Stage Header Badge */
+.esports-hex-header {
+  position: relative;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 16px;
+  font-weight: 800;
+  font-size: 0.88rem;
+  color: #f8fafc;
+  clip-path: polygon(12px 0%, calc(100% - 12px) 0%, 100% 50%, calc(100% - 12px) 100%, 12px 100%, 0% 50%);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.esports-hex-header.wing-left {
+  background: linear-gradient(180deg, rgba(29, 78, 216, 0.45), rgba(10, 19, 44, 0.96));
+  border-top: 1.5px solid rgba(245, 184, 46, 0.7);
+  border-bottom: 1.5px solid rgba(56, 189, 248, 0.65);
+}
+
+.esports-hex-header.wing-right {
+  background: linear-gradient(180deg, rgba(185, 28, 28, 0.45), rgba(34, 10, 18, 0.96));
+  border-top: 1.5px solid rgba(245, 184, 46, 0.7);
+  border-bottom: 1.5px solid rgba(248, 113, 113, 0.65);
+}
+
+.esports-hex-header.wing-final {
+  background: linear-gradient(180deg, #fde68a 0%, #f5b82e 52%, #b4780d 100%);
+  color: #161004;
+  font-size: 0.96rem;
+  font-weight: 900;
+  box-shadow: 0 0 22px rgba(245, 184, 46, 0.5);
+}
+
+/* Wing-themed Match Cards */
+.esports-match-card {
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(15, 24, 52, 0.96), rgba(7, 11, 26, 0.98));
+  transition: transform 0.16s ease, box-shadow 0.2s ease;
+}
+
+.esports-match-card.editable {
+  cursor: pointer;
+}
+
+.esports-match-card.editable:hover {
+  transform: translateY(-1px);
+}
+
+.esports-match-card.wing-left {
+  border: 1.5px solid rgba(56, 189, 248, 0.72);
+  box-shadow: 0 0 18px rgba(37, 99, 235, 0.24), inset 0 1px 0 rgba(125, 211, 252, 0.18);
+}
+
+.esports-match-card.wing-left.completed {
+  border-color: rgba(245, 184, 46, 0.85);
+  box-shadow: 0 0 18px rgba(245, 184, 46, 0.2), 0 0 12px rgba(37, 99, 235, 0.28);
+}
+
+.esports-match-card.wing-right {
+  background: linear-gradient(180deg, rgba(38, 14, 26, 0.96), rgba(14, 7, 16, 0.98));
+  border: 1.5px solid rgba(248, 113, 113, 0.72);
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.24), inset 0 1px 0 rgba(252, 165, 165, 0.18);
+}
+
+.esports-match-card.wing-right.completed {
+  border-color: rgba(245, 184, 46, 0.85);
+  box-shadow: 0 0 18px rgba(245, 184, 46, 0.2), 0 0 12px rgba(239, 68, 68, 0.28);
+}
+
+.esports-match-card.wing-final {
+  border-radius: 16px;
+  border: 2px solid var(--championship-gold);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(245, 184, 46, 0.18), transparent 72%),
+    linear-gradient(180deg, #161d38 0%, #090d1f 100%);
+  box-shadow: 0 0 30px rgba(245, 184, 46, 0.34), inset 0 0 18px rgba(245, 184, 46, 0.12);
+}
+
+.esports-vs-divider {
+  position: relative;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(245, 184, 46, 0.78), transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.esports-vs-pill {
+  position: relative;
+  z-index: 2;
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fde68a, #f5b82e 55%, #b4780d);
+  color: #161004;
+  font-family: var(--font-display);
+  font-size: 0.74rem;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.06em;
+  box-shadow: 0 0 10px rgba(245, 184, 46, 0.65);
+}
+
+/* Champion Banner & Podium Rings */
+.esports-champion-box {
+  position: relative;
+  width: 100%;
+  border-radius: 16px;
+  padding: 10px 14px 14px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(245, 184, 46, 0.24), transparent 72%),
+    linear-gradient(180deg, rgba(22, 31, 59, 0.92), rgba(7, 9, 19, 0.96));
+  border: 1.5px solid rgba(245, 184, 46, 0.78);
+  box-shadow: 0 0 26px rgba(245, 184, 46, 0.25);
+}
+
+.esports-champion-ribbon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 3px 16px;
+  clip-path: polygon(10px 0%, calc(100% - 10px) 0%, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0% 50%);
+  background: linear-gradient(180deg, #1b223d 0%, #090d1c 100%);
+  border-top: 1px solid rgba(245, 184, 46, 0.85);
+  border-bottom: 1px solid rgba(245, 184, 46, 0.85);
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.08em;
+  color: var(--championship-gold);
+  text-shadow: 0 0 10px rgba(245, 184, 46, 0.5);
+}
+
+.esports-podium-rings {
+  width: 100%;
+  height: 16px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(245, 184, 46, 0.55) 0%, rgba(56, 189, 248, 0.28) 45%, rgba(239, 68, 68, 0.28) 70%, transparent 90%);
+  border-bottom: 2px solid rgba(56, 189, 248, 0.65);
+  box-shadow: 0 4px 16px rgba(245, 184, 46, 0.35);
+}
+
+/* Vertical Mobile View */
+.esports-vertical-flow {
+  padding: 14px 12px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.esports-wing-section-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.esports-wing-section-tag.left {
+  background: rgba(37, 99, 235, 0.22);
+  border: 1px solid rgba(56, 189, 248, 0.6);
+  color: var(--cyber-sky);
+}
+
+.esports-wing-section-tag.right {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(248, 113, 113, 0.6);
+  color: var(--neon-crimson);
+}
+
+@media (max-width: 780px) {
+  .esports-top-bar {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 8px;
+    padding: 10px 10px;
+  }
+
+  .esports-mode-capsule,
+  .esports-zoom-capsule {
+    justify-self: center;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .esports-brand-center {
+    order: -1;
+  }
+}
+
+@media (max-width: 420px) {
+  .esports-mode-btn {
+    padding: 4px 11px;
+    font-size: 0.78rem;
+    min-height: 34px;
+  }
+
+  .esports-zoom-btn {
+    padding: 4px 6px;
+    font-size: 0.72rem;
+    min-width: 30px;
+    min-height: 32px;
+  }
+
+  .esports-vertical-flow {
+    padding: 12px 8px 20px;
+  }
+}
+
+

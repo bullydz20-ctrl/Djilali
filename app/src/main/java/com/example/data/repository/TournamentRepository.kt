@@ -486,12 +486,11 @@ class TournamentRepository(
                 TournamentFormat.DIRECT_KNOCKOUT -> {
                     val orderedIds = if (tournament.drawMode == DrawMode.MANUAL && manualKnockoutOrder.isNotEmpty()) {
                         (manualKnockoutOrder.filter { id -> approved.any { it.id == id } } +
-                            approved.map { it.id }.filter { it !in manualKnockoutOrder }).take(16)
+                            approved.map { it.id }.filter { it !in manualKnockoutOrder }).take(64)
                     } else {
-                        approved.shuffled().map { it.id }.take(16)
+                        approved.shuffled().map { it.id }.take(64)
                     }
-                    val bracketSize = TournamentEngine.nextPowerOfTwo(orderedIds.size.coerceAtLeast(2)).coerceAtMost(16)
-                    val padded = List<Long?>(bracketSize) { i -> orderedIds.getOrNull(i) }
+                    val padded = TournamentEngine.distributeSeededSlotsWithByes(orderedIds)
                     playerDao.updatePlayers(approved.map { it.copy(groupId = null) })
                     insertLinkedKnockoutBracket(tournament, padded)
                     tournamentDao.updateTournament(
@@ -531,21 +530,25 @@ class TournamentRepository(
                 TournamentEngine.buildKnockoutSeedPairsFromGroups(groupStandings, tournament.qualifiersPerGroup)
             }
             TournamentFormat.LEAGUE_KNOCKOUT -> {
-                val topCount = tournament.qualifiersPerGroup.coerceIn(2, 16)
+                val topCount = tournament.qualifiersPerGroup.coerceIn(2, 64)
                 val topIds = leagueStandings.take(topCount).map { it.player.id }
                 if (topIds.size < 2) return RepoResult.Error("يلزم تأهل لاعبين اثنين على الأقل.")
-                val bracketSize = TournamentEngine.nextPowerOfTwo(topIds.size).coerceAtMost(16)
-                // Standard seeding: 1 vs N, 2 vs N-1...
-                val paired = mutableListOf<Long?>()
-                var left = 0
-                var right = bracketSize - 1
-                while (left < right) {
-                    paired.add(topIds.getOrNull(left))
-                    paired.add(topIds.getOrNull(right))
-                    left++
-                    right--
+                val bracketSize = TournamentEngine.nextPowerOfTwo(topIds.size).coerceAtMost(64)
+                if (topIds.size == bracketSize || topIds.size == bracketSize - 1) {
+                    // Standard seeding: 1 vs N, 2 vs N-1...
+                    val paired = mutableListOf<Long?>()
+                    var left = 0
+                    var right = bracketSize - 1
+                    while (left < right) {
+                        paired.add(topIds.getOrNull(left))
+                        paired.add(topIds.getOrNull(right))
+                        left++
+                        right--
+                    }
+                    paired
+                } else {
+                    TournamentEngine.distributeSeededSlotsWithByes(topIds)
                 }
-                paired
             }
             TournamentFormat.DIRECT_KNOCKOUT,
             TournamentFormat.RACE_POINTS,

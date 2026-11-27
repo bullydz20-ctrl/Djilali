@@ -109,14 +109,16 @@ enum class PlayerLevel(val labelAr: String, val defaultOvr: Int) {
     LEGEND("أسطوري", 94)
 }
 
-enum class MatchStage(val labelAr: String, val order: Int) {
-    GROUP("دور المجموعات", 1),
-    LEAGUE("مرحلة الدوري", 1),
-    ROUND_OF_16("دور الـ 16", 2),
-    QUARTER_FINAL("ربع النهائي", 3),
-    SEMI_FINAL("نصف النهائي", 4),
-    THIRD_PLACE("تحديد المركز الثالث", 5),
-    FINAL("المباراة النهائية", 6)
+enum class MatchStage(val labelAr: String, val order: Int, val shortLabelAr: String = labelAr) {
+    GROUP("دور المجموعات", 1, "المجموعات"),
+    LEAGUE("مرحلة الدوري", 1, "الدوري"),
+    ROUND_OF_64("دور الـ 64", 2, "دور 64"),
+    ROUND_OF_32("دور الـ 32", 3, "دور 32"),
+    ROUND_OF_16("دور الـ 16", 4, "دور 16"),
+    QUARTER_FINAL("ربع النهائي", 5, "ربع النهائي"),
+    SEMI_FINAL("نصف النهائي", 6, "نصف النهائي"),
+    THIRD_PLACE("تحديد المركز الثالث", 7, "المركز الثالث"),
+    FINAL("المباراة النهائية", 8, "النهائي")
 }
 
 enum class AdminRole(val labelAr: String) {

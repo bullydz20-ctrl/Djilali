@@ -393,5 +393,103 @@ class BracketInteractiveTest {
         composeRule.onNodeWithTag("bracket_wing_filter_left").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("bracket_wing_focused_LEFT_WING").assertIsDisplayed()
+
+        // Toggle Horizontal <-> Vertical Esports Bracket modes and verify zoom reset restores 100%
+        composeRule.onNodeWithTag("bracket_wing_filter_all").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("bracket_zoom_in").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("bracket_zoom_percent").assertTextEquals("115%")
+        composeRule.onNodeWithTag("bracket_zoom_reset").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("bracket_zoom_percent").assertTextEquals("100%")
+
+        composeRule.onNodeWithTag("bracket_mode_horizontal").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("bracket_full_tree").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_mode_vertical").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("bracket_full_tree").assertIsDisplayed()
+    }
+
+    @Test
+    fun presentStagesOnlyAnd64PlayerBracketModelBuildSymmetrically() = runTest {
+        repo.ensureDefaultTournamentShellIfEmpty()
+        var tournament = repo.latestTournament.first()!!
+        repo.saveTournamentSettings(
+            tournament.copy(maxParticipants = 64, format = TournamentFormat.DIRECT_KNOCKOUT)
+        )
+        tournament = repo.latestTournament.first()!!
+
+        for (i in 1..64) {
+            assertTrue(
+                repo.registerPlayer(
+                    tournamentId = tournament.id,
+                    name = "نجم $i",
+                    elysiumNetId = "STAR_$i",
+                    avatarUri = null,
+                    level = PlayerLevel.PRO,
+                    clubName = "CP4_$i"
+                ) is RepoResult.Success
+            )
+        }
+        repo.players.first().forEach { p ->
+            assertTrue(repo.updatePlayerStatus(p, PlayerStatus.APPROVED) is RepoResult.Success)
+        }
+        assertTrue(repo.runDrawAndGenerateSchedule() is RepoResult.Success)
+        val matches64 = repo.matches.first()
+        assertEquals(63, matches64.size)
+
+        val model64 = com.example.ui.components.buildSymmetricalBracketModel(matches64)
+        assertEquals(16, model64.rightWingByStage[MatchStage.ROUND_OF_64]?.size)
+        assertEquals(16, model64.leftWingByStage[MatchStage.ROUND_OF_64]?.size)
+        assertEquals(8, model64.rightWingByStage[MatchStage.ROUND_OF_32]?.size)
+        assertEquals(8, model64.leftWingByStage[MatchStage.ROUND_OF_32]?.size)
+        assertEquals(4, model64.rightWingByStage[MatchStage.ROUND_OF_16]?.size)
+        assertEquals(4, model64.leftWingByStage[MatchStage.ROUND_OF_16]?.size)
+        assertEquals(2, model64.rightWingByStage[MatchStage.QUARTER_FINAL]?.size)
+        assertEquals(2, model64.leftWingByStage[MatchStage.QUARTER_FINAL]?.size)
+        assertEquals(1, model64.rightWingByStage[MatchStage.SEMI_FINAL]?.size)
+        assertEquals(1, model64.leftWingByStage[MatchStage.SEMI_FINAL]?.size)
+
+        // Verify an 8-player bracket hides non-existent R64/R32/R16 pills and shows QF/SF/FINAL
+        val sample8 = (1L..8L).map { id ->
+            PlayerEntity(
+                id = id, tournamentId = 1L, name = "لاعب $id", elysiumNetId = "P8_$id",
+                level = PlayerLevel.PRO, ovrRating = 85, status = PlayerStatus.APPROVED
+            )
+        }
+        val qfFinals = listOf(
+            MatchEntity(id = 1, tournamentId = 1, stage = MatchStage.QUARTER_FINAL, bracketIndex = 0, player1Id = 1, player2Id = 2, nextMatchId = 5, nextMatchSlot = 1),
+            MatchEntity(id = 2, tournamentId = 1, stage = MatchStage.QUARTER_FINAL, bracketIndex = 1, player1Id = 3, player2Id = 4, nextMatchId = 5, nextMatchSlot = 2),
+            MatchEntity(id = 3, tournamentId = 1, stage = MatchStage.QUARTER_FINAL, bracketIndex = 2, player1Id = 5, player2Id = 6, nextMatchId = 6, nextMatchSlot = 1),
+            MatchEntity(id = 4, tournamentId = 1, stage = MatchStage.QUARTER_FINAL, bracketIndex = 3, player1Id = 7, player2Id = 8, nextMatchId = 6, nextMatchSlot = 2),
+            MatchEntity(id = 5, tournamentId = 1, stage = MatchStage.SEMI_FINAL, bracketIndex = 0, nextMatchId = 7, nextMatchSlot = 1),
+            MatchEntity(id = 6, tournamentId = 1, stage = MatchStage.SEMI_FINAL, bracketIndex = 1, nextMatchId = 7, nextMatchSlot = 2),
+            MatchEntity(id = 7, tournamentId = 1, stage = MatchStage.FINAL, bracketIndex = 0)
+        )
+        composeRule.setContent {
+            FifaTournamentTheme {
+                BracketScreen(
+                    uiState = TournamentUiState(
+                        isLoaded = true,
+                        players = sample8,
+                        approvedPlayers = sample8,
+                        knockoutMatches = qfFinals,
+                        allMatches = qfFinals
+                    ),
+                    onEditMatch = {},
+                    onSelectWinner = { _, _ -> }
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("bracket_stage_filter_ROUND_OF_64").assertDoesNotExist()
+        composeRule.onNodeWithTag("bracket_stage_filter_ROUND_OF_32").assertDoesNotExist()
+        composeRule.onNodeWithTag("bracket_stage_filter_ROUND_OF_16").assertDoesNotExist()
+        composeRule.onNodeWithTag("bracket_stage_filter_QUARTER_FINAL").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_stage_filter_SEMI_FINAL").assertIsDisplayed()
+        composeRule.onNodeWithTag("bracket_stage_filter_FINAL").assertIsDisplayed()
     }
 }

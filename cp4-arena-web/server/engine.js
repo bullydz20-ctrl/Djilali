@@ -289,6 +289,34 @@ export function computeRacingStandings(players, races, qualifiersCount = 4) {
   }));
 }
 
+export function distributeSeededSlotsWithByes(orderedIds) {
+  const cleanIds = orderedIds.filter((id) => id != null).slice(0, 64);
+  const bracketSize = Math.max(2, Math.min(64, nextPowerOfTwo(Math.max(2, cleanIds.length))));
+  const slots = new Array(bracketSize).fill(null);
+  if (cleanIds.length >= bracketSize) {
+    for (let i = 0; i < bracketSize; i++) slots[i] = cleanIds[i];
+    return slots;
+  }
+  if (cleanIds.length === bracketSize - 1) {
+    for (let i = 0; i < cleanIds.length; i++) slots[i] = cleanIds[i];
+    return slots;
+  }
+  const matchCount = Math.floor(bracketSize / 2);
+  const halfM = Math.max(1, Math.floor(matchCount / 2));
+  for (let m = 0; m < Math.min(matchCount, cleanIds.length); m++) {
+    slots[m * 2] = cleanIds[m];
+  }
+  const remaining = cleanIds.slice(matchCount);
+  for (let step = 0; step < remaining.length; step++) {
+    const targetMatch =
+      step % 2 === 0
+        ? Math.floor(step / 2)
+        : Math.min(matchCount - 1, halfM + Math.floor(step / 2));
+    slots[targetMatch * 2 + 1] = remaining[step];
+  }
+  return slots;
+}
+
 export function buildKnockoutSeedPairsFromGroups(groupStandings, qualifiersPerGroup) {
   const allQualified = [];
   if (groupStandings.length >= 2 && qualifiersPerGroup >= 2) {
@@ -322,21 +350,32 @@ export function buildKnockoutSeedPairsFromGroups(groupStandings, qualifiersPerGr
     }
   }
 
-  const capped = allQualified.slice(0, 16);
-  const bracketSize = Math.min(16, nextPowerOfTwo(Math.max(2, capped.length)));
-  const padded = new Array(bracketSize).fill(null);
-  for (let i = 0; i < capped.length; i++) {
-    padded[i] = capped[i];
-  }
-  return padded;
+  return distributeSeededSlotsWithByes(allQualified.slice(0, 64));
 }
 
 export function buildKnockoutTreeDrafts({ tournamentId, seededSlots, tieRule, includeThirdPlace = false }) {
-  const bracketSize = Math.max(2, Math.min(16, nextPowerOfTwo(Math.max(2, seededSlots.length))));
+  const bracketSize = Math.max(2, Math.min(64, nextPowerOfTwo(Math.max(2, seededSlots.length))));
   const padded = Array.from({ length: bracketSize }, (_, i) => seededSlots[i] ?? null);
 
   let stages;
-  if (bracketSize === 16) {
+  if (bracketSize === 64) {
+    stages = [
+      MatchStage.FINAL,
+      MatchStage.SEMI_FINAL,
+      MatchStage.QUARTER_FINAL,
+      MatchStage.ROUND_OF_16,
+      MatchStage.ROUND_OF_32,
+      MatchStage.ROUND_OF_64
+    ];
+  } else if (bracketSize === 32) {
+    stages = [
+      MatchStage.FINAL,
+      MatchStage.SEMI_FINAL,
+      MatchStage.QUARTER_FINAL,
+      MatchStage.ROUND_OF_16,
+      MatchStage.ROUND_OF_32
+    ];
+  } else if (bracketSize === 16) {
     stages = [MatchStage.FINAL, MatchStage.SEMI_FINAL, MatchStage.QUARTER_FINAL, MatchStage.ROUND_OF_16];
   } else if (bracketSize === 8) {
     stages = [MatchStage.FINAL, MatchStage.SEMI_FINAL, MatchStage.QUARTER_FINAL];

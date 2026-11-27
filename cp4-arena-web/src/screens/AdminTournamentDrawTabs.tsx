@@ -478,7 +478,7 @@ export function AdminTournamentSettingsTab({
               className="input"
               type="number"
               min={1}
-              max={32}
+              max={64}
               value={qualifiersPerGroup}
               onChange={(e) => setQualifiersPerGroup(e.target.value)}
             />

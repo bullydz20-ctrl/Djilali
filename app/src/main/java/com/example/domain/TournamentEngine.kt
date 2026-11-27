@@ -231,9 +231,38 @@ object TournamentEngine {
         }
     }
 
+    fun distributeSeededSlotsWithByes(orderedIds: List<Long>): List<Long?> {
+        val cleanIds = orderedIds.distinct().take(64)
+        val bracketSize = nextPowerOfTwo(max(2, cleanIds.size)).coerceIn(2, 64)
+        val slots = MutableList<Long?>(bracketSize) { null }
+        if (cleanIds.size >= bracketSize) {
+            for (i in 0 until bracketSize) slots[i] = cleanIds[i]
+            return slots
+        }
+        if (cleanIds.size == bracketSize - 1) {
+            for (i in cleanIds.indices) slots[i] = cleanIds[i]
+            return slots
+        }
+        val matchCount = bracketSize / 2
+        val halfM = (matchCount / 2).coerceAtLeast(1)
+        for (m in 0 until minOf(matchCount, cleanIds.size)) {
+            slots[m * 2] = cleanIds[m]
+        }
+        val remaining = cleanIds.drop(matchCount)
+        for (step in remaining.indices) {
+            val targetMatch = if (step % 2 == 0) {
+                step / 2
+            } else {
+                (halfM + step / 2).coerceAtMost(matchCount - 1)
+            }
+            slots[targetMatch * 2 + 1] = remaining[step]
+        }
+        return slots
+    }
+
     /**
      * Cross-seeds qualifiers from groups into knockout order so groupmates only meet in the final.
-     * Supports 2, 4, 8, or 16 qualifiers (and pads with null BYEs if count is non-power-of-2).
+     * Supports 2, 4, 8, 16, 32, or 64 qualifiers (and distributes BYEs cleanly when non-power-of-2).
      */
     fun buildKnockoutSeedPairsFromGroups(
         groupStandings: List<List<GroupStandingRow>>,
@@ -276,13 +305,7 @@ object TournamentEngine {
             }
         }
 
-        val capped = allQualified.take(16)
-        val bracketSize = nextPowerOfTwo(max(2, capped.size)).coerceAtMost(16)
-        val padded = MutableList<Long?>(bracketSize) { null }
-        for (i in capped.indices) {
-            padded[i] = capped[i]
-        }
-        return padded
+        return distributeSeededSlotsWithByes(allQualified.take(64))
     }
 
     /**
@@ -302,10 +325,25 @@ object TournamentEngine {
         tieRule: KnockoutTieRule,
         includeThirdPlace: Boolean = false
     ): List<BracketNodeDraft> {
-        val bracketSize = nextPowerOfTwo(max(2, seededSlots.size)).coerceIn(2, 16)
+        val bracketSize = nextPowerOfTwo(max(2, seededSlots.size)).coerceIn(2, 64)
         val padded = List(bracketSize) { i -> seededSlots.getOrNull(i) }
 
         val stages = when (bracketSize) {
+            64 -> listOf(
+                MatchStage.FINAL,
+                MatchStage.SEMI_FINAL,
+                MatchStage.QUARTER_FINAL,
+                MatchStage.ROUND_OF_16,
+                MatchStage.ROUND_OF_32,
+                MatchStage.ROUND_OF_64
+            )
+            32 -> listOf(
+                MatchStage.FINAL,
+                MatchStage.SEMI_FINAL,
+                MatchStage.QUARTER_FINAL,
+                MatchStage.ROUND_OF_16,
+                MatchStage.ROUND_OF_32
+            )
             16 -> listOf(
                 MatchStage.FINAL,
                 MatchStage.SEMI_FINAL,

@@ -116,6 +116,8 @@ export const PLAYER_LEVEL_META = {
 export const MatchStage = {
   GROUP: 'GROUP',
   LEAGUE: 'LEAGUE',
+  ROUND_OF_64: 'ROUND_OF_64',
+  ROUND_OF_32: 'ROUND_OF_32',
   ROUND_OF_16: 'ROUND_OF_16',
   QUARTER_FINAL: 'QUARTER_FINAL',
   SEMI_FINAL: 'SEMI_FINAL',
@@ -124,13 +126,15 @@ export const MatchStage = {
 };
 
 export const MATCH_STAGE_META = {
-  GROUP: { labelAr: 'دور المجموعات', order: 1 },
-  LEAGUE: { labelAr: 'مرحلة الدوري', order: 1 },
-  ROUND_OF_16: { labelAr: 'دور الـ 16', order: 2 },
-  QUARTER_FINAL: { labelAr: 'ربع النهائي', order: 3 },
-  SEMI_FINAL: { labelAr: 'نصف النهائي', order: 4 },
-  THIRD_PLACE: { labelAr: 'المركز الثالث والرابع', order: 5 },
-  FINAL: { labelAr: 'المباراة النهائية', order: 6 }
+  GROUP: { labelAr: 'دور المجموعات', shortAr: 'المجموعات', order: 1 },
+  LEAGUE: { labelAr: 'مرحلة الدوري', shortAr: 'الدوري', order: 1 },
+  ROUND_OF_64: { labelAr: 'دور الـ 64', shortAr: 'دور 64', order: 2 },
+  ROUND_OF_32: { labelAr: 'دور الـ 32', shortAr: 'دور 32', order: 3 },
+  ROUND_OF_16: { labelAr: 'دور الـ 16', shortAr: 'دور 16', order: 4 },
+  QUARTER_FINAL: { labelAr: 'ربع النهائي', shortAr: 'ربع النهائي', order: 5 },
+  SEMI_FINAL: { labelAr: 'نصف النهائي', shortAr: 'نصف النهائي', order: 6 },
+  THIRD_PLACE: { labelAr: 'المركز الثالث والرابع', shortAr: 'المركز الثالث', order: 7 },
+  FINAL: { labelAr: 'المباراة النهائية', shortAr: 'النهائي', order: 8 }
 };
 
 export const AdminRole = {

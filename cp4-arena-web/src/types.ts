@@ -14,6 +14,8 @@ export type PlayerLevel = 'BEGINNER' | 'INTERMEDIATE' | 'PRO' | 'LEGEND';
 export type MatchStage =
   | 'GROUP'
   | 'LEAGUE'
+  | 'ROUND_OF_64'
+  | 'ROUND_OF_32'
   | 'ROUND_OF_16'
   | 'QUARTER_FINAL'
   | 'SEMI_FINAL'
@@ -432,14 +434,16 @@ export const LEVEL_LABELS: Record<PlayerLevel, { label: string; ovr: number }> =
   LEGEND: { label: 'أسطوري', ovr: 94 }
 };
 
-export const STAGE_LABELS: Record<MatchStage, { label: string; order: number }> = {
-  GROUP: { label: 'دور المجموعات', order: 1 },
-  LEAGUE: { label: 'مرحلة الدوري', order: 1 },
-  ROUND_OF_16: { label: 'دور الـ 16', order: 2 },
-  QUARTER_FINAL: { label: 'ربع النهائي', order: 3 },
-  SEMI_FINAL: { label: 'نصف النهائي', order: 4 },
-  THIRD_PLACE: { label: 'المركز الثالث والرابع', order: 5 },
-  FINAL: { label: 'المباراة النهائية', order: 6 }
+export const STAGE_LABELS: Record<MatchStage, { label: string; shortLabel: string; order: number }> = {
+  GROUP: { label: 'دور المجموعات', shortLabel: 'المجموعات', order: 1 },
+  LEAGUE: { label: 'مرحلة الدوري', shortLabel: 'الدوري', order: 1 },
+  ROUND_OF_64: { label: 'دور الـ 64', shortLabel: 'دور 64', order: 2 },
+  ROUND_OF_32: { label: 'دور الـ 32', shortLabel: 'دور 32', order: 3 },
+  ROUND_OF_16: { label: 'دور الـ 16', shortLabel: 'دور 16', order: 4 },
+  QUARTER_FINAL: { label: 'ربع النهائي', shortLabel: 'ربع النهائي', order: 5 },
+  SEMI_FINAL: { label: 'نصف النهائي', shortLabel: 'نصف النهائي', order: 6 },
+  THIRD_PLACE: { label: 'المركز الثالث والرابع', shortLabel: 'المركز الثالث', order: 7 },
+  FINAL: { label: 'المباراة النهائية', shortLabel: 'النهائي', order: 8 }
 };
 
 export const ADMIN_PERMISSIONS_META: Array<{

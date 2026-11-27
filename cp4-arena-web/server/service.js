@@ -25,6 +25,7 @@ import {
   computeStandings,
   computeTournamentStats,
   distributePlayersIntoGroups,
+  distributeSeededSlotsWithByes,
   generateRoundRobinMatches,
   groupDisplayName,
   nextPowerOfTwo,
@@ -1549,14 +1550,23 @@ export class ArenaService {
         ? computeStandings(approvedPlayers, leagueMatches, tournament.qualifiersPerGroup)
         : [];
 
-    const knockoutMatches = allMatches.filter(
-      (m) =>
-        m.stage === MatchStage.ROUND_OF_16 ||
-        m.stage === MatchStage.QUARTER_FINAL ||
-        m.stage === MatchStage.SEMI_FINAL ||
-        m.stage === MatchStage.FINAL ||
-        m.stage === MatchStage.THIRD_PLACE
-    );
+    const knockoutMatches = allMatches
+      .filter(
+        (m) =>
+          m.stage === MatchStage.ROUND_OF_64 ||
+          m.stage === MatchStage.ROUND_OF_32 ||
+          m.stage === MatchStage.ROUND_OF_16 ||
+          m.stage === MatchStage.QUARTER_FINAL ||
+          m.stage === MatchStage.SEMI_FINAL ||
+          m.stage === MatchStage.FINAL ||
+          m.stage === MatchStage.THIRD_PLACE
+      )
+      .sort((a, b) => {
+        const orderDiff = (MATCH_STAGE_META[a.stage]?.order ?? 99) - (MATCH_STAGE_META[b.stage]?.order ?? 99);
+        if (orderDiff !== 0) return orderDiff;
+        if (a.bracketIndex !== b.bracketIndex) return a.bracketIndex - b.bracketIndex;
+        return a.id - b.id;
+      });
 
     const { playerStats, overviewStats } = computeTournamentStats(approvedPlayers, allMatches);
     const seasonLeaderboard = computeSeasonLeaderboard(this.db);
@@ -1641,7 +1651,7 @@ export class ArenaService {
     const startDateTime = String(payload.startDateTime || '').trim() || 'يُحدد لاحقاً';
     const maxParticipants = Math.max(2, Math.min(64, Number(payload.maxParticipants) || 16));
     const groupCount = Math.max(1, Math.min(8, Number(payload.groupCount) || 4));
-    const qualifiersPerGroup = Math.max(1, Math.min(16, Number(payload.qualifiersPerGroup) || 2));
+    const qualifiersPerGroup = Math.max(1, Math.min(64, Number(payload.qualifiersPerGroup) || 2));
     const drawMode = Object.values(DrawMode).includes(payload.drawMode) ? payload.drawMode : DrawMode.RANDOM;
     const knockoutTieRule = Object.values(KnockoutTieRule).includes(payload.knockoutTieRule)
       ? payload.knockoutTieRule
@@ -1707,7 +1717,7 @@ export class ArenaService {
     const rules = resolveTournamentGameRules(payload, current);
     const maxParticipants = Math.max(2, Math.min(64, Number(payload.maxParticipants ?? current.maxParticipants)));
     const groupCount = Math.max(1, Math.min(8, Number(payload.groupCount ?? current.groupCount)));
-    const qualifiersPerGroup = Math.max(1, Math.min(16, Number(payload.qualifiersPerGroup ?? current.qualifiersPerGroup)));
+    const qualifiersPerGroup = Math.max(1, Math.min(64, Number(payload.qualifiersPerGroup ?? current.qualifiersPerGroup)));
     const drawMode = Object.values(DrawMode).includes(payload.drawMode) ? payload.drawMode : current.drawMode;
     const knockoutTieRule = Object.values(KnockoutTieRule).includes(payload.knockoutTieRule)
       ? payload.knockoutTieRule
@@ -2638,12 +2648,11 @@ export class ArenaService {
         const validSet = new Set(approved.map((p) => p.id));
         const chosen = manualKnockoutOrder.map(Number).filter((id) => validSet.has(id));
         const chosenSet = new Set(chosen);
-        orderedIds = [...chosen, ...approved.map((p) => p.id).filter((id) => !chosenSet.has(id))].slice(0, 16);
+        orderedIds = [...chosen, ...approved.map((p) => p.id).filter((id) => !chosenSet.has(id))].slice(0, 64);
       } else {
-        orderedIds = shuffleArray(approved).map((p) => p.id).slice(0, 16);
+        orderedIds = shuffleArray(approved).map((p) => p.id).slice(0, 64);
       }
-      const bracketSize = Math.min(16, nextPowerOfTwo(Math.max(2, orderedIds.length)));
-      const padded = Array.from({ length: bracketSize }, (_, i) => orderedIds[i] ?? null);
+      const padded = distributeSeededSlotsWithByes(orderedIds);
       this.db.prepare('UPDATE players SET group_id = NULL WHERE tournament_id = ?').run(tournament.id);
       this.insertLinkedKnockoutBracket(tournament, padded);
       this.db
@@ -2676,18 +2685,22 @@ export class ArenaService {
           tournament.qualifiersPerGroup
         );
       } else if (tournament.format === TournamentFormat.LEAGUE_KNOCKOUT) {
-        const topCount = Math.max(2, Math.min(16, tournament.qualifiersPerGroup));
+        const topCount = Math.max(2, Math.min(64, tournament.qualifiersPerGroup));
         const topIds = state.leagueStandings.slice(0, topCount).map((r) => r.player.id);
         if (topIds.length < 2) {
           return { ok: false, status: 400, error: 'يلزم تأهل لاعبين اثنين على الأقل.' };
         }
-        const bracketSize = Math.min(16, nextPowerOfTwo(topIds.length));
-        let left = 0;
-        let right = bracketSize - 1;
-        while (left < right) {
-          seededSlots.push(topIds[left] ?? null, topIds[right] ?? null);
-          left += 1;
-          right -= 1;
+        const bracketSize = Math.min(64, nextPowerOfTwo(topIds.length));
+        if (topIds.length === bracketSize || topIds.length === bracketSize - 1) {
+          let left = 0;
+          let right = bracketSize - 1;
+          while (left < right) {
+            seededSlots.push(topIds[left] ?? null, topIds[right] ?? null);
+            left += 1;
+            right -= 1;
+          }
+        } else {
+          seededSlots = distributeSeededSlotsWithByes(topIds);
         }
       } else {
         return { ok: false, status: 400, error: 'البطولة بنظام الإقصائيات المباشرة بالفعل.' };

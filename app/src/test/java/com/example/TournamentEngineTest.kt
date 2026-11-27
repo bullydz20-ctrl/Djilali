@@ -118,4 +118,40 @@ class TournamentEngineTest {
         assertEquals(4, distributed.count { it.groupId == 1L })
         assertEquals(4, distributed.count { it.groupId == 2L })
     }
+
+    @Test
+    fun knockoutTreeBuildsLinkedRoundsUpToRoundOf64AndHandlesByesWithoutDeadMatches() {
+        val drafts32 = TournamentEngine.buildKnockoutTreeDrafts(
+            tournamentId = 1L,
+            seededSlots = TournamentEngine.distributeSeededSlotsWithByes((1L..32L).toList()),
+            tieRule = KnockoutTieRule.SINGLE_MATCH_PENALTIES
+        )
+        assertEquals(31, drafts32.size)
+        assertEquals(16, drafts32.count { it.entity.stage == MatchStage.ROUND_OF_32 })
+        assertEquals(8, drafts32.count { it.entity.stage == MatchStage.ROUND_OF_16 })
+        assertEquals(4, drafts32.count { it.entity.stage == MatchStage.QUARTER_FINAL })
+        assertEquals(2, drafts32.count { it.entity.stage == MatchStage.SEMI_FINAL })
+        assertEquals(1, drafts32.count { it.entity.stage == MatchStage.FINAL })
+
+        val drafts64 = TournamentEngine.buildKnockoutTreeDrafts(
+            tournamentId = 1L,
+            seededSlots = TournamentEngine.distributeSeededSlotsWithByes((1L..64L).toList()),
+            tieRule = KnockoutTieRule.SINGLE_MATCH_PENALTIES
+        )
+        assertEquals(63, drafts64.size)
+        assertEquals(32, drafts64.count { it.entity.stage == MatchStage.ROUND_OF_64 })
+        assertEquals(16, drafts64.count { it.entity.stage == MatchStage.ROUND_OF_32 })
+
+        for (incompleteCount in listOf(5, 11, 20, 40)) {
+            val slots = TournamentEngine.distributeSeededSlotsWithByes((1L..incompleteCount.toLong()).toList())
+            val nonNull = slots.filterNotNull()
+            assertEquals(incompleteCount, nonNull.size)
+            for (i in slots.indices step 2) {
+                assertTrue(
+                    "Dead null-vs-null match for $incompleteCount players at pair ${i / 2}",
+                    slots[i] != null || slots[i + 1] != null
+                )
+            }
+        }
+    }
 }

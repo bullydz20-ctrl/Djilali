@@ -73,10 +73,13 @@ import com.example.ui.theme.CardBorder
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.CrimsonLoss
 import com.example.ui.theme.CyberSky
+import com.example.ui.theme.DeepCrimsonSurface
 import com.example.ui.theme.ElectricCobalt
+import com.example.ui.theme.ElectricRed
 import com.example.ui.theme.ElevatedNavy
 import com.example.ui.theme.EmeraldWin
 import com.example.ui.theme.MidnightSurface
+import com.example.ui.theme.NeonCrimson
 import com.example.ui.theme.ObsidianVoid
 import com.example.ui.theme.RoyalViolet
 import com.example.ui.theme.TextMuted
@@ -84,6 +87,8 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
 val KNOCKOUT_ROADMAP_STAGES = listOf(
+    MatchStage.ROUND_OF_64,
+    MatchStage.ROUND_OF_32,
     MatchStage.ROUND_OF_16,
     MatchStage.QUARTER_FINAL,
     MatchStage.SEMI_FINAL,
@@ -122,6 +127,8 @@ fun buildSymmetricalBracketModel(knockoutMatches: List<MatchEntity>): Symmetrica
 
     val byStage = ordered.groupBy { it.stage }
     val preFinalStages = listOf(
+        MatchStage.ROUND_OF_64,
+        MatchStage.ROUND_OF_32,
         MatchStage.ROUND_OF_16,
         MatchStage.QUARTER_FINAL,
         MatchStage.SEMI_FINAL
@@ -132,6 +139,8 @@ fun buildSymmetricalBracketModel(knockoutMatches: List<MatchEntity>): Symmetrica
     val byId = ordered.associateBy { it.id }
 
     fun expectedStageCapacity(stage: MatchStage): Int = when (stage) {
+        MatchStage.ROUND_OF_64 -> 32
+        MatchStage.ROUND_OF_32 -> 16
         MatchStage.ROUND_OF_16 -> 8
         MatchStage.QUARTER_FINAL -> 4
         MatchStage.SEMI_FINAL -> 2
@@ -142,7 +151,7 @@ fun buildSymmetricalBracketModel(knockoutMatches: List<MatchEntity>): Symmetrica
         // Returns true for RIGHT wing (Slot 1 into Final), false for LEFT wing (Slot 2 into Final)
         var curr: MatchEntity? = match
         var visited = 0
-        while (curr != null && visited < 8) {
+        while (curr != null && visited < 12) {
             val nextId = curr.nextMatchId
             if (nextId != null) {
                 val parent = byId[nextId]
@@ -223,16 +232,15 @@ fun BracketStagePillsBar(
             )
         }
 
-        items(KNOCKOUT_ROADMAP_STAGES, key = { it.name }) { stage ->
+        val activeRoadmapStages = KNOCKOUT_ROADMAP_STAGES.filter { !matchesByStage[it].isNullOrEmpty() }
+        items(activeRoadmapStages, key = { it.name }) { stage ->
             val stageMatches = matchesByStage[stage].orEmpty()
             val completed = stageMatches.count { it.isCompleted }
             val total = stageMatches.size
-            val isPresent = total > 0
-            val badgeText = if (isPresent) "${stage.labelAr} ($completed/$total)" else "${stage.labelAr} (—)"
+            val badgeText = "${stage.shortLabelAr} ($completed/$total)"
 
             FilterChip(
                 selected = selectedStage == stage,
-                enabled = isPresent,
                 onClick = { onSelectStage(stage) },
                 label = { Text(badgeText) },
                 colors = FilterChipDefaults.filterChipColors(
@@ -272,7 +280,8 @@ fun BracketMatchNode(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     matchNumber: Int? = null,
-    bestOf: Int = 1
+    bestOf: Int = 1,
+    wingSide: BracketWingSide = if (isFinal) BracketWingSide.FINAL_GOLD else BracketWingSide.LEFT_BLUE
 ) {
     val canTap = canEdit && player1 != null && player2 != null
     val isReady = player1 != null && player2 != null
@@ -292,8 +301,20 @@ fun BracketMatchNode(
     val statusColor = when {
         match.isWalkover -> AmberDraw
         match.isCompleted -> EmeraldWin
-        isReady -> CyberSky
+        isReady -> if (wingSide == BracketWingSide.RIGHT_RED) NeonCrimson else CyberSky
         else -> TextMuted
+    }
+
+    val cardContainer = when (wingSide) {
+        BracketWingSide.FINAL_GOLD -> ElevatedNavy
+        BracketWingSide.RIGHT_RED -> DeepCrimsonSurface
+        BracketWingSide.LEFT_BLUE -> MidnightSurface
+    }
+    val borderColor = when {
+        isFinal || wingSide == BracketWingSide.FINAL_GOLD -> ChampionshipGold
+        match.isCompleted -> ChampionshipGold.copy(alpha = 0.85f)
+        wingSide == BracketWingSide.RIGHT_RED -> NeonCrimson.copy(alpha = if (isReady) 0.88f else 0.55f)
+        else -> CyberSky.copy(alpha = if (isReady) 0.88f else 0.55f)
     }
 
     Card(
@@ -309,40 +330,42 @@ fun BracketMatchNode(
                 }
             ),
         shape = RoundedCornerShape(if (isFinal) 18.dp else 14.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isFinal) ElevatedNavy else MidnightSurface
-        ),
+        colors = CardDefaults.cardColors(containerColor = cardContainer),
         border = BorderStroke(
             width = when {
                 isFinal -> 2.dp
-                match.isCompleted -> 1.4.dp
-                isReady -> 1.2.dp
-                else -> 1.dp
+                match.isCompleted || isReady -> 1.5.dp
+                else -> 1.1.dp
             },
-            color = when {
-                isFinal -> ChampionshipGold
-                match.isCompleted -> ChampionshipGold.copy(alpha = 0.72f)
-                isReady -> ElectricCobalt.copy(alpha = 0.85f)
-                else -> CardBorder
-            }
+            color = borderColor
         )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .then(
-                    if (isFinal) {
-                        Modifier.background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    ChampionshipGold.copy(alpha = 0.14f),
-                                    ElevatedNavy,
-                                    MidnightSurface
-                                )
+                .background(
+                    when (wingSide) {
+                        BracketWingSide.FINAL_GOLD -> Brush.verticalGradient(
+                            listOf(
+                                ChampionshipGold.copy(alpha = 0.16f),
+                                ElevatedNavy,
+                                MidnightSurface
                             )
                         )
-                    } else {
-                        Modifier
+                        BracketWingSide.RIGHT_RED -> Brush.verticalGradient(
+                            listOf(
+                                ElectricRed.copy(alpha = 0.14f),
+                                DeepCrimsonSurface,
+                                ObsidianVoid
+                            )
+                        )
+                        BracketWingSide.LEFT_BLUE -> Brush.verticalGradient(
+                            listOf(
+                                ElectricCobalt.copy(alpha = 0.16f),
+                                MidnightSurface,
+                                ObsidianVoid
+                            )
+                        )
                     }
                 )
         ) {
@@ -351,8 +374,11 @@ fun BracketMatchNode(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        if (isFinal) ChampionshipGold.copy(alpha = 0.14f)
-                        else ObsidianVoid.copy(alpha = 0.62f)
+                        when (wingSide) {
+                            BracketWingSide.FINAL_GOLD -> ChampionshipGold.copy(alpha = 0.15f)
+                            BracketWingSide.RIGHT_RED -> ElectricRed.copy(alpha = 0.16f)
+                            BracketWingSide.LEFT_BLUE -> ElectricCobalt.copy(alpha = 0.16f)
+                        }
                     )
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -364,13 +390,21 @@ fun BracketMatchNode(
                     modifier = Modifier.weight(1f)
                 ) {
                     Surface(
-                        color = if (isFinal) ChampionshipGold else ElevatedNavy,
+                        color = when (wingSide) {
+                            BracketWingSide.FINAL_GOLD -> ChampionshipGold
+                            BracketWingSide.RIGHT_RED -> ElectricRed.copy(alpha = 0.30f)
+                            BracketWingSide.LEFT_BLUE -> ElectricCobalt.copy(alpha = 0.32f)
+                        },
                         shape = RoundedCornerShape(5.dp)
                     ) {
                         Text(
                             text = "#$displayNum",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (isFinal) MidnightSurface else CyberSky,
+                            color = when (wingSide) {
+                                BracketWingSide.FINAL_GOLD -> MidnightSurface
+                                BracketWingSide.RIGHT_RED -> NeonCrimson
+                                BracketWingSide.LEFT_BLUE -> CyberSky
+                            },
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                         )
@@ -378,7 +412,7 @@ fun BracketMatchNode(
                     val stageTitle = when {
                         isFinal -> "النهائي الكبير"
                         match.stage == MatchStage.THIRD_PLACE -> "المركز الثالث"
-                        else -> match.stage.labelAr
+                        else -> match.stage.shortLabelAr
                     }
                     Text(
                         text = stageTitle,
@@ -392,7 +426,7 @@ fun BracketMatchNode(
                         Text(
                             text = "Bo$bestOf",
                             style = MaterialTheme.typography.labelSmall,
-                            color = CyberSky
+                            color = ChampionshipGold
                         )
                     }
                 }
@@ -425,13 +459,13 @@ fun BracketMatchNode(
 
                     if (canTap) {
                         Surface(
-                            color = ElectricCobalt.copy(alpha = 0.28f),
+                            color = ChampionshipGold.copy(alpha = 0.22f),
                             shape = RoundedCornerShape(6.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Edit,
                                 contentDescription = if (match.winnerId != null) "تعديل النتيجة" else "تحديد الفائز",
-                                tint = CyberSky,
+                                tint = ChampionshipGold,
                                 modifier = Modifier
                                     .padding(3.dp)
                                     .size(11.dp)
@@ -447,15 +481,44 @@ fun BracketMatchNode(
                 isWinner = p1Won,
                 isEliminated = p2Won,
                 isFinal = isFinal,
+                wingSide = wingSide,
                 modifier = Modifier.weight(1f)
             )
-            HorizontalDivider(color = if (isFinal) ChampionshipGold.copy(alpha = 0.35f) else CardBorder.copy(alpha = 0.55f))
+            if (isFinal) {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    HorizontalDivider(color = ChampionshipGold.copy(alpha = 0.5f))
+                    Surface(
+                        color = ChampionshipGold,
+                        shape = RoundedCornerShape(999.dp)
+                    ) {
+                        Text(
+                            text = "VS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MidnightSurface,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            } else {
+                HorizontalDivider(
+                    color = when (wingSide) {
+                        BracketWingSide.RIGHT_RED -> NeonCrimson.copy(alpha = 0.28f)
+                        BracketWingSide.LEFT_BLUE -> CyberSky.copy(alpha = 0.28f)
+                        BracketWingSide.FINAL_GOLD -> ChampionshipGold.copy(alpha = 0.35f)
+                    }
+                )
+            }
             BracketSlotRow(
                 player = player2,
                 scoreText = score2Text,
                 isWinner = p2Won,
                 isEliminated = p1Won,
                 isFinal = isFinal,
+                wingSide = wingSide,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -517,6 +580,7 @@ private fun BracketSlotRow(
     isWinner: Boolean,
     isEliminated: Boolean,
     isFinal: Boolean,
+    wingSide: BracketWingSide,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -524,8 +588,8 @@ private fun BracketSlotRow(
             .fillMaxWidth()
             .background(
                 when {
-                    isWinner -> ChampionshipGold.copy(alpha = 0.16f)
-                    isEliminated -> ObsidianVoid.copy(alpha = 0.38f)
+                    isWinner -> ChampionshipGold.copy(alpha = 0.17f)
+                    isEliminated -> ObsidianVoid.copy(alpha = 0.42f)
                     else -> Color.Transparent
                 }
             )
@@ -546,7 +610,8 @@ private fun BracketSlotRow(
                 borderColor = when {
                     isWinner -> ChampionshipGold
                     isEliminated -> CrimsonLoss.copy(alpha = 0.45f)
-                    player != null -> CyberSky.copy(alpha = 0.65f)
+                    player != null && wingSide == BracketWingSide.RIGHT_RED -> NeonCrimson.copy(alpha = 0.78f)
+                    player != null -> CyberSky.copy(alpha = 0.78f)
                     else -> CardBorder.copy(alpha = 0.5f)
                 }
             )
@@ -590,8 +655,9 @@ private fun BracketSlotRow(
 
             Surface(
                 color = when {
-                    isWinner -> ChampionshipGold.copy(alpha = 0.24f)
+                    isWinner -> ChampionshipGold.copy(alpha = 0.25f)
                     isEliminated -> ObsidianVoid.copy(alpha = 0.6f)
+                    wingSide == BracketWingSide.RIGHT_RED -> ElectricRed.copy(alpha = 0.24f)
                     else -> ElevatedNavy
                 },
                 shape = RoundedCornerShape(7.dp),
@@ -624,6 +690,7 @@ fun SymmetricalConnectorCanvas(
     totalHeight: Dp,
     headerTopOffset: Dp,
     flowDirection: BracketFlowDirection,
+    wingSide: BracketWingSide = BracketWingSide.LEFT_BLUE,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -662,6 +729,7 @@ fun SymmetricalConnectorCanvas(
                 baseStroke = baseStroke,
                 goldStroke = goldStroke,
                 goldGlow = goldGlow,
+                wingSide = wingSide,
                 drawGold = false
             )
             drawBranchLine(
@@ -674,6 +742,7 @@ fun SymmetricalConnectorCanvas(
                 baseStroke = baseStroke,
                 goldStroke = goldStroke,
                 goldGlow = goldGlow,
+                wingSide = wingSide,
                 drawGold = false
             )
         }
@@ -697,6 +766,7 @@ fun SymmetricalConnectorCanvas(
                 baseStroke = baseStroke,
                 goldStroke = goldStroke,
                 goldGlow = goldGlow,
+                wingSide = wingSide,
                 drawGold = true
             )
             drawBranchLine(
@@ -709,6 +779,7 @@ fun SymmetricalConnectorCanvas(
                 baseStroke = baseStroke,
                 goldStroke = goldStroke,
                 goldGlow = goldGlow,
+                wingSide = wingSide,
                 drawGold = true
             )
         }
@@ -725,6 +796,7 @@ private fun DrawScope.drawBranchLine(
     baseStroke: Float,
     goldStroke: Float,
     goldGlow: Float,
+    wingSide: BracketWingSide,
     drawGold: Boolean
 ) {
     val hasWinner = match?.winnerId != null
@@ -737,10 +809,13 @@ private fun DrawScope.drawBranchLine(
         lineTo(parentX, parentY)
     }
 
+    val wingColor = if (wingSide == BracketWingSide.RIGHT_RED) NeonCrimson else CyberSky
+    val wingGlow = if (wingSide == BracketWingSide.RIGHT_RED) ElectricRed else ElectricCobalt
+
     if (hasWinner) {
         drawPath(
             path = path,
-            color = ChampionshipGold.copy(alpha = 0.28f),
+            color = ChampionshipGold.copy(alpha = 0.30f),
             style = Stroke(width = goldGlow, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
         drawPath(
@@ -750,9 +825,16 @@ private fun DrawScope.drawBranchLine(
         )
     } else {
         val isReady = match?.player1Id != null && match.player2Id != null
+        if (isReady) {
+            drawPath(
+                path = path,
+                color = wingGlow.copy(alpha = 0.28f),
+                style = Stroke(width = goldGlow * 0.8f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+        }
         drawPath(
             path = path,
-            color = if (isReady) CyberSky.copy(alpha = 0.72f) else TextMuted.copy(alpha = 0.55f),
+            color = if (isReady) wingColor.copy(alpha = 0.88f) else wingColor.copy(alpha = 0.36f),
             style = Stroke(width = baseStroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
     }
@@ -764,6 +846,7 @@ fun SemiToFinalConnectorCanvas(
     connectorWidth: Dp,
     totalHeight: Dp,
     headerTopOffset: Dp,
+    wingSide: BracketWingSide = BracketWingSide.LEFT_BLUE,
     modifier: Modifier = Modifier
 ) {
     Canvas(
@@ -775,9 +858,12 @@ fun SemiToFinalConnectorCanvas(
         val y = size.height / 2f
         val hasWinner = semiMatch?.winnerId != null
         val isReady = semiMatch?.player1Id != null && semiMatch.player2Id != null
+        val wingColor = if (wingSide == BracketWingSide.RIGHT_RED) NeonCrimson else CyberSky
+        val wingGlow = if (wingSide == BracketWingSide.RIGHT_RED) ElectricRed else ElectricCobalt
+
         if (hasWinner) {
             drawLine(
-                color = ChampionshipGold.copy(alpha = 0.28f),
+                color = ChampionshipGold.copy(alpha = 0.30f),
                 start = Offset(0f, y),
                 end = Offset(size.width, y),
                 strokeWidth = 7.5.dp.toPx(),
@@ -791,8 +877,17 @@ fun SemiToFinalConnectorCanvas(
                 cap = StrokeCap.Round
             )
         } else {
+            if (isReady) {
+                drawLine(
+                    color = wingGlow.copy(alpha = 0.28f),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 6.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
             drawLine(
-                color = if (isReady) CyberSky.copy(alpha = 0.75f) else TextMuted.copy(alpha = 0.55f),
+                color = if (isReady) wingColor.copy(alpha = 0.88f) else wingColor.copy(alpha = 0.38f),
                 start = Offset(0f, y),
                 end = Offset(size.width, y),
                 strokeWidth = 2.8.dp.toPx(),
@@ -814,8 +909,8 @@ fun ChampionPedestalNode(
             containerColor = if (champion != null) ElevatedNavy else MidnightSurface
         ),
         border = BorderStroke(
-            width = if (champion != null) 2.dp else 1.dp,
-            color = if (champion != null) ChampionshipGold else CardBorder
+            width = if (champion != null) 2.dp else 1.4.dp,
+            color = if (champion != null) ChampionshipGold else ChampionshipGold.copy(alpha = 0.55f)
         )
     ) {
         Box(
@@ -823,82 +918,81 @@ fun ChampionPedestalNode(
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        colors = if (champion != null) {
-                            listOf(
-                                ChampionshipGold.copy(alpha = 0.24f),
-                                RoyalViolet.copy(alpha = 0.14f),
-                                MidnightSurface
-                            )
-                        } else {
-                            listOf(MidnightSurface, ObsidianVoid.copy(alpha = 0.6f))
-                        }
+                        colors = listOf(
+                            ChampionshipGold.copy(alpha = if (champion != null) 0.28f else 0.14f),
+                            ElevatedNavy.copy(alpha = 0.9f),
+                            ObsidianVoid
+                        )
                     )
                 )
-                .padding(12.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             contentAlignment = Alignment.Center
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(5.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (champion != null) ChampionshipGold.copy(alpha = 0.24f)
-                            else ElevatedNavy
-                        ),
-                    contentAlignment = Alignment.Center
+                EsportsCrownCanvas(modifier = Modifier.size(width = 22.dp, height = 14.dp))
+
+                Surface(
+                    color = ObsidianVoid.copy(alpha = 0.88f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, ChampionshipGold.copy(alpha = 0.78f))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.EmojiEvents,
-                        contentDescription = "كأس البطولة",
-                        tint = if (champion != null) ChampionshipGold else TextMuted,
-                        modifier = Modifier.size(21.dp)
+                    Text(
+                        text = "CHAMPION",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = ChampionshipGold,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
                     )
                 }
 
-                Text(
-                    text = "بطل البطولة",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = ChampionshipGold,
-                    fontWeight = FontWeight.Bold
-                )
-
                 if (champion != null) {
-                    PlayerAvatar(
-                        avatarUri = champion.avatarUri,
-                        playerName = champion.name,
-                        size = 38.dp,
-                        borderColor = ChampionshipGold
-                    )
-                    Text(
-                        text = champion.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center
-                    )
-                    if (champion.clubName.isNotBlank()) {
-                        Text(
-                            text = champion.clubName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = CyberSky,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PlayerAvatar(
+                            avatarUri = champion.avatarUri,
+                            playerName = champion.name,
+                            size = 34.dp,
+                            borderColor = ChampionshipGold
                         )
+                        Column(horizontalAlignment = Alignment.Start) {
+                            Text(
+                                text = champion.name,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = ChampionshipGold,
+                                fontWeight = FontWeight.ExtraBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (champion.clubName.isNotBlank()) {
+                                Text(
+                                    text = champion.clubName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = CyberSky,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 } else {
                     Text(
-                        text = "يتحدد من النهائي",
+                        text = "بطل البطولة — يتحدد من النهائي",
                         style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted,
+                        color = TextSecondary,
                         textAlign = TextAlign.Center
                     )
                 }
+
+                EsportsPodiumRings(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(14.dp)
+                )
             }
         }
     }

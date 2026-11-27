@@ -6,7 +6,7 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { createArenaApp } from '../server/app.js';
 import { backfillPlayerProfiles, openDatabase } from '../server/db.js';
-import { createSignedOAuthState } from '../server/discord.js';
+import { createDefaultDiscordAdapter, createSignedOAuthState } from '../server/discord.js';
 
 function startServer(opts) {
   const { app, db, service, shutdownResources } = createArenaApp(opts);
@@ -460,5 +460,284 @@ test('Stage 1 openDatabase upgrades legacy pre-Stage-1 SQLite snapshot without E
   } finally {
     upgraded.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Discord OAuth session cookie, auto-filled tournament registration with mandatory ElysiumNet/XeMoNet, logout, and Admin manual-participant linking', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp4-discord-reg-link-'));
+  const dbPath = path.join(tmpDir, 'arena.db');
+  const uploadsDir = path.join(tmpDir, 'uploads');
+
+  const mockDiscordAdapter = {
+    getStatus() {
+      return {
+        oauthConfigured: true,
+        botConfigured: true,
+        guildIdConfigured: true,
+        guildConfigured: true
+      };
+    },
+    buildAuthorizeUrl({ state }) {
+      return `https://discord.com/oauth2/authorize?client_id=mock&state=${encodeURIComponent(state)}`;
+    },
+    async exchangeCodeForUser(code) {
+      if (code === 'oauth_login_code') {
+        return {
+          discordUserId: '555666777888999000',
+          username: 'amine_dc',
+          displayName: 'أمين ديسكورد',
+          avatarUrl: 'https://cdn.discordapp.com/avatars/555666777888999000/avatar123.png?size=256'
+        };
+      }
+      throw new Error('INVALID_CODE');
+    },
+    async fetchGuildMembers() {
+      return [
+        {
+          discordUserId: '555666777888999000',
+          username: 'amine_dc',
+          displayName: 'أمين ديسكورد',
+          avatarUrl: 'https://cdn.discordapp.com/avatars/555666777888999000/avatar123.png?size=256'
+        }
+      ];
+    }
+  };
+
+  const srv = await startServer({ dbPath, uploadsDir, discordAdapter: mockDiscordAdapter });
+  try {
+    // 1. Setup head admin & create two tournaments
+    const setupRes = await api(srv.baseUrl, '/api/admin/setup-head', {
+      method: 'POST',
+      body: { username: 'HeadAdmin', displayName: 'Djilali', pin: '482913', keepSignedIn: true }
+    });
+    assert.equal(setupRes.status, 201);
+    const headToken = setupRes.json.token;
+
+    const t1Res = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token: headToken,
+      body: { name: 'بطولة Discord الرسمية', gameTitle: 'FIFA 22', maxParticipants: 16 }
+    });
+    assert.equal(t1Res.status, 201);
+    const t1Id = t1Res.json.tournament.id;
+
+    const t2Res = await api(srv.baseUrl, '/api/tournaments', {
+      method: 'POST',
+      token: headToken,
+      body: { name: 'بطولة الربط الإداري', gameTitle: 'Tekken 7', maxParticipants: 16 }
+    });
+    assert.equal(t2Res.status, 201);
+    const t2Id = t2Res.json.tournament.id;
+
+    // 2. Start OAuth with returnTo & verify signed state + callback Set-Cookie
+    const startRes = await api(srv.baseUrl, '/api/discord/oauth/start?format=json&returnTo=%2F%3Fregister%3D1', {
+      headers: { Origin: 'http://127.0.0.1:5173' }
+    });
+    assert.equal(startRes.status, 200);
+    const state = new URL(startRes.json.url).searchParams.get('state');
+    assert.ok(state);
+
+    const callbackRes = await api(
+      srv.baseUrl,
+      `/api/discord/oauth/callback?code=oauth_login_code&state=${encodeURIComponent(state)}`
+    );
+    assert.equal(callbackRes.status, 200);
+    assert.ok(callbackRes.text.includes('CP4-000001'));
+    assert.ok(callbackRes.text.includes('/?register=1'));
+
+    const setCookieHeader = callbackRes.headers.get('set-cookie') || '';
+    const cookieMatch = setCookieHeader.match(/cp4_discord_session=([^;]+)/);
+    assert.ok(cookieMatch, 'Expected cp4_discord_session cookie to be set on OAuth callback');
+    const discordCookie = `cp4_discord_session=${cookieMatch[1]}`;
+
+    // 3. /api/state with session cookie returns currentDiscordProfile
+    const stateWithCookie = await api(srv.baseUrl, `/api/state?tournamentId=${t1Id}`, {
+      headers: { Cookie: discordCookie }
+    });
+    assert.equal(stateWithCookie.status, 200);
+    assert.equal(stateWithCookie.json.currentDiscordProfile?.cp4Id, 'CP4-000001');
+    assert.equal(stateWithCookie.json.currentDiscordProfile?.name, 'أمين ديسكورد');
+    assert.equal(stateWithCookie.json.currentDiscordProfile?.discordUserId, '555666777888999000');
+
+    // 4. Registration via Discord session MUST still enforce mandatory ElysiumNet / XeMoNet ID
+    const missingElysium = await api(srv.baseUrl, '/api/players/register', {
+      method: 'POST',
+      headers: { Cookie: discordCookie },
+      body: {
+        tournamentId: t1Id,
+        name: '',
+        elysiumNetId: '',
+        useDiscordIdentity: true
+      }
+    });
+    assert.equal(missingElysium.status, 400);
+
+    // 5. Registration with ElysiumNet ID + Discord session auto-fills name, avatar, discordUserId & cp4Id
+    const okReg = await api(srv.baseUrl, '/api/players/register', {
+      method: 'POST',
+      headers: { Cookie: discordCookie },
+      body: {
+        tournamentId: t1Id,
+        name: '',
+        elysiumNetId: 'ELY-AMINE-77',
+        xeMoNetId: 'XEMO-AMINE-77',
+        level: 'PRO',
+        clubName: 'Real Madrid',
+        useDiscordIdentity: true
+      }
+    });
+    assert.equal(okReg.status, 201);
+    assert.equal(okReg.json.player.name, 'أمين ديسكورد');
+    assert.equal(
+      okReg.json.player.avatarUrl,
+      'https://cdn.discordapp.com/avatars/555666777888999000/avatar123.png?size=256'
+    );
+    assert.equal(okReg.json.player.discordUserId, '555666777888999000');
+    assert.equal(okReg.json.player.cp4Id, 'CP4-000001');
+    assert.equal(okReg.json.player.elysiumNetId, 'ELY-AMINE-77');
+    assert.equal(okReg.json.player.xeMoNetId, 'XEMO-AMINE-77');
+
+    // Duplicate registration in same tournament with same Discord account rejected (409)
+    const dupReg = await api(srv.baseUrl, '/api/players/register', {
+      method: 'POST',
+      headers: { Cookie: discordCookie },
+      body: {
+        tournamentId: t1Id,
+        elysiumNetId: 'ELY-AMINE-OTHER',
+        useDiscordIdentity: true
+      }
+    });
+    assert.equal(dupReg.status, 409);
+
+    // 6. Logout Discord session clears cookie & currentDiscordProfile
+    const logoutRes = await api(srv.baseUrl, '/api/discord/session/logout', {
+      method: 'POST',
+      headers: { Cookie: discordCookie }
+    });
+    assert.equal(logoutRes.status, 200);
+    assert.ok((logoutRes.headers.get('set-cookie') || '').includes('Max-Age=0'));
+
+    const stateWithoutCookie = await api(srv.baseUrl, `/api/state?tournamentId=${t1Id}`);
+    assert.equal(stateWithoutCookie.json.currentDiscordProfile, null);
+
+    // 7. Admin linking manually-registered participants to verified Discord accounts
+    const manual1 = await api(srv.baseUrl, '/api/players/register', {
+      method: 'POST',
+      body: {
+        tournamentId: t2Id,
+        name: 'لاعب يدوي أول',
+        elysiumNetId: 'ELY-MANUAL-1',
+        xeMoNetId: 'XEMO-MANUAL-1'
+      }
+    });
+    assert.equal(manual1.status, 201);
+    assert.equal(manual1.json.player.discordUserId, undefined);
+
+    const adminBeforeLink = await api(srv.baseUrl, `/api/state?tournamentId=${t2Id}`, { token: headToken });
+    const adminManual1 = adminBeforeLink.json.players.find((p) => p.id === manual1.json.player.id);
+    assert.equal(adminManual1.discordUserId, null);
+
+    // Link manual1 directly to a new 17-22 digit Discord ID with identity sync
+    const directLink = await api(srv.baseUrl, `/api/players/${manual1.json.player.id}/link-discord`, {
+      method: 'POST',
+      token: headToken,
+      body: {
+        discordUserId: '777888999000111222',
+        discordName: 'طارق الموثق',
+        discordAvatarUrl: 'https://cdn.discordapp.com/avatars/777888999000111222/tariq.png',
+        syncIdentity: true
+      }
+    });
+    assert.equal(directLink.status, 200);
+    assert.equal(directLink.json.player.discordUserId, '777888999000111222');
+    assert.equal(directLink.json.player.name, 'طارق الموثق');
+    assert.equal(
+      directLink.json.player.avatarUrl,
+      'https://cdn.discordapp.com/avatars/777888999000111222/tariq.png'
+    );
+
+    // Register manual2 in t2 and attempt linking to Amine's already-used Discord ID without confirmMerge -> 409
+    const manual2 = await api(srv.baseUrl, '/api/players/register', {
+      method: 'POST',
+      body: {
+        tournamentId: t2Id,
+        name: 'أمين تسجيل يدوي قديم',
+        elysiumNetId: 'ELY-MANUAL-2'
+      }
+    });
+    assert.equal(manual2.status, 201);
+
+    const conflictLink = await api(srv.baseUrl, `/api/players/${manual2.json.player.id}/link-discord`, {
+      method: 'POST',
+      token: headToken,
+      body: {
+        discordUserId: '555666777888999000',
+        syncIdentity: true
+      }
+    });
+    assert.equal(conflictLink.status, 409);
+    assert.equal(conflictLink.json.code, 'DUPLICATE_DISCORD_ID');
+    assert.equal(conflictLink.json.existingProfile?.cp4Id, 'CP4-000001');
+
+    // Confirm merge onto existing verified Discord profile CP4-000001
+    const confirmLink = await api(srv.baseUrl, `/api/players/${manual2.json.player.id}/link-discord`, {
+      method: 'POST',
+      token: headToken,
+      body: {
+        targetProfileId: conflictLink.json.existingProfile.id,
+        confirmMerge: true,
+        syncIdentity: true
+      }
+    });
+    assert.equal(confirmLink.status, 200);
+    assert.equal(confirmLink.json.player.id, manual2.json.player.id);
+    assert.equal(confirmLink.json.player.cp4Id, 'CP4-000001');
+    assert.equal(confirmLink.json.player.discordUserId, '555666777888999000');
+    assert.equal(confirmLink.json.player.name, 'أمين ديسكورد');
+
+    // Unlink manual1 from Discord cleanly
+    const unlinkRes = await api(srv.baseUrl, `/api/players/${manual1.json.player.id}/link-discord`, {
+      method: 'POST',
+      token: headToken,
+      body: { unlink: true }
+    });
+    assert.equal(unlinkRes.status, 200);
+    assert.equal(unlinkRes.json.player.discordUserId, null);
+
+    // Audit log recorded LINK_PLAYER_DISCORD and UNLINK_PLAYER_DISCORD
+    const t2State = await api(srv.baseUrl, `/api/state?tournamentId=${t2Id}`, { token: headToken });
+    assert.ok(t2State.json.auditLogs.some((log) => log.actionType === 'LINK_PLAYER_DISCORD'));
+    assert.ok(t2State.json.auditLogs.some((log) => log.actionType === 'UNLINK_PLAYER_DISCORD'));
+  } finally {
+    await srv.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Default Discord adapter derives callback URL from RENDER_EXTERNAL_URL when DISCORD_REDIRECT_URI is unset', () => {
+  const prevId = process.env.DISCORD_CLIENT_ID;
+  const prevSecret = process.env.DISCORD_CLIENT_SECRET;
+  const prevRedirect = process.env.DISCORD_REDIRECT_URI;
+  const prevRenderUrl = process.env.RENDER_EXTERNAL_URL;
+  try {
+    process.env.DISCORD_CLIENT_ID = '123456789012345678';
+    process.env.DISCORD_CLIENT_SECRET = 'secret-value';
+    delete process.env.DISCORD_REDIRECT_URI;
+    process.env.RENDER_EXTERNAL_URL = 'https://cp4-arena.onrender.com/';
+
+    const adapter = createDefaultDiscordAdapter();
+    const status = adapter.getStatus();
+    assert.equal(status.oauthConfigured, true);
+    const url = adapter.buildAuthorizeUrl({ state: 'abc.sig' });
+    assert.ok(url.includes(encodeURIComponent('https://cp4-arena.onrender.com/api/discord/oauth/callback')));
+  } finally {
+    if (prevId === undefined) delete process.env.DISCORD_CLIENT_ID;
+    else process.env.DISCORD_CLIENT_ID = prevId;
+    if (prevSecret === undefined) delete process.env.DISCORD_CLIENT_SECRET;
+    else process.env.DISCORD_CLIENT_SECRET = prevSecret;
+    if (prevRedirect === undefined) delete process.env.DISCORD_REDIRECT_URI;
+    else process.env.DISCORD_REDIRECT_URI = prevRedirect;
+    if (prevRenderUrl === undefined) delete process.env.RENDER_EXTERNAL_URL;
+    else process.env.RENDER_EXTERNAL_URL = prevRenderUrl;
   }
 });

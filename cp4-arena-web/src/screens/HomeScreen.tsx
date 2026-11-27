@@ -21,6 +21,7 @@ import {
 import { EmptyStatePanel, PlayerAvatar, StatusPill } from '../components/PlayerAvatar';
 import { MatchResultsTable } from '../components/MatchResultsTable';
 import { RacingOverviewPanel, isRacingFormat } from '../components/RacingSection';
+import { DiscordLogoIcon } from '../components/TopHeader';
 import {
   FORMAT_LABELS,
   PLAY_MODE_LABELS,
@@ -28,10 +29,12 @@ import {
   TIE_RULE_LABELS,
   adminHasPermission
 } from '../types';
-import type { ArenaState, Match, Player, RaceEntry, RaceStage } from '../types';
+import type { ArenaState, Match, Player, PlayerProfile, RaceEntry, RaceStage } from '../types';
 
 export function HomeScreen({
   state,
+  discordProfile = null,
+  onStartDiscordLogin,
   onOpenRegister,
   onEditMatch,
   onQuickUpdateGoals,
@@ -50,6 +53,8 @@ export function HomeScreen({
   onDeleteRace
 }: {
   state: ArenaState;
+  discordProfile?: PlayerProfile | null;
+  onStartDiscordLogin?: () => void;
   onOpenRegister: () => void;
   onEditMatch: (m: Match) => void;
   onQuickUpdateGoals: (m: Match, g1: number, g2: number) => void;
@@ -75,13 +80,70 @@ export function HomeScreen({
 
   if (!t) {
     return (
-      <EmptyStatePanel
-        icon={<Trophy size={28} />}
-        title="لا توجد بطولة نشطة حالياً"
-        subtitle="يمكن للمشرف إنشاء بطولة جديدة لأي لعبة من لوحة الإدارة."
-        actionLabel={onOpenAdmin ? 'إنشاء بطولة من الإدارة' : undefined}
-        onAction={onOpenAdmin}
-      />
+      <div className="stack-col">
+        <EmptyStatePanel
+          icon={<Trophy size={28} />}
+          title="لا توجد بطولة نشطة حالياً"
+          subtitle="يمكن للمشرف إنشاء بطولة جديدة لأي لعبة من لوحة الإدارة."
+          actionLabel={onOpenAdmin ? 'إنشاء بطولة من الإدارة' : undefined}
+          onAction={onOpenAdmin}
+        />
+        {discordProfile ? (
+          <div
+            className="arena-card"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              borderColor: 'rgba(88, 101, 242, 0.55)',
+              background: 'rgba(88, 101, 242, 0.12)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              <PlayerAvatar avatarUrl={discordProfile.avatarUrl} name={discordProfile.name} size={38} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>متصل بـ Discord: {discordProfile.name}</div>
+                <div className="score-num" style={{ fontSize: '0.74rem', color: 'var(--cyber-sky)' }}>
+                  {discordProfile.cp4Id}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          onStartDiscordLogin && (
+            <div
+              className="arena-card"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+                borderColor: 'rgba(88, 101, 242, 0.5)'
+              }}
+            >
+              <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+                اربط حسابك على Discord مسبقاً لجلب اسمك وصورتك تلقائياً عند فتح التسجيل.
+              </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={onStartDiscordLogin}
+                data-testid="home_empty_discord_login_btn"
+                style={{
+                  background: '#5865F2',
+                  borderColor: '#7289DA',
+                  color: '#FFFFFF'
+                }}
+              >
+                <DiscordLogoIcon size={17} />
+                <span>تسجيل الدخول عبر Discord</span>
+              </button>
+            </div>
+          )
+        )}
+      </div>
     );
   }
 
@@ -225,20 +287,75 @@ export function HomeScreen({
             </div>
           </div>
 
-          {state.isRegistrationOpenNow ? (
-            <button type="button" className="btn btn-primary" onClick={onOpenRegister}>
-              <UserPlus size={18} />
-              <span>سجّل في البطولة الآن</span>
-            </button>
-          ) : (
-            <button type="button" className="btn btn-outline" disabled>
-              <Lock size={16} color="var(--championship-gold)" />
-              <span style={{ color: 'var(--championship-gold)' }}>
-                {state.approvedPlayers.length >= t.maxParticipants
-                  ? 'التسجيل مغلق لاكتمال العدد'
-                  : 'التسجيل مغلق حالياً'}
-              </span>
-            </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {state.isRegistrationOpenNow ? (
+              <button type="button" className="btn btn-primary" style={{ flex: '1 1 190px' }} onClick={onOpenRegister}>
+                <UserPlus size={18} />
+                <span>سجّل في البطولة الآن</span>
+              </button>
+            ) : (
+              <button type="button" className="btn btn-outline" style={{ flex: '1 1 190px' }} disabled>
+                <Lock size={16} color="var(--championship-gold)" />
+                <span style={{ color: 'var(--championship-gold)' }}>
+                  {state.approvedPlayers.length >= t.maxParticipants
+                    ? 'التسجيل مغلق لاكتمال العدد'
+                    : 'التسجيل مغلق حالياً'}
+                </span>
+              </button>
+            )}
+
+            {onStartDiscordLogin && !discordProfile && (
+              <button
+                type="button"
+                className="btn"
+                onClick={onStartDiscordLogin}
+                data-testid="home_discord_login_btn"
+                style={{
+                  flex: '1 1 190px',
+                  background: '#5865F2',
+                  borderColor: '#7289DA',
+                  color: '#FFFFFF'
+                }}
+              >
+                <DiscordLogoIcon size={17} />
+                <span>تسجيل الدخول عبر Discord</span>
+              </button>
+            )}
+          </div>
+
+          {discordProfile && (
+            <div
+              className="arena-subcard"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                padding: '8px 12px',
+                borderColor: 'rgba(88, 101, 242, 0.55)',
+                background: 'rgba(88, 101, 242, 0.12)'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <PlayerAvatar avatarUrl={discordProfile.avatarUrl} name={discordProfile.name} size={32} />
+                <div style={{ minWidth: 0, fontSize: '0.8rem' }}>
+                  <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>متصل بـ Discord: {discordProfile.name}</span>
+                  <span className="score-num" style={{ color: 'var(--cyber-sky)', marginRight: 6 }}>
+                    ({discordProfile.cp4Id})
+                  </span>
+                </div>
+              </div>
+              {state.isRegistrationOpenNow && (
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ padding: '4px 10px', fontSize: '0.74rem', minHeight: 34 }}
+                  onClick={onOpenRegister}
+                >
+                  متابعة التسجيل
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>

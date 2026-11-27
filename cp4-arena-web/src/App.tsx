@@ -22,8 +22,10 @@ import {
   generateKnockoutApi,
   getAuthToken,
   getLastAdminUsername,
+  linkPlayerDiscordApi,
   loginAdminApi,
   logoutAdminApi,
+  logoutDiscordSessionApi,
   mergePlayerProfilesApi,
   registerPlayerApi,
   resolveMatchDisputeApi,
@@ -50,7 +52,15 @@ import {
 } from './api';
 import { TopHeader } from './components/TopHeader';
 import { HomeScreen } from './screens/HomeScreen';
-import type { ArenaState, Match, Player, PlayerLevel, PlayerStatus, RaceEntry } from './types';
+import type {
+  ArenaState,
+  Match,
+  Player,
+  PlayerLevel,
+  PlayerProfile,
+  PlayerStatus,
+  RaceEntry
+} from './types';
 
 const PlayersScreen = lazy(() => import('./screens/PlayersScreen').then((m) => ({ default: m.PlayersScreen })));
 const GroupsScreen = lazy(() => import('./screens/GroupsScreen').then((m) => ({ default: m.GroupsScreen })));
@@ -110,7 +120,11 @@ export default function App() {
   const [loadError, setLoadError] = useState('');
   const [toast, setToast] = useState<string | null>(null);
 
-  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [showRegisterModal, setShowRegisterModal] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('register') === '1';
+  });
+  const [discordProfileOverride, setDiscordProfileOverride] = useState<PlayerProfile | null | undefined>(undefined);
   const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [editingRace, setEditingRace] = useState<RaceEntry | null>(null);
   const [reminderMatch, setReminderMatch] = useState<Match | null>(null);
@@ -231,6 +245,16 @@ export default function App() {
     };
   }, [refreshState]);
 
+  // Clean up returnTo query params after full-page Discord OAuth redirect
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('register')) {
+      url.searchParams.delete('register');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, []);
+
   // Listen for Discord OAuth callback popup completion
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
@@ -240,6 +264,12 @@ export default function App() {
         ok?: boolean;
         cp4Id?: string;
         name?: string;
+        avatarUrl?: string | null;
+        discordUserId?: string | null;
+        elysiumNetId?: string;
+        xeMoNetId?: string;
+        profileId?: number | null;
+        profile?: PlayerProfile | null;
         created?: boolean;
         duplicate?: boolean;
         errorAr?: string;
@@ -247,7 +277,21 @@ export default function App() {
       } | null;
       if (!data || data.type !== 'cp4_discord_oauth_result') return;
       if (data.ok) {
-        const prefix = data.created ? 'تم إنشاء ملف لاعب عبر Discord' : 'تم ربط ملف اللاعب الموجود';
+        if (data.profile) {
+          setDiscordProfileOverride(data.profile);
+        } else if (data.profileId && data.cp4Id && data.name) {
+          setDiscordProfileOverride({
+            id: data.profileId,
+            cp4Id: data.cp4Id,
+            name: data.name,
+            avatarUrl: data.avatarUrl ?? null,
+            elysiumNetId: data.elysiumNetId || '',
+            xeMoNetId: data.xeMoNetId || '',
+            discordUserId: data.discordUserId ?? null,
+            createdAt: Date.now()
+          });
+        }
+        const prefix = data.created ? 'تم تسجيل الدخول عبر Discord' : 'تم تسجيل الدخول بحساب Discord';
         showToast(`${prefix}${data.cp4Id ? ` (${data.cp4Id})` : ''}${data.name ? ` — ${data.name}` : ''}`);
         refreshState();
       } else {
@@ -257,6 +301,35 @@ export default function App() {
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
+  }, [refreshState, showToast]);
+
+  const activeDiscordProfile =
+    discordProfileOverride !== undefined ? discordProfileOverride : (state?.currentDiscordProfile ?? null);
+
+  const startDiscordLogin = useCallback(
+    (returnToPath = '/') => {
+      if (state?.discordStatus && !state.discordStatus.oauthConfigured) {
+        showToast('ربط Discord OAuth غير مُفعّل على الخادم بعد. يرجى ضبط متغيرات DISCORD_CLIENT_ID و DISCORD_CLIENT_SECRET و DISCORD_REDIRECT_URI.');
+        return;
+      }
+      const startUrl = `/api/discord/oauth/start?returnTo=${encodeURIComponent(returnToPath)}`;
+      const popup = window.open(startUrl, 'cp4_discord_oauth', 'width=520,height=740');
+      if (!popup) {
+        window.location.href = startUrl;
+      }
+    },
+    [state?.discordStatus, showToast]
+  );
+
+  const handleLogoutDiscord = useCallback(async () => {
+    try {
+      await logoutDiscordSessionApi();
+      setDiscordProfileOverride(null);
+      showToast('تم تسجيل الخروج من حساب Discord.');
+      await refreshState();
+    } catch {
+      showToast('تعذر تسجيل الخروج من Discord.');
+    }
   }, [refreshState, showToast]);
 
   // PWA installability & standalone detection
@@ -332,6 +405,7 @@ export default function App() {
     <div className="app-shell">
       <TopHeader
         currentAdmin={state?.currentAdmin ?? null}
+        discordProfile={activeDiscordProfile}
         tournaments={state?.tournaments ?? []}
         activeTournamentId={state?.tournament?.id ?? selectedTournamentId}
         onSelectTournament={selectTournament}
@@ -340,6 +414,8 @@ export default function App() {
           if (state?.tournament) setShowExportModal(true);
         }}
         onOpenInstallPwa={() => setShowInstallModal(true)}
+        onStartDiscordLogin={() => startDiscordLogin(showRegisterModal ? '/?register=1' : '/')}
+        onLogoutDiscord={handleLogoutDiscord}
         canShowInstall={!isStandalone}
       />
 
@@ -380,6 +456,8 @@ export default function App() {
               {activeTab === 'HOME' && (
                 <HomeScreen
                   state={state}
+                  discordProfile={activeDiscordProfile}
+                  onStartDiscordLogin={() => startDiscordLogin('/')}
                   onOpenRegister={() => setShowRegisterModal(true)}
                   onEditMatch={(m) => setEditingMatch(m)}
                   onQuickUpdateGoals={(m, g1, g2) => {
@@ -436,6 +514,8 @@ export default function App() {
                 {activeTab === 'PLAYERS' && (
                   <PlayersScreen
                     state={state}
+                    discordProfile={activeDiscordProfile}
+                    onStartDiscordLogin={() => startDiscordLogin('/')}
                     onOpenRegister={() => setShowRegisterModal(true)}
                     onOpenPlayerProfile={(p) => setProfilePlayer(p)}
                   />
@@ -632,6 +712,11 @@ export default function App() {
                     await refreshState();
                     return res.profile;
                   }}
+                  onLinkPlayerDiscord={async (playerId, payload) => {
+                    const res = await linkPlayerDiscordApi(playerId, payload);
+                    if (res.messageAr) showToast(res.messageAr);
+                    await refreshState();
+                  }}
                   onNotify={showToast}
                 />
               )}
@@ -665,13 +750,18 @@ export default function App() {
         <RegisterPlayerModal
           gameTitle={state.tournament.gameTitle}
           tournamentName={state.tournament.name}
+          discordProfile={activeDiscordProfile}
+          onStartDiscordLogin={() => startDiscordLogin('/?register=1')}
+          onLogoutDiscord={handleLogoutDiscord}
           onClose={() => setShowRegisterModal(false)}
           onSubmit={async (payload: {
             name: string;
             elysiumNetId: string;
+            xeMoNetId?: string;
             avatarUrl: string | null;
             level: PlayerLevel;
             clubName: string;
+            useDiscordIdentity?: boolean;
           }) => {
             await runAction(() =>
               registerPlayerApi({

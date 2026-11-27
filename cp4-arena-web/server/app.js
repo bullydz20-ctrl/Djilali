@@ -6,7 +6,10 @@ import { createCloudStore, getPersistenceDiagnostics } from './cloudStore.js';
 import { openDatabase } from './db.js';
 import {
   createDefaultDiscordAdapter,
+  createSignedDiscordSession,
   createSignedOAuthState,
+  sanitizeRelativeReturnTo,
+  verifySignedDiscordSession,
   verifySignedOAuthState
 } from './discord.js';
 import { createMediaStore } from './mediaStore.js';
@@ -68,15 +71,49 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+const DISCORD_SESSION_COOKIE = 'cp4_discord_session';
+
+function parseCookies(cookieHeader) {
+  const out = {};
+  if (typeof cookieHeader !== 'string' || !cookieHeader) return out;
+  for (const part of cookieHeader.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+function buildDiscordCookieHeader(token, { secure = false, maxAge = 604800 } = {}) {
+  const parts = [
+    `${DISCORD_SESSION_COOKIE}=${encodeURIComponent(token || '')}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${Math.max(0, Number(maxAge) || 0)}`
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
 function renderDiscordOAuthHtml({
   ok,
   title,
   message,
   profile = null,
   duplicate = false,
-  origin = '*'
+  origin = '*',
+  returnTo = ''
 }) {
   const safeOrigin = typeof origin === 'string' && /^https?:\/\/[^/\s]+$/i.test(origin) ? origin : '*';
+  const safeReturnTo = sanitizeRelativeReturnTo(returnTo);
   const postPayload = JSON.stringify({
     type: 'cp4_discord_oauth_result',
     ok: Boolean(ok),
@@ -85,6 +122,11 @@ function renderDiscordOAuthHtml({
     profileId: profile?.id ?? null,
     cp4Id: profile?.cp4Id ?? null,
     name: profile?.name ?? null,
+    avatarUrl: profile?.avatarUrl ?? null,
+    discordUserId: profile?.discordUserId ?? null,
+    elysiumNetId: profile?.elysiumNetId ?? '',
+    xeMoNetId: profile?.xeMoNetId ?? '',
+    profile: profile ?? null,
     errorAr: ok ? null : String(message || ''),
     error: ok ? null : String(message || '')
   });
@@ -110,14 +152,24 @@ function renderDiscordOAuthHtml({
     <h1>${escapeHtml(title)}</h1>
     <p>${escapeHtml(message)}</p>
     ${profile?.cp4Id ? `<div class="cp4">${escapeHtml(profile.cp4Id)} — ${escapeHtml(profile.name)}</div>` : ''}
-    <button type="button" onclick="window.close()">إغلاق والعودة</button>
+    <button type="button" onclick="if (window.opener && !window.opener.closed) { window.close(); } else { window.location.href = ${JSON.stringify(safeReturnTo || '/')}; }">إغلاق والعودة</button>
   </div>
   <script>
-    try {
-      if (window.opener && !window.opener.closed) {
-        window.opener.postMessage(${postPayload}, ${JSON.stringify(safeOrigin)});
+    (function () {
+      var hasOpener = false;
+      try {
+        if (window.opener && !window.opener.closed) {
+          hasOpener = true;
+          window.opener.postMessage(${postPayload}, ${JSON.stringify(safeOrigin)});
+        }
+      } catch (_) {}
+      var returnTo = ${JSON.stringify(safeReturnTo)};
+      if (!hasOpener && returnTo) {
+        setTimeout(function () {
+          window.location.replace(returnTo);
+        }, 450);
       }
-    } catch (_) {}
+    })();
   </script>
 </body>
 </html>`;
@@ -220,6 +272,17 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
     });
   });
 
+  function resolveAuthenticatedDiscordProfile(req) {
+    const cookies = parseCookies(req.headers.cookie);
+    const token = cookies[DISCORD_SESSION_COOKIE];
+    if (!token) return null;
+    const parsed = verifySignedDiscordSession(db.sessionSecret, token);
+    if (!parsed) return null;
+    const profile = service.getPlayerProfileById(parsed.profileId);
+    if (!profile || profile.discordUserId !== parsed.discordUserId) return null;
+    return profile;
+  }
+
   app.get('/api/state', (req, res) => {
     const tournamentId = req.query.tournamentId ? Number(req.query.tournamentId) : null;
     const requestedUsername =
@@ -229,7 +292,8 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
     const state = service.getPublicState(tournamentId, getBearerToken(req), getClientKey(req), requestedUsername);
     const persistence = getPersistenceDiagnostics({ dbPath: resolvedDbPath, cloudStore });
     const discordStatus = activeDiscordAdapter.getStatus();
-    res.json({ ...state, persistence, discordStatus });
+    const currentDiscordProfile = resolveAuthenticatedDiscordProfile(req);
+    res.json({ ...state, persistence, discordStatus, currentDiscordProfile });
   });
 
   // Discord OAuth, Bot guild members & Unified Player Profiles (Stage 1)
@@ -237,9 +301,15 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
     res.json({ ok: true, ...activeDiscordAdapter.getStatus() });
   });
 
+  app.post('/api/discord/session/logout', (req, res) => {
+    res.setHeader('Set-Cookie', buildDiscordCookieHeader('', { secure: Boolean(req.secure), maxAge: 0 }));
+    res.json({ ok: true, messageAr: 'تم تسجيل الخروج من حساب Discord.' });
+  });
+
   app.get('/api/discord/oauth/start', (req, res) => {
     const status = activeDiscordAdapter.getStatus();
     const wantsJson = req.query.format === 'json';
+    const returnTo = sanitizeRelativeReturnTo(typeof req.query.returnTo === 'string' ? req.query.returnTo : '');
     if (!status.oauthConfigured) {
       const errorMsg =
         'ربط Discord OAuth غير مُفعّل على الخادم بعد. يرجى ضبط متغيرات DISCORD_CLIENT_ID و DISCORD_CLIENT_SECRET و DISCORD_REDIRECT_URI.';
@@ -249,11 +319,11 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
       return res
         .status(503)
         .type('text/html; charset=utf-8')
-        .send(renderDiscordOAuthHtml({ ok: false, title: 'ربط Discord غير مُعد', message: errorMsg }));
+        .send(renderDiscordOAuthHtml({ ok: false, title: 'ربط Discord غير مُعد', message: errorMsg, returnTo }));
     }
 
     const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin : '';
-    const state = createSignedOAuthState(db.sessionSecret, { origin: originHeader });
+    const state = createSignedOAuthState(db.sessionSecret, { origin: originHeader, returnTo });
     const url = activeDiscordAdapter.buildAuthorizeUrl({ state });
     if (!url) {
       const errorMsg = 'تعذر إنشاء رابط تفويض Discord OAuth على الخادم.';
@@ -263,7 +333,7 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
       return res
         .status(503)
         .type('text/html; charset=utf-8')
-        .send(renderDiscordOAuthHtml({ ok: false, title: 'تعذر إنشاء الرابط', message: errorMsg }));
+        .send(renderDiscordOAuthHtml({ ok: false, title: 'تعذر إنشاء الرابط', message: errorMsg, returnTo }));
     }
 
     if (wantsJson) {
@@ -335,6 +405,13 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
       if (out.created) {
         await syncCloud();
       }
+      const sessionToken = createSignedDiscordSession(db.sessionSecret, {
+        profileId: out.profile.id,
+        discordUserId: out.profile.discordUserId
+      });
+      if (sessionToken) {
+        res.setHeader('Set-Cookie', buildDiscordCookieHeader(sessionToken, { secure: Boolean(req.secure) }));
+      }
       return res
         .status(200)
         .type('text/html; charset=utf-8')
@@ -345,7 +422,8 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
             message: out.messageAr,
             profile: out.profile,
             duplicate: out.duplicate,
-            origin: verifiedState.origin
+            origin: verifiedState.origin,
+            returnTo: verifiedState.returnTo
           })
         );
     } catch {
@@ -357,7 +435,8 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
             ok: false,
             title: 'فشل الاتصال بـ Discord',
             message: 'تعذر التحقق من حساب Discord حالياً. يرجى المحاولة مرة أخرى.',
-            origin: verifiedState.origin
+            origin: verifiedState.origin,
+            returnTo: verifiedState.returnTo
           })
         );
     }
@@ -506,9 +585,13 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
     res.status(out.status).json({ ...out, restoredMedia });
   });
 
-  // Public player registration
+  // Public player registration (optionally using authenticated Discord session cookie)
   app.post('/api/players/register', async (req, res) => {
-    const out = service.registerPlayer(req.body || {});
+    const authDiscordProfile = resolveAuthenticatedDiscordProfile(req);
+    const out = service.registerPlayer({
+      ...(req.body || {}),
+      authenticatedDiscordProfileId: authDiscordProfile?.id ?? null
+    });
     if (!out.ok) return res.status(out.status).json({ error: out.error });
     await syncCloud();
     res.status(out.status).json(out);
@@ -650,6 +733,19 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
     res.status(out.status).json(out);
   });
 
+  app.post('/api/players/:id/link-discord', async (req, res) => {
+    const out = service.linkPlayerToDiscord(getBearerToken(req), Number(req.params.id), req.body || {});
+    if (!out.ok) {
+      return res.status(out.status).json({
+        error: out.error,
+        code: out.code,
+        existingProfile: out.existingProfile
+      });
+    }
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
   app.delete('/api/players/:id', async (req, res) => {
     const out = service.deletePlayer(getBearerToken(req), Number(req.params.id));
     if (!out.ok) return res.status(out.status).json({ error: out.error });
@@ -770,8 +866,19 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
         })
       );
     }
+    app.get('/sw.js', (_req, res, next) => {
+      const swPath = path.join(resolvedDistDir, 'sw.js');
+      if (!fs.existsSync(swPath)) return next();
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      return res.sendFile(swPath);
+    });
     app.use(express.static(resolvedDistDir, { index: false }));
     app.get(/^\/(?!api|uploads).*/, (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(resolvedDistDir, 'index.html'));
     });
   } else {

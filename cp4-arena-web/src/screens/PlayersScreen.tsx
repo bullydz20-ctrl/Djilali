@@ -1,15 +1,20 @@
 import { useState } from 'react';
 import { Lock, Search, Shield, UserPlus, Users } from 'lucide-react';
 import { EmptyStatePanel, PlayerAvatar } from '../components/PlayerAvatar';
+import { DiscordLogoIcon } from '../components/TopHeader';
 import { LEVEL_LABELS } from '../types';
-import type { ArenaState, Player } from '../types';
+import type { ArenaState, Player, PlayerProfile } from '../types';
 
 export function PlayersScreen({
   state,
+  discordProfile = null,
+  onStartDiscordLogin,
   onOpenRegister,
   onOpenPlayerProfile
 }: {
   state: ArenaState;
+  discordProfile?: PlayerProfile | null;
+  onStartDiscordLogin?: () => void;
   onOpenRegister: () => void;
   onOpenPlayerProfile: (player: Player) => void;
 }) {
@@ -32,7 +37,7 @@ export function PlayersScreen({
 
   return (
     <div className="stack-col">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div>
           <h2 style={{ margin: 0, fontSize: '1.22rem', fontWeight: 800 }}>قائمة المشاركين</h2>
           <div style={{ fontSize: '0.82rem', color: 'var(--cyber-sky)' }}>
@@ -40,20 +45,40 @@ export function PlayersScreen({
           </div>
         </div>
 
-        {state.isRegistrationOpenNow ? (
-          <button type="button" className="btn btn-primary" onClick={onOpenRegister}>
-            <UserPlus size={17} />
-            <span>تسجيل</span>
-          </button>
-        ) : (
-          <span
-            className="arena-subcard"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--championship-gold)', fontSize: '0.8rem', fontWeight: 700 }}
-          >
-            <Lock size={15} />
-            <span>التسجيل مغلق</span>
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {!discordProfile && onStartDiscordLogin && (
+            <button
+              type="button"
+              className="btn"
+              onClick={onStartDiscordLogin}
+              data-testid="players_discord_login_btn"
+              style={{
+                background: '#5865F2',
+                borderColor: '#7289DA',
+                color: '#FFFFFF',
+                padding: '7px 11px',
+                fontSize: '0.8rem'
+              }}
+            >
+              <DiscordLogoIcon size={16} />
+              <span>ربط Discord</span>
+            </button>
+          )}
+          {state.isRegistrationOpenNow ? (
+            <button type="button" className="btn btn-primary" onClick={onOpenRegister}>
+              <UserPlus size={17} />
+              <span>تسجيل</span>
+            </button>
+          ) : (
+            <span
+              className="arena-subcard"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--championship-gold)', fontSize: '0.8rem', fontWeight: 700 }}
+            >
+              <Lock size={15} />
+              <span>التسجيل مغلق</span>
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={{ position: 'relative' }}>

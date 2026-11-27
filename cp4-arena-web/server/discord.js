@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const DISCORD_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function normalizeDiscordUserId(rawId) {
   if (rawId === null || rawId === undefined) return '';
@@ -11,6 +12,13 @@ export function normalizeDiscordUserId(rawId) {
 export function isValidDiscordUserId(rawId) {
   const clean = normalizeDiscordUserId(rawId);
   return /^\d{17,22}$/.test(clean);
+}
+
+export function sanitizeRelativeReturnTo(rawPath) {
+  if (typeof rawPath !== 'string') return '';
+  const trimmed = rawPath.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('\\')) return '';
+  return trimmed.slice(0, 200);
 }
 
 export function resolveDiscordAvatarUrl(user) {
@@ -25,6 +33,7 @@ export function createSignedOAuthState(secret, payload = {}) {
   const bodyObj = {
     nonce: crypto.randomBytes(12).toString('hex'),
     origin: typeof payload.origin === 'string' ? payload.origin : '',
+    returnTo: sanitizeRelativeReturnTo(payload.returnTo),
     exp: Date.now() + OAUTH_STATE_TTL_MS
   };
   const body = Buffer.from(JSON.stringify(bodyObj), 'utf8').toString('base64url');
@@ -58,12 +67,73 @@ export function verifySignedOAuthState(secret, stateToken) {
   }
 }
 
+export function createSignedDiscordSession(secret, { profileId, discordUserId }) {
+  const key = String(secret || '');
+  const cleanId = normalizeDiscordUserId(discordUserId);
+  if (!key || !Number.isInteger(Number(profileId)) || !isValidDiscordUserId(cleanId)) {
+    return null;
+  }
+  const body = Buffer.from(
+    JSON.stringify({
+      pid: Number(profileId),
+      did: cleanId,
+      exp: Date.now() + DISCORD_SESSION_TTL_MS
+    }),
+    'utf8'
+  ).toString('base64url');
+  const sig = crypto.createHmac('sha256', key).update(`dc:${body}`).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+export function verifySignedDiscordSession(secret, token) {
+  const key = String(secret || '');
+  if (!key || typeof token !== 'string' || !token.includes('.')) return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [body, sig] = parts;
+  if (!body || !sig) return null;
+
+  const expectedSig = crypto.createHmac('sha256', key).update(`dc:${body}`).digest('base64url');
+  const actualBuf = Buffer.from(sig, 'utf8');
+  const expectedBuf = Buffer.from(expectedSig, 'utf8');
+  if (actualBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(actualBuf, expectedBuf)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Number(parsed.exp) <= Date.now() ||
+      !Number.isInteger(Number(parsed.pid)) ||
+      !isValidDiscordUserId(parsed.did)
+    ) {
+      return null;
+    }
+    return {
+      profileId: Number(parsed.pid),
+      discordUserId: normalizeDiscordUserId(parsed.did)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveRedirectUri() {
+  const explicit = String(process.env.DISCORD_REDIRECT_URI || '').trim();
+  if (explicit) return explicit;
+  const renderExternal = String(process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/+$/, '');
+  if (renderExternal) return `${renderExternal}/api/discord/oauth/callback`;
+  return '';
+}
+
 export function createDefaultDiscordAdapter() {
   return {
     getStatus() {
       const clientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
       const clientSecret = String(process.env.DISCORD_CLIENT_SECRET || '').trim();
-      const redirectUri = String(process.env.DISCORD_REDIRECT_URI || '').trim();
+      const redirectUri = resolveRedirectUri();
       const botToken = String(process.env.DISCORD_BOT_TOKEN || '').trim();
       const guildId = String(process.env.DISCORD_GUILD_ID || '').trim();
       return {
@@ -77,7 +147,7 @@ export function createDefaultDiscordAdapter() {
     buildAuthorizeUrl({ state }) {
       const clientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
       const clientSecret = String(process.env.DISCORD_CLIENT_SECRET || '').trim();
-      const redirectUri = String(process.env.DISCORD_REDIRECT_URI || '').trim();
+      const redirectUri = resolveRedirectUri();
       if (!clientId || !clientSecret || !redirectUri) {
         return null;
       }
@@ -95,7 +165,7 @@ export function createDefaultDiscordAdapter() {
     async exchangeCodeForUser(code) {
       const clientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
       const clientSecret = String(process.env.DISCORD_CLIENT_SECRET || '').trim();
-      const redirectUri = String(process.env.DISCORD_REDIRECT_URI || '').trim();
+      const redirectUri = resolveRedirectUri();
       if (!clientId || !clientSecret || !redirectUri) {
         throw new Error('DISCORD_OAUTH_UNCONFIGURED');
       }

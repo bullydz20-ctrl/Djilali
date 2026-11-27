@@ -58,6 +58,7 @@ export function AdminPlayersTab({
   onCreatePlayerProfile,
   onUpdatePlayerProfile,
   onMergePlayerProfiles,
+  onLinkPlayerDiscord,
   onNotify
 }: {
   state: ArenaState;
@@ -99,9 +100,22 @@ export function AdminPlayersTab({
     targetProfileId: number;
     confirmIdentity: boolean;
   }) => Promise<PlayerProfile>;
+  onLinkPlayerDiscord: (
+    playerId: number,
+    payload: {
+      targetProfileId?: number | null;
+      discordUserId?: string | null;
+      discordName?: string | null;
+      discordAvatarUrl?: string | null;
+      syncIdentity?: boolean;
+      confirmMerge?: boolean;
+      unlink?: boolean;
+    }
+  ) => Promise<void>;
   onNotify: (msg: string) => void;
 }) {
   const [editing, setEditing] = useState<Player | null>(null);
+  const [linkingDiscordPlayer, setLinkingDiscordPlayer] = useState<Player | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [prefillProfile, setPrefillProfile] = useState<PlayerProfile | null>(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
@@ -112,6 +126,7 @@ export function AdminPlayersTab({
 
   const profiles = state.playerProfiles ?? [];
   const discordStatus = state.discordStatus;
+  const unlinkedParticipantsCount = state.players.filter((p) => !p.discordUserId).length;
 
   async function handleStartDiscordOAuth() {
     setOauthBusy(true);
@@ -301,6 +316,29 @@ export function AdminPlayersTab({
         )}
       </div>
 
+      {state.tournament && unlinkedParticipantsCount > 0 && (
+        <div
+          className="arena-subcard"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            flexWrap: 'wrap',
+            borderColor: 'rgba(88, 101, 242, 0.5)',
+            background: 'rgba(88, 101, 242, 0.1)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem' }}>
+            <Link2 size={16} color="#818CF8" />
+            <span>
+              يوجد <strong>{unlinkedParticipantsCount}</strong> مشارك مسجل يدوياً غير مربوط بحساب Discord موثق بعد — اضغط{' '}
+              <strong>«ربط Discord»</strong> بجانب أي مشارك لربط حسابه مع الحفاظ على نتائجه.
+            </span>
+          </div>
+        </div>
+      )}
+
       {state.pendingPlayers.length === 0 ? (
         <div className="arena-card" style={{ color: 'var(--text-secondary)', fontSize: '0.86rem' }}>
           لا توجد طلبات بانتظار المراجعة حالياً.
@@ -312,6 +350,7 @@ export function AdminPlayersTab({
             player={p}
             onApprove={() => onStatusChange(p.id, 'APPROVED')}
             onReject={() => onStatusChange(p.id, 'REJECTED')}
+            onLinkDiscord={() => setLinkingDiscordPlayer(p)}
             onEdit={() => setEditing(p)}
             onDelete={() => onDeletePlayer(p.id)}
           />
@@ -326,6 +365,7 @@ export function AdminPlayersTab({
           key={p.id}
           player={p}
           onReject={() => onStatusChange(p.id, 'REJECTED')}
+          onLinkDiscord={() => setLinkingDiscordPlayer(p)}
           onEdit={() => setEditing(p)}
           onDelete={() => onDeletePlayer(p.id)}
         />
@@ -341,6 +381,7 @@ export function AdminPlayersTab({
               key={p.id}
               player={p}
               onApprove={() => onStatusChange(p.id, 'APPROVED')}
+              onLinkDiscord={() => setLinkingDiscordPlayer(p)}
               onEdit={() => setEditing(p)}
               onDelete={() => onDeletePlayer(p.id)}
             />
@@ -420,6 +461,18 @@ export function AdminPlayersTab({
           }}
         />
       )}
+
+      {linkingDiscordPlayer && (
+        <LinkPlayerDiscordModal
+          player={linkingDiscordPlayer}
+          profiles={profiles}
+          onClose={() => setLinkingDiscordPlayer(null)}
+          onLink={async (payload) => {
+            await onLinkPlayerDiscord(linkingDiscordPlayer.id, payload);
+            setLinkingDiscordPlayer(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -491,18 +544,21 @@ function AdminPlayerRow({
   player,
   onApprove,
   onReject,
+  onLinkDiscord,
   onEdit,
   onDelete
 }: {
   player: Player;
   onApprove?: () => void;
   onReject?: () => void;
+  onLinkDiscord: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const isDiscordLinked = Boolean(player.discordUserId);
   return (
-    <div className="arena-card" style={{ padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+    <div className="arena-card" style={{ padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: '1 1 200px' }}>
         <PlayerAvatar avatarUrl={player.avatarUrl} name={player.name} size={40} />
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -521,14 +577,44 @@ function AdminPlayerRow({
                 {player.cp4Id}
               </span>
             )}
+            <span
+              style={{
+                fontSize: '0.68rem',
+                padding: '1px 7px',
+                borderRadius: 999,
+                fontWeight: 700,
+                background: isDiscordLinked ? 'rgba(16, 185, 129, 0.16)' : 'rgba(245, 158, 11, 0.16)',
+                color: isDiscordLinked ? 'var(--emerald-win)' : 'var(--amber-draw)'
+              }}
+            >
+              {isDiscordLinked ? 'موثق Discord' : 'يدوي — غير مربوط'}
+            </span>
           </div>
           <div style={{ fontSize: '0.76rem', color: 'var(--cyber-sky)' }}>
             {player.elysiumNetId}
             {player.xeMoNetId ? ` • ${player.xeMoNetId}` : ''} • {LEVEL_LABELS[player.level].label} ({player.ovrRating})
+            {player.discordUserId ? ` • Discord: ${player.discordUserId}` : ''}
           </div>
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className="btn btn-outline"
+          onClick={onLinkDiscord}
+          data-testid={`link_discord_player_${player.id}`}
+          title={isDiscordLinked ? 'إدارة ربط Discord' : 'ربط حساب المشارك بحساب Discord موثق'}
+          style={{
+            padding: '5px 9px',
+            fontSize: '0.74rem',
+            minHeight: 36,
+            borderColor: isDiscordLinked ? 'rgba(16, 185, 129, 0.45)' : '#5865F2',
+            color: isDiscordLinked ? 'var(--emerald-win)' : '#C7D2FE'
+          }}
+        >
+          <Link2 size={14} />
+          <span>{isDiscordLinked ? 'حساب Discord' : 'ربط Discord'}</span>
+        </button>
         {onApprove && (
           <button type="button" className="icon-btn" onClick={onApprove} title="اعتماد" style={{ color: 'var(--emerald-win)' }}>
             <Check size={16} />
@@ -1297,6 +1383,354 @@ function MergeProfilesModal({
           </button>
           <button type="button" className="btn btn-outline" onClick={onClose}>
             إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LinkPlayerDiscordModal({
+  player,
+  profiles,
+  onClose,
+  onLink
+}: {
+  player: Player;
+  profiles: PlayerProfile[];
+  onClose: () => void;
+  onLink: (payload: {
+    targetProfileId?: number | null;
+    discordUserId?: string | null;
+    discordName?: string | null;
+    discordAvatarUrl?: string | null;
+    syncIdentity?: boolean;
+    confirmMerge?: boolean;
+    unlink?: boolean;
+  }) => Promise<void>;
+}) {
+  const verifiedDiscordProfiles = profiles.filter(
+    (p) => Boolean(p.discordUserId) && p.id !== player.profileId
+  );
+  const [mode, setMode] = useState<'PROFILES' | 'BOT' | 'MANUAL'>(
+    verifiedDiscordProfiles.length > 0 ? 'PROFILES' : 'MANUAL'
+  );
+  const [search, setSearch] = useState('');
+  const [discordUserId, setDiscordUserId] = useState(player.discordUserId || '');
+  const [syncIdentity, setSyncIdentity] = useState(true);
+  const [members, setMembers] = useState<DiscordGuildMember[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [membersError, setMembersError] = useState('');
+  const [conflictProfile, setConflictProfile] = useState<PlayerProfile | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function loadBotMembers() {
+    setLoadingMembers(true);
+    setMembersError('');
+    try {
+      const res = await fetchDiscordGuildMembersApi();
+      setMembers(res.members || []);
+    } catch (e) {
+      setMembersError(e instanceof Error ? e.message : 'تعذر جلب أعضاء Discord من البوت.');
+    } finally {
+      setLoadingMembers(false);
+    }
+  }
+
+  async function submitLink(payload: {
+    targetProfileId?: number | null;
+    discordUserId?: string | null;
+    discordName?: string | null;
+    discordAvatarUrl?: string | null;
+    confirmMerge?: boolean;
+    unlink?: boolean;
+  }) {
+    setBusy(true);
+    setErr('');
+    setConflictProfile(null);
+    try {
+      await onLink({
+        ...payload,
+        syncIdentity
+      });
+    } catch (e) {
+      const apiErr = e as ApiError;
+      if (apiErr.code === 'DUPLICATE_DISCORD_ID' && apiErr.existingProfile) {
+        setConflictProfile(apiErr.existingProfile);
+      }
+      setErr(apiErr.message || 'تعذر ربط حساب المشارك بـ Discord.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const q = search.trim().toLowerCase();
+  const filteredVerified = q
+    ? verifiedDiscordProfiles.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.cp4Id.toLowerCase().includes(q) ||
+          String(p.discordUserId || '').includes(q)
+      )
+    : verifiedDiscordProfiles;
+  const filteredMembers = q
+    ? members.filter(
+        (m) =>
+          m.displayName.toLowerCase().includes(q) ||
+          m.username.toLowerCase().includes(q) ||
+          m.discordUserId.includes(q)
+      )
+    : members;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3 style={{ margin: 0, color: 'var(--championship-gold)' }}>ربط المشارك بحساب Discord موثق</h3>
+            <div style={{ fontSize: '0.78rem', color: 'var(--cyber-sky)', marginTop: 2 }}>
+              {player.name} • {player.elysiumNetId} {player.cp4Id ? `(${player.cp4Id})` : ''}
+            </div>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="إغلاق">
+            <X size={18} />
+          </button>
+        </div>
+
+        <label
+          className="arena-subcard"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, cursor: 'pointer' }}
+        >
+          <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>
+            تحديث اسم وصورة المشارك تلقائياً من حساب Discord الموثق
+          </span>
+          <button
+            type="button"
+            className={`switch-pill ${syncIdentity ? 'on' : ''}`}
+            onClick={() => setSyncIdentity((v) => !v)}
+          >
+            <span className="switch-knob" />
+          </button>
+        </label>
+
+        <div className="chip-row">
+          <button
+            type="button"
+            className={`chip ${mode === 'PROFILES' ? 'selected' : ''}`}
+            onClick={() => setMode('PROFILES')}
+          >
+            <Users size={14} />
+            <span>حسابات Discord الموثقة ({verifiedDiscordProfiles.length})</span>
+          </button>
+          <button
+            type="button"
+            className={`chip ${mode === 'BOT' ? 'selected' : ''}`}
+            onClick={() => {
+              setMode('BOT');
+              if (members.length === 0 && !loadingMembers) {
+                loadBotMembers();
+              }
+            }}
+          >
+            <Bot size={14} />
+            <span>أعضاء السيرفر (البوت)</span>
+          </button>
+          <button
+            type="button"
+            className={`chip ${mode === 'MANUAL' ? 'selected' : ''}`}
+            onClick={() => setMode('MANUAL')}
+          >
+            <Edit3 size={14} />
+            <span>إدخال Discord ID يدوياً</span>
+          </button>
+        </div>
+
+        {mode === 'PROFILES' && (
+          <div className="arena-subcard stack-col" style={{ gap: 8 }}>
+            <input
+              className="input"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="ابحث بالاسم أو رقم CP4 أو Discord ID..."
+            />
+            {filteredVerified.length === 0 ? (
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                لا توجد حسابات Discord موثقة أخرى جاهزة للربط حالياً. يمكنك استخدام قائمة البوت أو إدخال Discord User ID يدوياً.
+              </div>
+            ) : (
+              <div className="stack-col" style={{ gap: 6, maxHeight: 230, overflowY: 'auto' }}>
+                {filteredVerified.map((prof) => (
+                  <div
+                    key={prof.id}
+                    className="arena-card"
+                    style={{ padding: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <PlayerAvatar avatarUrl={prof.avatarUrl} name={prof.name} size={36} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {prof.name}
+                        </div>
+                        <div className="score-num" style={{ fontSize: '0.72rem', color: 'var(--cyber-sky)' }}>
+                          {prof.cp4Id} • {prof.discordUserId}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ padding: '5px 10px', fontSize: '0.75rem' }}
+                      disabled={busy}
+                      onClick={() => submitLink({ targetProfileId: prof.id, confirmMerge: true })}
+                    >
+                      ربط بهذا الحساب
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === 'BOT' && (
+          <div className="arena-subcard stack-col" style={{ gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <input
+                className="input"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="بحث في أعضاء السيرفر..."
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ padding: '6px 10px', fontSize: '0.74rem' }}
+                onClick={loadBotMembers}
+                disabled={loadingMembers}
+              >
+                {loadingMembers ? 'جاري الجلب...' : 'تحديث'}
+              </button>
+            </div>
+            {membersError && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--crimson-loss)', fontWeight: 700 }}>{membersError}</div>
+            )}
+            {!loadingMembers && !membersError && filteredMembers.length === 0 && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>لا يوجد أعضاء مطابقون.</div>
+            )}
+            <div className="stack-col" style={{ gap: 6, maxHeight: 230, overflowY: 'auto' }}>
+              {filteredMembers.map((m) => (
+                <div
+                  key={m.discordUserId}
+                  className="arena-card"
+                  style={{ padding: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <PlayerAvatar avatarUrl={m.avatarUrl} name={m.displayName} size={34} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.84rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {m.displayName}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        @{m.username} • {m.discordUserId}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ padding: '5px 10px', fontSize: '0.74rem' }}
+                    disabled={busy}
+                    onClick={() =>
+                      submitLink(
+                        m.linkedProfileId
+                          ? { targetProfileId: m.linkedProfileId, confirmMerge: true }
+                          : {
+                              discordUserId: m.discordUserId,
+                              discordName: m.displayName || m.username,
+                              discordAvatarUrl: m.avatarUrl
+                            }
+                      )
+                    }
+                  >
+                    {m.linkedCp4Id ? `ربط (${m.linkedCp4Id})` : 'ربط'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {mode === 'MANUAL' && (
+          <div className="arena-subcard stack-col" style={{ gap: 8 }}>
+            <div className="field-group">
+              <label className="field-label">معرف Discord User ID (17–22 رقماً)</label>
+              <input
+                className="input"
+                value={discordUserId}
+                onChange={(e) => {
+                  setDiscordUserId(e.target.value);
+                  setConflictProfile(null);
+                  setErr('');
+                }}
+                placeholder="مثال: 109876543210987654"
+                style={{ direction: 'ltr', textAlign: 'left' }}
+                data-testid="link_discord_manual_id_input"
+              />
+            </div>
+
+            {conflictProfile && (
+              <div className="arena-card stack-col" style={{ gap: 8, borderColor: 'var(--championship-gold)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--championship-gold)', fontWeight: 800, fontSize: '0.82rem' }}>
+                  <AlertTriangle size={15} />
+                  <span>
+                    هذا الحساب مسجل مسبقاً للملف {conflictProfile.cp4Id} ({conflictProfile.name})
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-gold"
+                  disabled={busy}
+                  onClick={() => submitLink({ targetProfileId: conflictProfile.id, confirmMerge: true })}
+                  data-testid="confirm_merge_discord_link_btn"
+                >
+                  <GitMerge size={15} />
+                  <span>تأكيد الربط والدمج في {conflictProfile.cp4Id}</span>
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy || !discordUserId.trim()}
+              onClick={() => submitLink({ discordUserId: discordUserId.trim() })}
+              data-testid="submit_manual_discord_link_btn"
+            >
+              {busy ? 'جاري الربط...' : 'حفظ وربط حساب Discord'}
+            </button>
+          </div>
+        )}
+
+        {err && !conflictProfile && (
+          <div style={{ color: 'var(--crimson-loss)', fontSize: '0.82rem', fontWeight: 700 }}>{err}</div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {player.discordUserId && (
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ color: 'var(--crimson-loss)', borderColor: 'rgba(239, 68, 68, 0.45)' }}
+              disabled={busy}
+              onClick={() => submitLink({ unlink: true })}
+            >
+              فك ربط Discord
+            </button>
+          )}
+          <button type="button" className="btn btn-outline" style={{ flex: 1 }} onClick={onClose}>
+            إغلاق
           </button>
         </div>
       </div>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cp4-arena-shell-v1';
+const CACHE_NAME = 'cp4-arena-shell-v2';
 const SHELL_ASSETS = [
   '/',
   '/manifest.webmanifest',

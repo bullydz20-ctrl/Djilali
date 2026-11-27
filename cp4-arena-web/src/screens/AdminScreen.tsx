@@ -69,6 +69,7 @@ export function AdminScreen({
   onCreatePlayerProfile,
   onUpdatePlayerProfile,
   onMergePlayerProfiles,
+  onLinkPlayerDiscord,
   onNotify
 }: {
   state: ArenaState;
@@ -157,6 +158,18 @@ export function AdminScreen({
     targetProfileId: number;
     confirmIdentity: boolean;
   }) => Promise<PlayerProfile>;
+  onLinkPlayerDiscord: (
+    playerId: number,
+    payload: {
+      targetProfileId?: number | null;
+      discordUserId?: string | null;
+      discordName?: string | null;
+      discordAvatarUrl?: string | null;
+      syncIdentity?: boolean;
+      confirmMerge?: boolean;
+      unlink?: boolean;
+    }
+  ) => Promise<void>;
   onNotify: (msg: string) => void;
 }) {
   const admin = state.currentAdmin;
@@ -398,6 +411,56 @@ export function AdminScreen({
         />
       ) : (
         <>
+          {adminHasPermission(admin, 'MANAGE_PLAYERS') && selected !== 'PLAYERS' && (
+            <div
+              className="arena-subcard"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                flexWrap: 'wrap',
+                borderColor: 'rgba(88, 101, 242, 0.5)',
+                background: 'rgba(88, 101, 242, 0.1)'
+              }}
+            >
+              <div style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <strong style={{ color: '#C7D2FE' }}>ربط Discord:</strong>
+                <span style={{ color: state.discordStatus?.oauthConfigured ? 'var(--emerald-win)' : 'var(--text-secondary)' }}>
+                  OAuth {state.discordStatus?.oauthConfigured ? 'مفعّل' : 'غير مكتمل'}
+                </span>
+                <span>•</span>
+                <span style={{ color: state.discordStatus?.botConfigured && state.discordStatus?.guildIdConfigured ? 'var(--cyber-sky)' : 'var(--text-secondary)' }}>
+                  قائمة البوت {state.discordStatus?.botConfigured && state.discordStatus?.guildIdConfigured ? 'مفعّلة' : 'غير مكتملة'}
+                </span>
+                {state.players.some((p) => !p.discordUserId) && (
+                  <>
+                    <span>•</span>
+                    <span style={{ color: 'var(--amber-draw)', fontWeight: 700 }}>
+                      {state.players.filter((p) => !p.discordUserId).length} مشارك غير مربوط
+                    </span>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setSelected('PLAYERS')}
+                data-testid="admin_jump_discord_players_btn"
+                style={{
+                  padding: '6px 11px',
+                  fontSize: '0.76rem',
+                  minHeight: 34,
+                  background: '#5865F2',
+                  borderColor: '#7289DA',
+                  color: '#FFFFFF'
+                }}
+              >
+                فتح ربط المشاركين بـ Discord
+              </button>
+            </div>
+          )}
+
           <div className="chip-scroll-row">
             {allowedSections.map((sec) => (
               <button
@@ -432,6 +495,7 @@ export function AdminScreen({
                 onCreatePlayerProfile={onCreatePlayerProfile}
                 onUpdatePlayerProfile={onUpdatePlayerProfile}
                 onMergePlayerProfiles={onMergePlayerProfiles}
+                onLinkPlayerDiscord={onLinkPlayerDiscord}
                 onNotify={onNotify}
               />
             )}

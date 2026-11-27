@@ -27,3 +27,14 @@ services:
       # اختياري: قائمة JSON لحسابات المساعدين لتُنشأ تلقائياً حتى على قرص مؤقت بدون قاعدة سحابية
       - key: CP4_SUB_ADMINS_JSON
         sync: false
+      # ربط Discord OAuth وملفات اللاعبين الموحدة وقائمة أعضاء البوت
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_REDIRECT_URI
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false

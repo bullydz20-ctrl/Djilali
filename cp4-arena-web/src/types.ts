@@ -378,6 +378,7 @@ export interface ArenaState {
   persistence?: PersistenceInfo;
   playerProfiles?: PlayerProfile[];
   discordStatus?: DiscordStatus;
+  currentDiscordProfile?: PlayerProfile | null;
 }
 
 export const FORMAT_LABELS: Record<TournamentFormat, string> = {

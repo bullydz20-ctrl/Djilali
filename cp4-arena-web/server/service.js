@@ -1796,10 +1796,32 @@ export class ArenaService {
     return { ok: true, status: 200, messageAr: 'تم حذف البطولة نهائياً بنجاح.' };
   }
 
-  registerPlayer({ tournamentId, name, elysiumNetId, xeMoNetId = '', avatarUrl = null, level = PlayerLevel.INTERMEDIATE, clubName = '' }) {
-    const cleanName = String(name || '').trim();
+  registerPlayer({
+    tournamentId,
+    name,
+    elysiumNetId,
+    xeMoNetId = '',
+    avatarUrl = null,
+    level = PlayerLevel.INTERMEDIATE,
+    clubName = '',
+    authenticatedDiscordProfileId = null,
+    useDiscordIdentity = false
+  }) {
     const cleanElysium = String(elysiumNetId || '').trim();
     const cleanXeMoNet = String(xeMoNetId || '').trim().slice(0, 60);
+    const authProfileRow =
+      authenticatedDiscordProfileId != null
+        ? this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(Number(authenticatedDiscordProfileId))
+        : null;
+
+    const useVerifiedDiscord = Boolean(authProfileRow && (useDiscordIdentity || !String(name || '').trim()));
+    const cleanName = useVerifiedDiscord
+      ? String(authProfileRow.name || '').trim()
+      : String(name || '').trim();
+    const resolvedAvatarUrl = useVerifiedDiscord
+      ? (authProfileRow.avatar_url ?? (avatarUrl ? String(avatarUrl).trim() : null))
+      : (avatarUrl ? String(avatarUrl).trim() : null);
+
     if (!cleanName || !cleanElysium) {
       return { ok: false, status: 400, error: 'يرجى إدخال اسم اللاعب ومعرف ElysiumNet/ XeMoNat.' };
     }
@@ -1833,14 +1855,33 @@ export class ArenaService {
         return { ok: false, status: 409, error: 'معرف ElysiumNet/ XeMoNat مسجل مسبقاً في هذه البطولة.' };
       }
 
+      if (authProfileRow) {
+        const duplicateProfileEntry = this.db
+          .prepare('SELECT id FROM players WHERE tournament_id = ? AND profile_id = ?')
+          .get(tournament.id, authProfileRow.id);
+        if (duplicateProfileEntry) {
+          return { ok: false, status: 409, error: 'حساب Discord الخاص بك مسجل مسبقاً في هذه البطولة.' };
+        }
+      }
+
       const now = Date.now();
-      const profileRow = this.resolveOrCreateProfileForPlayer({
-        name: cleanName,
-        elysiumNetId: cleanElysium,
-        xeMoNetId: cleanXeMoNet,
-        avatarUrl,
-        now
-      });
+      const profileRow = authProfileRow
+        ? (() => {
+            const nextElysium = String(authProfileRow.elysium_net_id || '').trim() || cleanElysium;
+            const nextXeMoNet = String(authProfileRow.xemonet_id || '').trim() || cleanXeMoNet;
+            const nextAvatar = authProfileRow.avatar_url || resolvedAvatarUrl || null;
+            this.db
+              .prepare('UPDATE player_profiles SET elysium_net_id = ?, xemonet_id = ?, avatar_url = ? WHERE id = ?')
+              .run(nextElysium, nextXeMoNet, nextAvatar, authProfileRow.id);
+            return this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(authProfileRow.id);
+          })()
+        : this.resolveOrCreateProfileForPlayer({
+            name: cleanName,
+            elysiumNetId: cleanElysium,
+            xeMoNetId: cleanXeMoNet,
+            avatarUrl: resolvedAvatarUrl,
+            now
+          });
 
       const info = this.db
         .prepare(`
@@ -1855,7 +1896,7 @@ export class ArenaService {
           cleanName,
           cleanElysium,
           cleanXeMoNet,
-          avatarUrl ? String(avatarUrl).trim() : null,
+          resolvedAvatarUrl,
           safeLevel,
           defaultOvr,
           String(clubName || '').trim().slice(0, 50),
@@ -1863,7 +1904,7 @@ export class ArenaService {
           now
         );
 
-      const player = this.fetchMappedPlayerById(info.lastInsertRowid, false);
+      const player = this.fetchMappedPlayerById(info.lastInsertRowid, Boolean(authProfileRow));
       return {
         ok: true,
         status: 201,
@@ -2158,6 +2199,220 @@ export class ArenaService {
 
     this.emitChange('player_updated');
     return { ok: true, status: 200, messageAr: 'تم تحديث بيانات اللاعب بنجاح.' };
+  }
+
+  linkPlayerToDiscord(rawToken, playerId, payload = {}) {
+    const auth = this.requirePermission(rawToken, 'MANAGE_PLAYERS');
+    if (!auth.ok) return auth;
+
+    const targetPlayerId = Number(playerId);
+    const syncIdentity = payload.syncIdentity !== false;
+    const confirmMerge = payload.confirmMerge === true;
+    const requestedTargetProfileId =
+      payload.targetProfileId != null && Number(payload.targetProfileId) > 0
+        ? Number(payload.targetProfileId)
+        : null;
+    const cleanDiscordInput = normalizeDiscordUserId(payload.discordUserId);
+    const cleanDiscordName = payload.discordName ? String(payload.discordName).trim().slice(0, 60) : '';
+    const cleanDiscordAvatar = payload.discordAvatarUrl ? String(payload.discordAvatarUrl).trim().slice(0, 500) : null;
+
+    if (payload.unlink === true) {
+      const res = this.withTx(() => {
+        const playerRow = this.db.prepare('SELECT * FROM players WHERE id = ?').get(targetPlayerId);
+        if (!playerRow) return { ok: false, status: 404, error: 'المشارك غير موجود.' };
+        if (playerRow.profile_id) {
+          this.db.prepare('UPDATE player_profiles SET discord_user_id = NULL WHERE id = ?').run(playerRow.profile_id);
+        }
+        const updatedPlayer = this.fetchMappedPlayerById(playerRow.id, true);
+        this.logAudit(
+          auth.session.rawAdmin,
+          playerRow.tournament_id,
+          'UNLINK_PLAYER_DISCORD',
+          `فك ربط Discord عن المشارك: ${playerRow.name}`
+        );
+        return {
+          ok: true,
+          status: 200,
+          player: updatedPlayer,
+          profile: updatedPlayer.profileId ? this.getPlayerProfileById(updatedPlayer.profileId) : null,
+          messageAr: `تم فك ربط حساب Discord عن (${updatedPlayer.name}).`
+        };
+      });
+      if (res.ok) this.emitChange('player_updated');
+      return res;
+    }
+
+    if (!requestedTargetProfileId && !cleanDiscordInput) {
+      return { ok: false, status: 400, error: 'يرجى اختيار حساب Discord موثق أو إدخال Discord User ID.' };
+    }
+    if (cleanDiscordInput && !isValidDiscordUserId(cleanDiscordInput)) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'INVALID_DISCORD_ID',
+        error: 'يرجى إدخال معرف Discord User ID صحيح (من 17 إلى 22 رقماً).'
+      };
+    }
+
+    const res = this.withTx(() => {
+      const playerRow = this.db.prepare('SELECT * FROM players WHERE id = ?').get(targetPlayerId);
+      if (!playerRow) return { ok: false, status: 404, error: 'المشارك غير موجود.' };
+
+      const sourceProfile =
+        playerRow.profile_id != null
+          ? this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(playerRow.profile_id)
+          : this.resolveOrCreateProfileForPlayer({
+              name: playerRow.name,
+              elysiumNetId: playerRow.elysium_net_id,
+              xeMoNetId: playerRow.xemonet_id || '',
+              avatarUrl: playerRow.avatar_url ?? null,
+              now: Date.now()
+            });
+
+      if (playerRow.profile_id == null && sourceProfile?.id) {
+        this.db.prepare('UPDATE players SET profile_id = ? WHERE id = ?').run(sourceProfile.id, playerRow.id);
+      }
+
+      let targetProfile = requestedTargetProfileId
+        ? this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(requestedTargetProfileId)
+        : null;
+
+      if (requestedTargetProfileId && !targetProfile) {
+        return { ok: false, status: 404, error: 'ملف Discord المختار غير موجود.' };
+      }
+      if (targetProfile && !targetProfile.discord_user_id) {
+        return { ok: false, status: 400, error: 'الملف المختار غير مرتبط بحساب Discord موثق بعد.' };
+      }
+
+      if (!targetProfile && cleanDiscordInput) {
+        const existingByDiscord = this.db
+          .prepare('SELECT * FROM player_profiles WHERE discord_user_id = ?')
+          .get(cleanDiscordInput);
+        if (existingByDiscord && existingByDiscord.id !== sourceProfile.id) {
+          if (!confirmMerge) {
+            return {
+              ok: false,
+              status: 409,
+              code: 'DUPLICATE_DISCORD_ID',
+              error: 'هذا الحساب على Discord مرتبط مسبقاً بملف لاعب آخر. يمكنك تأكيد الدمج لربط المشارك به مع الحفاظ على نتائجه.',
+              existingProfile: this.getPlayerProfileById(existingByDiscord.id)
+            };
+          }
+          targetProfile = existingByDiscord;
+        }
+      }
+
+      if (targetProfile) {
+        if (sourceProfile.id !== targetProfile.id) {
+          if (
+            sourceProfile.discord_user_id &&
+            targetProfile.discord_user_id &&
+            sourceProfile.discord_user_id !== targetProfile.discord_user_id
+          ) {
+            return {
+              ok: false,
+              status: 409,
+              error: 'هذا المشارك مربوط بالفعل بحساب Discord آخر مختلف.'
+            };
+          }
+
+          const duplicateInSameTournament = this.db
+            .prepare('SELECT id FROM players WHERE tournament_id = ? AND profile_id = ? AND id != ?')
+            .get(playerRow.tournament_id, targetProfile.id, playerRow.id);
+          if (duplicateInSameTournament) {
+            return {
+              ok: false,
+              status: 409,
+              error: 'حساب Discord المختار مشارك بالفعل في هذه البطولة بسجل آخر.'
+            };
+          }
+
+          const mergedElysium =
+            String(targetProfile.elysium_net_id || '').trim() ||
+            String(sourceProfile.elysium_net_id || '').trim() ||
+            String(playerRow.elysium_net_id || '').trim();
+          const mergedXeMoNet =
+            String(targetProfile.xemonet_id || '').trim() ||
+            String(sourceProfile.xemonet_id || '').trim() ||
+            String(playerRow.xemonet_id || '').trim();
+          const mergedAvatar = targetProfile.avatar_url || sourceProfile.avatar_url || playerRow.avatar_url || null;
+
+          this.db.prepare('UPDATE players SET profile_id = ? WHERE profile_id = ?').run(targetProfile.id, sourceProfile.id);
+          this.db.prepare('DELETE FROM player_profiles WHERE id = ?').run(sourceProfile.id);
+          this.db
+            .prepare('UPDATE player_profiles SET avatar_url = ?, elysium_net_id = ?, xemonet_id = ? WHERE id = ?')
+            .run(mergedAvatar, mergedElysium, mergedXeMoNet, targetProfile.id);
+          syncCp4ProfileSequence(this.db);
+        }
+
+        const refreshedTarget = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(targetProfile.id);
+        if (syncIdentity && refreshedTarget) {
+          const nextName = String(refreshedTarget.name || playerRow.name).trim().slice(0, 50) || playerRow.name;
+          const nextAvatar = refreshedTarget.avatar_url ?? playerRow.avatar_url ?? null;
+          this.db
+            .prepare('UPDATE players SET name = ?, avatar_url = ? WHERE id = ?')
+            .run(nextName, nextAvatar, playerRow.id);
+        }
+
+        const updatedPlayer = this.fetchMappedPlayerById(playerRow.id, true);
+        const updatedProfile = this.getPlayerProfileById(targetProfile.id);
+        this.logAudit(
+          auth.session.rawAdmin,
+          playerRow.tournament_id,
+          'LINK_PLAYER_DISCORD',
+          `ربط المشارك (${updatedPlayer.name}) بحساب Discord الموثق (${updatedProfile.cp4Id})`
+        );
+        return {
+          ok: true,
+          status: 200,
+          player: updatedPlayer,
+          profile: updatedProfile,
+          messageAr: `تم ربط (${updatedPlayer.name}) بحساب Discord الموثق (${updatedProfile.cp4Id}) بنجاح.`
+        };
+      }
+
+      // Otherwise attach cleanDiscordInput directly to sourceProfile
+      const nextProfileName = syncIdentity && cleanDiscordName ? cleanDiscordName : sourceProfile.name;
+      const nextProfileAvatar =
+        syncIdentity && cleanDiscordAvatar ? cleanDiscordAvatar : (sourceProfile.avatar_url || playerRow.avatar_url || null);
+      const nextProfileElysium = String(sourceProfile.elysium_net_id || '').trim() || String(playerRow.elysium_net_id || '').trim();
+      const nextProfileXeMoNet = String(sourceProfile.xemonet_id || '').trim() || String(playerRow.xemonet_id || '').trim();
+
+      this.db
+        .prepare(`
+          UPDATE player_profiles SET
+            name = ?, avatar_url = ?, elysium_net_id = ?, xemonet_id = ?, discord_user_id = ?
+          WHERE id = ?
+        `)
+        .run(nextProfileName, nextProfileAvatar, nextProfileElysium, nextProfileXeMoNet, cleanDiscordInput, sourceProfile.id);
+
+      if (syncIdentity) {
+        const nextPlayerName = (cleanDiscordName || playerRow.name).slice(0, 50);
+        const nextPlayerAvatar = cleanDiscordAvatar ?? playerRow.avatar_url ?? null;
+        this.db
+          .prepare('UPDATE players SET name = ?, avatar_url = ? WHERE id = ?')
+          .run(nextPlayerName, nextPlayerAvatar, playerRow.id);
+      }
+
+      const updatedPlayer = this.fetchMappedPlayerById(playerRow.id, true);
+      const updatedProfile = this.getPlayerProfileById(sourceProfile.id);
+      this.logAudit(
+        auth.session.rawAdmin,
+        playerRow.tournament_id,
+        'LINK_PLAYER_DISCORD',
+        `ربط المشارك (${updatedPlayer.name}) بمعرف Discord (${cleanDiscordInput})`
+      );
+      return {
+        ok: true,
+        status: 200,
+        player: updatedPlayer,
+        profile: updatedProfile,
+        messageAr: `تم ربط (${updatedPlayer.name}) بحساب Discord بنجاح (${updatedProfile.cp4Id}).`
+      };
+    });
+
+    if (res.ok) this.emitChange('player_updated');
+    return res;
   }
 
   deletePlayer(rawToken, playerId) {

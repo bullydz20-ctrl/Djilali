@@ -131,11 +131,13 @@ export async function fetchArenaState(
 
 export async function registerPlayerApi(payload: {
   tournamentId: number;
-  name: string;
+  name?: string;
   elysiumNetId: string;
+  xeMoNetId?: string;
   avatarUrl: string | null;
   level: PlayerLevel;
   clubName: string;
+  useDiscordIdentity?: boolean;
 }) {
   return apiRequest<{ ok: boolean; messageAr: string }>('/api/players/register', {
     method: 'POST',
@@ -292,8 +294,37 @@ export async function adminAddPlayerApi(
   });
 }
 
-export async function fetchDiscordOAuthStartUrlApi() {
-  return apiRequest<{ ok: boolean; url: string }>('/api/discord/oauth/start?format=json');
+export async function fetchDiscordOAuthStartUrlApi(returnTo?: string) {
+  const qs = new URLSearchParams({ format: 'json' });
+  if (returnTo) qs.set('returnTo', returnTo);
+  return apiRequest<{ ok: boolean; url: string }>(`/api/discord/oauth/start?${qs.toString()}`);
+}
+
+export async function logoutDiscordSessionApi() {
+  return apiRequest<{ ok: boolean; messageAr: string }>('/api/discord/session/logout', {
+    method: 'POST'
+  });
+}
+
+export async function linkPlayerDiscordApi(
+  playerId: number,
+  payload: {
+    targetProfileId?: number | null;
+    discordUserId?: string | null;
+    discordName?: string | null;
+    discordAvatarUrl?: string | null;
+    syncIdentity?: boolean;
+    confirmMerge?: boolean;
+    unlink?: boolean;
+  }
+) {
+  return apiRequest<{ ok: boolean; player: unknown; profile: PlayerProfile | null; messageAr: string }>(
+    `/api/players/${playerId}/link-discord`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
 }
 
 export async function fetchDiscordGuildMembersApi() {

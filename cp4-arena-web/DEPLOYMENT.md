@@ -21,6 +21,10 @@
      ```json
      [{"username":"sub1","displayName":"مساعد النتائج","pin":"123456","canEditScores":true,"canManagePlayers":true}]
      ```
+   - لإشعارات بوت Discord التلقائية مع منشن العضو:
+     - `DISCORD_BOT_TOKEN` = توكن البوت
+     - `DISCORD_ADMIN_CHANNEL_ID` = معرف قناة الإدارة (إشعارات ربط حساب جديد وطلبات التسجيل مع معرفات ElysiumNet/XeMoNet)
+     - `DISCORD_PUBLIC_CHANNEL_ID` = معرف القناة العامة (إشعارات قبول واعتماد اللاعب في البطولة)
 3. إعدادات البناء والتشغيل في Render (**Web Service** وليس Static Site):
    - **Root Directory:** `cp4-arena-web` (إذا كان داخل مجلد فرعي في المستودع)
    - **Build Command:** `npm ci --include=dev && npm run build`

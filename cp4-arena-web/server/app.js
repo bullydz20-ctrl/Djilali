@@ -5,9 +5,14 @@ import express from 'express';
 import { createCloudStore, getPersistenceDiagnostics } from './cloudStore.js';
 import { openDatabase } from './db.js';
 import {
+  buildAdminAccountLinkedNotification,
+  buildAdminRegistrationNotification,
+  buildPublicApprovalNotification,
   createDefaultDiscordAdapter,
   createSignedDiscordSession,
   createSignedOAuthState,
+  isValidDiscordChannelId,
+  normalizeDiscordUserId,
   sanitizeRelativeReturnTo,
   verifySignedDiscordSession,
   verifySignedOAuthState
@@ -234,6 +239,28 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
     }
   }
 
+  async function notifyDiscordChannel(target, notificationPayload) {
+    if (typeof activeDiscordAdapter?.sendChannelMessage !== 'function' || !notificationPayload?.content) {
+      return;
+    }
+    try {
+      const fromAdapter = activeDiscordAdapter.getNotificationChannelIds?.() || {};
+      const rawChannelId =
+        target === 'ADMIN'
+          ? (fromAdapter.adminChannelId ?? process.env.DISCORD_ADMIN_CHANNEL_ID)
+          : (fromAdapter.publicChannelId ?? process.env.DISCORD_PUBLIC_CHANNEL_ID);
+      const channelId = normalizeDiscordUserId(rawChannelId);
+      if (!isValidDiscordChannelId(channelId)) return;
+      await activeDiscordAdapter.sendChannelMessage({
+        channelId,
+        content: notificationPayload.content,
+        allowedMentions: notificationPayload.allowedMentions
+      });
+    } catch {
+      // Never block core tournament operations if Discord Bot notification fails
+    }
+  }
+
   const sseClients = new Set();
   const service = new ArenaService(db, (event) => {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
@@ -343,6 +370,26 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
     res.status(out.status).json(out);
   });
 
+  app.post('/api/discord/session/claim-legacy', async (req, res) => {
+    const authDiscordProfile = resolveAuthenticatedDiscordProfile(req);
+    if (!authDiscordProfile) {
+      return res.status(401).json({ ok: false, error: 'يرجى تسجيل الدخول عبر Discord أولاً.' });
+    }
+    const out = service.claimVerifiedLegacyProfile(authDiscordProfile.id, req.body || {});
+    if (!out.ok) {
+      return res.status(out.status).json({ error: out.error, code: out.code });
+    }
+    const sessionToken = createSignedDiscordSession(db.sessionSecret, {
+      profileId: out.profile.id,
+      discordUserId: out.profile.discordUserId
+    });
+    if (sessionToken) {
+      res.setHeader('Set-Cookie', buildDiscordCookieHeader(sessionToken, { secure: Boolean(req.secure) }));
+    }
+    await syncCloud();
+    res.status(out.status).json(out);
+  });
+
   app.get('/api/discord/oauth/start', (req, res) => {
     const status = activeDiscordAdapter.getStatus();
     const wantsJson = req.query.format === 'json';
@@ -441,6 +488,17 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
       }
       if (out.created) {
         await syncCloud();
+        await notifyDiscordChannel(
+          'ADMIN',
+          buildAdminAccountLinkedNotification({
+            discordUserId: out.profile.discordUserId,
+            name: out.profile.name,
+            cp4Id: out.profile.cp4Id,
+            elysiumNetId: out.profile.elysiumNetId,
+            xeMoNetId: out.profile.xeMoNetId,
+            source: 'OAUTH'
+          })
+        );
       }
       const sessionToken = createSignedDiscordSession(db.sessionSecret, {
         profileId: out.profile.id,
@@ -630,8 +688,12 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
       authenticatedDiscordProfileId: authDiscordProfile?.id ?? null
     });
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    const { notificationMeta, ...publicPayload } = out;
     await syncCloud();
-    res.status(out.status).json(out);
+    if (notificationMeta) {
+      await notifyDiscordChannel('ADMIN', buildAdminRegistrationNotification(notificationMeta));
+    }
+    res.status(out.status).json(publicPayload);
   });
 
   // Public/shared match reminders
@@ -759,8 +821,12 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
   app.patch('/api/players/:id/status', async (req, res) => {
     const out = service.updatePlayerStatus(getBearerToken(req), Number(req.params.id), req.body?.status);
     if (!out.ok) return res.status(out.status).json({ error: out.error });
+    const { notificationMeta, ...publicPayload } = out;
     await syncCloud();
-    res.status(out.status).json(out);
+    if (notificationMeta?.isApprovedNow) {
+      await notifyDiscordChannel('PUBLIC', buildPublicApprovalNotification(notificationMeta));
+    }
+    res.status(out.status).json(publicPayload);
   });
 
   app.patch('/api/players/:id', async (req, res) => {
@@ -779,8 +845,22 @@ export function createArenaApp({ dbPath, uploadsDir, distDir, cloudStore = null,
         existingProfile: out.existingProfile
       });
     }
+    const { wasUnlinked, ...publicPayload } = out;
     await syncCloud();
-    res.status(out.status).json(out);
+    if (!req.body?.unlink && wasUnlinked && out.profile?.discordUserId) {
+      await notifyDiscordChannel(
+        'ADMIN',
+        buildAdminAccountLinkedNotification({
+          discordUserId: out.profile.discordUserId,
+          name: out.profile.name,
+          cp4Id: out.profile.cp4Id,
+          elysiumNetId: out.profile.elysiumNetId,
+          xeMoNetId: out.profile.xeMoNetId,
+          source: 'ADMIN_LINK'
+        })
+      );
+    }
+    res.status(out.status).json(publicPayload);
   });
 
   app.delete('/api/players/:id', async (req, res) => {

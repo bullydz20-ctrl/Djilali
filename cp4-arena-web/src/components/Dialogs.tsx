@@ -60,20 +60,15 @@ export function RegisterPlayerModal({
     useDiscordIdentity?: boolean;
   }) => Promise<void>;
 }) {
-  const [name, setName] = useState(discordProfile?.name || '');
   const [elysiumId, setElysiumId] = useState(discordProfile?.elysiumNetId || '');
   const [xeMoNetId, setXeMoNetId] = useState(discordProfile?.xeMoNetId || '');
   const [clubName, setClubName] = useState('');
   const [level, setLevel] = useState<PlayerLevel>('INTERMEDIATE');
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(discordProfile?.avatarUrl ?? null);
-  const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState('');
 
   useEffect(() => {
     if (discordProfile) {
-      setName(discordProfile.name);
-      setAvatarUrl(discordProfile.avatarUrl ?? null);
       if (discordProfile.elysiumNetId && !elysiumId.trim()) {
         setElysiumId(discordProfile.elysiumNetId);
       }
@@ -81,28 +76,14 @@ export function RegisterPlayerModal({
         setXeMoNetId(discordProfile.xeMoNetId);
       }
     }
-  }, [discordProfile?.id, discordProfile?.name, discordProfile?.avatarUrl, discordProfile?.elysiumNetId, discordProfile?.xeMoNetId]);
+  }, [discordProfile?.id, discordProfile?.elysiumNetId, discordProfile?.xeMoNetId]);
 
-  async function handleFileChange(file: File | null) {
-    if (!file) return;
-    setErr('');
-    setUploading(true);
-    try {
-      const url = await uploadImageFileApi(file);
-      setAvatarUrl(url);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'تعذر رفع الصورة.');
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  const effectiveName = discordProfile ? discordProfile.name : name.trim();
-  const effectiveAvatar = discordProfile ? (discordProfile.avatarUrl ?? null) : avatarUrl;
+  const effectiveName = discordProfile ? discordProfile.name : '';
+  const effectiveAvatar = discordProfile ? (discordProfile.avatarUrl ?? null) : null;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!effectiveName || !elysiumId.trim()) return;
+    if (!discordProfile || !effectiveName || !elysiumId.trim()) return;
     setErr('');
     setSubmitting(true);
     try {
@@ -113,7 +94,7 @@ export function RegisterPlayerModal({
         avatarUrl: effectiveAvatar,
         level,
         clubName: clubName.trim(),
-        useDiscordIdentity: Boolean(discordProfile)
+        useDiscordIdentity: true
       });
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : 'فشل إرسال الطلب.');
@@ -124,7 +105,7 @@ export function RegisterPlayerModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-panel stack-col" onClick={(e) => e.stopPropagation()} data-testid="register_player_modal">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h2 style={{ margin: 0, color: 'var(--championship-gold)', fontSize: '1.15rem' }}>
@@ -137,8 +118,48 @@ export function RegisterPlayerModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="stack-col">
-          {discordProfile ? (
+        {!discordProfile ? (
+          <div className="stack-col" data-testid="register_discord_gate">
+            <div
+              className="arena-subcard stack-col"
+              style={{
+                gap: 12,
+                borderColor: 'rgba(88, 101, 242, 0.55)',
+                background: 'rgba(88, 101, 242, 0.12)',
+                padding: 16
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--championship-gold)', fontWeight: 800, fontSize: '0.94rem' }}>
+                <ShieldCheck size={18} />
+                <span>المشاركة تتطلب ربط حساب Discord</span>
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.65 }}>
+                تعتمد منصة CP4 ARENA على Discord كهوية موحدة للاعبين لمنع التكرار وحفظ رقم CP4 الثابت ونتائجك. اربط حسابك للمتابعة إلى نموذج التسجيل، أو واصل تصفح البطولات بحرية كزائر.
+              </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={onStartDiscordLogin}
+                data-testid="register_discord_login_btn"
+                style={{
+                  width: '100%',
+                  background: '#5865F2',
+                  borderColor: '#7289DA',
+                  color: '#FFFFFF',
+                  fontWeight: 800
+                }}
+              >
+                <DiscordLogoIcon size={18} />
+                <span>تسجيل الدخول عبر Discord</span>
+              </button>
+            </div>
+
+            <button type="button" className="btn btn-outline" onClick={onClose}>
+              إغلاق والمتابعة كزائر
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="stack-col">
             <div
               className="arena-subcard stack-col"
               data-testid="register_discord_identity_card"
@@ -186,134 +207,77 @@ export function RegisterPlayerModal({
                 </button>
               </div>
               <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
-                تم جلب الاسم والصورة ومعرف Discord تلقائياً من حسابك. أكمل معرف اللعب أدناه لإرسال طلبك.
+                تم جلب الاسم والصورة ومعرف Discord تلقائياً من حسابك الموحد. أكمل معرف اللعب أدناه لإرسال طلبك.
               </div>
             </div>
-          ) : (
-            <>
-              <div
-                className="arena-subcard stack-col"
-                style={{
-                  gap: 8,
-                  borderColor: 'rgba(88, 101, 242, 0.5)',
-                  background: 'rgba(88, 101, 242, 0.1)'
-                }}
+
+            <div className="field-group">
+              <label className="field-label">معرف اللاعب في ElysiumNet / XeMoNet *</label>
+              <input
+                className="input"
+                value={elysiumId}
+                onChange={(e) => setElysiumId(e.target.value)}
+                placeholder="أدخل معرف ElysiumNet / XeMoNet الإلزامي"
+                required
+                data-testid="register_elysium_input"
+              />
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">معرف XeMoNet إضافي (اختياري)</label>
+              <input
+                className="input"
+                value={xeMoNetId}
+                onChange={(e) => setXeMoNetId(e.target.value)}
+                placeholder="إذا كان لديك معرف مختلف على XeMoNet"
+              />
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">الفريق / الشخصية المفضلة (اختياري)</label>
+              <input
+                className="input"
+                value={clubName}
+                onChange={(e) => setClubName(e.target.value)}
+                placeholder="نادي، منتخب، أو فئة اللعب"
+              />
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">المستوى المبدئي (قابل للتعديل من المشرف)</label>
+              <div className="chip-row">
+                {(['BEGINNER', 'INTERMEDIATE', 'PRO', 'LEGEND'] as PlayerLevel[]).map((lvl) => (
+                  <button
+                    key={lvl}
+                    type="button"
+                    className={`chip ${level === lvl ? 'selected' : ''}`}
+                    onClick={() => setLevel(lvl)}
+                  >
+                    {LEVEL_LABELS[lvl].label} ({LEVEL_LABELS[lvl].ovr})
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {err && (
+              <div style={{ color: 'var(--crimson-loss)', fontSize: '0.84rem', fontWeight: 700 }}>{err}</div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                disabled={submitting || !effectiveName || !elysiumId.trim()}
               >
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={onStartDiscordLogin}
-                  data-testid="register_discord_login_btn"
-                  style={{
-                    width: '100%',
-                    background: '#5865F2',
-                    borderColor: '#7289DA',
-                    color: '#FFFFFF',
-                    fontWeight: 800
-                  }}
-                >
-                  <DiscordLogoIcon size={18} />
-                  <span>تسجيل الدخول عبر Discord</span>
-                </button>
-                <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-                  يجلب اسمك وصورتك ومعرف Discord تلقائياً بدلاً من الكتابة اليدوية
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <PlayerAvatar avatarUrl={avatarUrl} name={name || 'P'} size={58} />
-                <label className="btn btn-outline" style={{ cursor: 'pointer', flex: 1 }}>
-                  <ImagePlus size={18} />
-                  <span>{uploading ? 'جاري رفع الصورة...' : avatarUrl ? 'تغيير الصورة الشخصية' : 'رفع صورة اختيارية'}</span>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    style={{ display: 'none' }}
-                    disabled={uploading}
-                    onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
-                  />
-                </label>
-              </div>
-
-              <div className="field-group">
-                <label className="field-label">اسم اللاعب *</label>
-                <input
-                  className="input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="مثال: أحمد بن علي"
-                  required
-                />
-              </div>
-            </>
-          )}
-
-          <div className="field-group">
-            <label className="field-label">معرف اللاعب في ElysiumNet / XeMoNet *</label>
-            <input
-              className="input"
-              value={elysiumId}
-              onChange={(e) => setElysiumId(e.target.value)}
-              placeholder="أدخل معرف ElysiumNet / XeMoNet الإلزامي"
-              required
-              data-testid="register_elysium_input"
-            />
-          </div>
-
-          <div className="field-group">
-            <label className="field-label">معرف XeMoNet إضافي (اختياري)</label>
-            <input
-              className="input"
-              value={xeMoNetId}
-              onChange={(e) => setXeMoNetId(e.target.value)}
-              placeholder="إذا كان لديك معرف مختلف على XeMoNet"
-            />
-          </div>
-
-          <div className="field-group">
-            <label className="field-label">الفريق / الشخصية المفضلة (اختياري)</label>
-            <input
-              className="input"
-              value={clubName}
-              onChange={(e) => setClubName(e.target.value)}
-              placeholder="نادي، منتخب، أو فئة اللعب"
-            />
-          </div>
-
-          <div className="field-group">
-            <label className="field-label">المستوى المبدئي (قابل للتعديل من المشرف)</label>
-            <div className="chip-row">
-              {(['BEGINNER', 'INTERMEDIATE', 'PRO', 'LEGEND'] as PlayerLevel[]).map((lvl) => (
-                <button
-                  key={lvl}
-                  type="button"
-                  className={`chip ${level === lvl ? 'selected' : ''}`}
-                  onClick={() => setLevel(lvl)}
-                >
-                  {LEVEL_LABELS[lvl].label} ({LEVEL_LABELS[lvl].ovr})
-                </button>
-              ))}
+                {submitting ? 'جاري الإرسال...' : 'إرسال طلب التسجيل'}
+              </button>
+              <button type="button" className="btn btn-outline" onClick={onClose}>
+                إلغاء
+              </button>
             </div>
-          </div>
-
-          {err && (
-            <div style={{ color: 'var(--crimson-loss)', fontSize: '0.84rem', fontWeight: 700 }}>{err}</div>
-          )}
-
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ flex: 1 }}
-              disabled={submitting || uploading || !effectiveName || !elysiumId.trim()}
-            >
-              {submitting ? 'جاري الإرسال...' : 'إرسال طلب التسجيل'}
-            </button>
-            <button type="button" className="btn btn-outline" onClick={onClose}>
-              إلغاء
-            </button>
-          </div>
-        </form>
+          </form>
+        )}
       </div>
     </div>
   );

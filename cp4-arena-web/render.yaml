@@ -38,3 +38,7 @@ services:
         sync: false
       - key: DISCORD_GUILD_ID
         sync: false
+      - key: DISCORD_ADMIN_CHANNEL_ID
+        sync: false
+      - key: DISCORD_PUBLIC_CHANNEL_ID
+        sync: false

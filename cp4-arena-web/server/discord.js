@@ -14,6 +14,97 @@ export function isValidDiscordUserId(rawId) {
   return /^\d{17,22}$/.test(clean);
 }
 
+export function isValidDiscordChannelId(rawId) {
+  const clean = normalizeDiscordUserId(rawId);
+  return /^\d{17,22}$/.test(clean);
+}
+
+export function formatDiscordMention(discordUserId) {
+  const clean = normalizeDiscordUserId(discordUserId);
+  return isValidDiscordUserId(clean) ? `<@${clean}>` : '';
+}
+
+export function buildAllowedMentions(discordUserId) {
+  const clean = normalizeDiscordUserId(discordUserId);
+  return isValidDiscordUserId(clean) ? { parse: [], users: [clean] } : { parse: [] };
+}
+
+export function buildAdminAccountLinkedNotification({
+  discordUserId,
+  name,
+  cp4Id,
+  elysiumNetId = '',
+  xeMoNetId = '',
+  source = 'OAUTH'
+} = {}) {
+  const mention = formatDiscordMention(discordUserId);
+  const lines = [
+    source === 'ADMIN_LINK'
+      ? '🔗 **تم ربط ملف لاعب بحساب Discord في CP4 ARENA**'
+      : '🆕 **تم ربط حساب Discord جديد في CP4 ARENA**',
+    mention ? `👤 **العضو:** ${mention} (${name || 'لاعب'})` : `👤 **اللاعب:** ${name || 'لاعب'}`,
+    cp4Id ? `🆔 **رقم اللاعب:** \`${cp4Id}\`` : null,
+    elysiumNetId ? `🎮 **ElysiumNet:** \`${elysiumNetId}\`` : null,
+    xeMoNetId ? `🎮 **XeMoNet:** \`${xeMoNetId}\`` : null
+  ].filter(Boolean);
+
+  return {
+    content: lines.join('\n'),
+    allowedMentions: buildAllowedMentions(discordUserId)
+  };
+}
+
+export function buildAdminRegistrationNotification({
+  discordUserId,
+  name,
+  cp4Id,
+  tournamentName,
+  gameTitle,
+  elysiumNetId,
+  xeMoNetId = ''
+} = {}) {
+  const mention = formatDiscordMention(discordUserId);
+  const lines = [
+    '📝 **طلب تسجيل جديد في بطولة CP4 ARENA**',
+    mention ? `👤 **اللاعب:** ${mention} (${name || 'لاعب'})` : `👤 **اللاعب:** ${name || 'لاعب'}`,
+    cp4Id ? `🆔 **رقم اللاعب:** \`${cp4Id}\`` : null,
+    tournamentName ? `🏆 **البطولة:** ${tournamentName}${gameTitle ? ` (${gameTitle})` : ''}` : null,
+    `🎮 **معرف ElysiumNet:** \`${elysiumNetId || 'غير محدد'}\``,
+    `🎮 **معرف XeMoNet:** \`${xeMoNetId || 'غير محدد'}\``,
+    '⏳ **الحالة:** بانتظار موافقة المشرف'
+  ].filter(Boolean);
+
+  return {
+    content: lines.join('\n'),
+    allowedMentions: buildAllowedMentions(discordUserId)
+  };
+}
+
+export function buildPublicApprovalNotification({
+  discordUserId,
+  name,
+  cp4Id,
+  tournamentName,
+  gameTitle,
+  elysiumNetId,
+  xeMoNetId = ''
+} = {}) {
+  const mention = formatDiscordMention(discordUserId);
+  const lines = [
+    '✅ **تم قبول واعتماد مشاركة لاعب في البطولة!**',
+    mention ? `🔥 **البطل:** ${mention} (${name || 'لاعب'})` : `🔥 **اللاعب:** ${name || 'لاعب'}`,
+    cp4Id ? `🆔 **رقم اللاعب:** \`${cp4Id}\`` : null,
+    tournamentName ? `🏆 **البطولة:** ${tournamentName}${gameTitle ? ` (${gameTitle})` : ''}` : null,
+    elysiumNetId ? `🎮 **ElysiumNet:** \`${elysiumNetId}\`` : null,
+    xeMoNetId ? `🎮 **XeMoNet:** \`${xeMoNetId}\`` : null
+  ].filter(Boolean);
+
+  return {
+    content: lines.join('\n'),
+    allowedMentions: buildAllowedMentions(discordUserId)
+  };
+}
+
 export function sanitizeRelativeReturnTo(rawPath) {
   if (typeof rawPath !== 'string') return '';
   const trimmed = rawPath.trim();
@@ -136,11 +227,24 @@ export function createDefaultDiscordAdapter() {
       const redirectUri = resolveRedirectUri();
       const botToken = String(process.env.DISCORD_BOT_TOKEN || '').trim();
       const guildId = String(process.env.DISCORD_GUILD_ID || '').trim();
+      const adminChannelId = normalizeDiscordUserId(process.env.DISCORD_ADMIN_CHANNEL_ID);
+      const publicChannelId = normalizeDiscordUserId(process.env.DISCORD_PUBLIC_CHANNEL_ID);
       return {
         oauthConfigured: Boolean(clientId && clientSecret && redirectUri),
         botConfigured: Boolean(botToken),
         guildIdConfigured: Boolean(guildId),
-        guildConfigured: Boolean(botToken && guildId)
+        guildConfigured: Boolean(botToken && guildId),
+        adminChannelConfigured: Boolean(botToken && isValidDiscordChannelId(adminChannelId)),
+        publicChannelConfigured: Boolean(botToken && isValidDiscordChannelId(publicChannelId))
+      };
+    },
+
+    getNotificationChannelIds() {
+      const adminChannelId = normalizeDiscordUserId(process.env.DISCORD_ADMIN_CHANNEL_ID);
+      const publicChannelId = normalizeDiscordUserId(process.env.DISCORD_PUBLIC_CHANNEL_ID);
+      return {
+        adminChannelId: isValidDiscordChannelId(adminChannelId) ? adminChannelId : '',
+        publicChannelId: isValidDiscordChannelId(publicChannelId) ? publicChannelId : ''
       };
     },
 
@@ -247,6 +351,37 @@ export function createDefaultDiscordAdapter() {
           };
         })
         .sort((a, b) => a.displayName.localeCompare(b.displayName, 'ar'));
+    },
+
+    async sendChannelMessage({ channelId, content, embeds, allowedMentions } = {}) {
+      const botToken = String(process.env.DISCORD_BOT_TOKEN || '').trim();
+      const cleanChannelId = normalizeDiscordUserId(channelId);
+      if (!botToken || !isValidDiscordChannelId(cleanChannelId) || !content) {
+        return { ok: false, skipped: true };
+      }
+
+      try {
+        const res = await fetch(`${DISCORD_API_BASE}/channels/${encodeURIComponent(cleanChannelId)}/messages`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bot ${botToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            content: String(content),
+            ...(Array.isArray(embeds) && embeds.length ? { embeds } : {}),
+            allowed_mentions: allowedMentions || { parse: [] }
+          })
+        });
+        if (!res.ok) {
+          console.warn(`[CP4 Discord Bot] Failed to send message to channel ${cleanChannelId}: HTTP ${res.status}`);
+          return { ok: false, status: res.status };
+        }
+        return { ok: true, status: res.status };
+      } catch (err) {
+        console.warn('[CP4 Discord Bot] Channel notification error:', err?.message || err);
+        return { ok: false, error: err?.message || 'DISCORD_NOTIFY_FAILED' };
+      }
     }
   };
 }

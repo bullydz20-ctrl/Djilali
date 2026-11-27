@@ -1384,6 +1384,12 @@ export class ArenaService {
         .run(cp4Id, cleanName, cleanAvatar, cleanDiscordId, now);
 
       const profile = this.getPlayerProfileById(info.lastInsertRowid);
+      this.logAudit(
+        { username: 'discord_oauth', displayName: cleanName },
+        null,
+        'DISCORD_OAUTH_REGISTER',
+        `ربط حساب Discord جديد وإنشاء ملف موحد: ${profile.name} (${profile.cp4Id})`
+      );
       return {
         ok: true,
         status: 201,
@@ -1414,6 +1420,18 @@ export class ArenaService {
       };
     }
 
+    if (
+      payload.discordUserId !== undefined &&
+      normalizeDiscordUserId(payload.discordUserId) !== normalizeDiscordUserId(existingRow.discord_user_id)
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'DISCORD_ID_IMMUTABLE',
+        error: 'لا يمكن تغيير ربط حساب Discord مباشرة من الإعدادات دون موافقة المشرف.'
+      };
+    }
+
     const cleanElysium =
       payload.elysiumNetId !== undefined
         ? String(payload.elysiumNetId || '').trim().slice(0, 60)
@@ -1423,11 +1441,33 @@ export class ArenaService {
         ? String(payload.xeMoNetId || '').trim().slice(0, 60)
         : existingRow.xemonet_id;
 
+    if (cleanElysium) {
+      const conflictingDiscordOwner = this.db
+        .prepare(
+          "SELECT id, cp4_id FROM player_profiles WHERE elysium_net_id != '' AND LOWER(elysium_net_id) = LOWER(?) AND discord_user_id IS NOT NULL AND id != ?"
+        )
+        .get(cleanElysium, existingRow.id);
+      if (conflictingDiscordOwner) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'DUPLICATE_ELYSIUM_ID',
+          error: `معرف ElysiumNet مستخدم بالفعل لحساب Discord آخر (${conflictingDiscordOwner.cp4_id}).`
+        };
+      }
+    }
+
     this.db
       .prepare('UPDATE player_profiles SET elysium_net_id = ?, xemonet_id = ? WHERE id = ?')
       .run(cleanElysium, cleanXeMoNet, existingRow.id);
 
     const profile = this.getPlayerProfileById(existingRow.id);
+    this.logAudit(
+      { username: 'discord_player', displayName: profile.name },
+      null,
+      'PLAYER_SETTINGS_UPDATED',
+      `تحديث معرفات الحساب الموحد (${profile.cp4Id}): ElysiumNet=${cleanElysium || '-'}, XeMoNet=${cleanXeMoNet || '-'}`
+    );
     this.emitChange('player_profile_updated');
     return {
       ok: true,
@@ -1435,6 +1475,110 @@ export class ArenaService {
       profile,
       messageAr: `تم حفظ إعدادات ملفك بنجاح (${profile.cp4Id}).`
     };
+  }
+
+  claimVerifiedLegacyProfile(currentProfileId, { cp4Id, elysiumNetId } = {}) {
+    const cleanCp4Id = String(cp4Id || '').trim().toUpperCase();
+    const cleanElysium = String(elysiumNetId || '').trim();
+    if (!cleanCp4Id || !cleanElysium) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'VERIFICATION_REQUIRED',
+        error: 'يرجى إدخال رقم CP4 ومعرف ElysiumNet للتحقق من ملكية الملف القديم.'
+      };
+    }
+
+    const res = this.withTx(() => {
+      const currentProfile = this.db.prepare('SELECT * FROM player_profiles WHERE id = ?').get(Number(currentProfileId));
+      if (!currentProfile || !currentProfile.discord_user_id) {
+        return { ok: false, status: 401, error: 'يجب تسجيل الدخول عبر Discord أولاً.' };
+      }
+
+      const legacyProfile = this.db
+        .prepare('SELECT * FROM player_profiles WHERE UPPER(cp4_id) = ?')
+        .get(cleanCp4Id);
+      if (!legacyProfile) {
+        return { ok: false, status: 404, code: 'LEGACY_PROFILE_NOT_FOUND', error: 'لم يتم العثور على ملف قديم بهذا المعرف.' };
+      }
+
+      if (legacyProfile.id === currentProfile.id) {
+        return {
+          ok: true,
+          status: 200,
+          profile: this.getPlayerProfileById(currentProfile.id),
+          messageAr: `حسابك مرتبط بالفعل بالملف (${currentProfile.cp4_id}).`
+        };
+      }
+
+      if (legacyProfile.discord_user_id && legacyProfile.discord_user_id !== currentProfile.discord_user_id) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'ALREADY_LINKED_TO_DISCORD',
+          error: 'هذا الملف مرتبط بالفعل بحساب Discord آخر. يرجى مراجعة المشرف.'
+        };
+      }
+
+      if (
+        !legacyProfile.elysium_net_id ||
+        legacyProfile.elysium_net_id.trim().toLowerCase() !== cleanElysium.toLowerCase()
+      ) {
+        return {
+          ok: false,
+          status: 403,
+          code: 'IDENTITY_VERIFICATION_FAILED',
+          error: 'تعذر التحقق من الهوية: معرف ElysiumNet لا يطابق الملف القديم المسجل.'
+        };
+      }
+
+      const duplicateTournamentConflict = this.db
+        .prepare(`
+          SELECT p1.tournament_id
+          FROM players p1
+          INNER JOIN players p2 ON p1.tournament_id = p2.tournament_id
+          WHERE p1.profile_id = ? AND p2.profile_id = ?
+          LIMIT 1
+        `)
+        .get(currentProfile.id, legacyProfile.id);
+      if (duplicateTournamentConflict) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'TOURNAMENT_CONFLICT',
+          error: 'يوجد اشتراك مزدوج في نفس البطولة بين الملفين؛ يرجى تنفيذ الدمج عبر المشرف.'
+        };
+      }
+
+      const discordUserId = currentProfile.discord_user_id;
+      const mergedAvatar = legacyProfile.avatar_url || currentProfile.avatar_url || null;
+      const mergedXeMoNet = String(legacyProfile.xemonet_id || '').trim() || String(currentProfile.xemonet_id || '').trim();
+
+      this.db.prepare('UPDATE player_profiles SET discord_user_id = NULL WHERE id = ?').run(currentProfile.id);
+      this.db.prepare('UPDATE players SET profile_id = ? WHERE profile_id = ?').run(legacyProfile.id, currentProfile.id);
+      this.db
+        .prepare('UPDATE player_profiles SET discord_user_id = ?, avatar_url = ?, xemonet_id = ? WHERE id = ?')
+        .run(discordUserId, mergedAvatar, mergedXeMoNet, legacyProfile.id);
+      this.db.prepare('DELETE FROM player_profiles WHERE id = ?').run(currentProfile.id);
+      syncCp4ProfileSequence(this.db);
+
+      const claimed = this.getPlayerProfileById(legacyProfile.id);
+      this.logAudit(
+        { username: 'discord_oauth', displayName: claimed.name },
+        null,
+        'CLAIM_LEGACY_PROFILE',
+        `ربط ملف اللاعب القديم (${claimed.cp4Id}) بحساب Discord بعد التحقق من الهوية`
+      );
+      return {
+        ok: true,
+        status: 200,
+        profile: claimed,
+        messageAr: `تم التحقق وربط ملفك القديم (${claimed.cp4Id}) بحساب Discord مع الحفاظ على جميع البطولات والنتائج.`
+      };
+    });
+
+    if (res.ok) this.emitChange('player_profiles_merged');
+    return res;
   }
 
   mergePlayerProfiles(rawToken, { sourceProfileId, targetProfileId, confirmIdentity = false } = {}) {
@@ -1958,7 +2102,17 @@ export class ArenaService {
         ok: true,
         status: 201,
         player,
-        messageAr: 'تم إرسال طلب التسجيل بنجاح! بانتظار موافقة المشرف.'
+        messageAr: 'تم إرسال طلب التسجيل بنجاح! بانتظار موافقة المشرف.',
+        notificationMeta: {
+          discordUserId: profileRow?.discord_user_id ?? null,
+          name: player.name,
+          cp4Id: player.cp4Id ?? profileRow?.cp4_id ?? null,
+          tournamentId: tournament.id,
+          tournamentName: tournament.name,
+          gameTitle: tournament.gameTitle,
+          elysiumNetId: player.elysiumNetId,
+          xeMoNetId: player.xeMoNetId || profileRow?.xemonet_id || ''
+        }
       };
     });
 
@@ -1980,7 +2134,8 @@ export class ArenaService {
       const tournament = mapTournament(this.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(player.tournamentId));
       if (!tournament) return { ok: false, status: 404, error: 'البطولة غير موجودة.' };
 
-      if (newStatus === PlayerStatus.APPROVED && player.status !== PlayerStatus.APPROVED) {
+      const isApprovedNow = newStatus === PlayerStatus.APPROVED && player.status !== PlayerStatus.APPROVED;
+      if (isApprovedNow) {
         const approvedCount = this.db
           .prepare('SELECT COUNT(*) AS c FROM players WHERE tournament_id = ? AND status = ?')
           .get(tournament.id, PlayerStatus.APPROVED).c;
@@ -2000,10 +2155,24 @@ export class ArenaService {
           .run(TournamentStatus.REGISTRATION_CLOSED, tournament.id);
       }
 
+      const mappedWithDiscord = this.fetchMappedPlayerById(player.id, true);
       return {
         ok: true,
         status: 200,
-        messageAr: `تم تحديث حالة اللاعب إلى ${PLAYER_STATUS_META[newStatus].labelAr}.`
+        messageAr: `تم تحديث حالة اللاعب إلى ${PLAYER_STATUS_META[newStatus].labelAr}.`,
+        notificationMeta: {
+          isApprovedNow,
+          previousStatus: player.status,
+          newStatus,
+          discordUserId: mappedWithDiscord?.discordUserId ?? null,
+          name: mappedWithDiscord?.name ?? player.name,
+          cp4Id: mappedWithDiscord?.cp4Id ?? null,
+          tournamentId: tournament.id,
+          tournamentName: tournament.name,
+          gameTitle: tournament.gameTitle,
+          elysiumNetId: mappedWithDiscord?.elysiumNetId ?? player.elysiumNetId,
+          xeMoNetId: mappedWithDiscord?.xeMoNetId ?? player.xeMoNetId ?? ''
+        }
       };
     });
 
@@ -2421,6 +2590,20 @@ export class ArenaService {
       }
 
       // Otherwise attach cleanDiscordInput directly to sourceProfile
+      if (
+        sourceProfile.discord_user_id &&
+        sourceProfile.discord_user_id !== cleanDiscordInput &&
+        payload.confirmRelink !== true
+      ) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'EXISTING_DISCORD_LINK',
+          error: 'هذا الملف مربوط بالفعل بحساب Discord آخر. يرجى فك الارتباط أولاً أو تأكيد تغيير الربط.'
+        };
+      }
+
+      const wasUnlinked = !sourceProfile.discord_user_id;
       const nextProfileName = syncIdentity && cleanDiscordName ? cleanDiscordName : sourceProfile.name;
       const nextProfileAvatar =
         syncIdentity && cleanDiscordAvatar ? cleanDiscordAvatar : (sourceProfile.avatar_url || playerRow.avatar_url || null);
@@ -2456,6 +2639,7 @@ export class ArenaService {
         status: 200,
         player: updatedPlayer,
         profile: updatedProfile,
+        wasUnlinked,
         messageAr: `تم ربط (${updatedPlayer.name}) بحساب Discord بنجاح (${updatedProfile.cp4Id}).`
       };
     });

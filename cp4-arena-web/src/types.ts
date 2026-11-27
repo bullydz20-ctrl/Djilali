@@ -125,6 +125,9 @@ export interface DiscordStatus {
   oauthConfigured: boolean;
   botConfigured: boolean;
   guildIdConfigured: boolean;
+  guildConfigured?: boolean;
+  adminChannelConfigured?: boolean;
+  publicChannelConfigured?: boolean;
 }
 
 export interface Player {
